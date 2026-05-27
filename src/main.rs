@@ -36,12 +36,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         ziqa_kernel::drivers::vga::Color::Black,
     );
 
-    println!("[ZIQA] ZiqaKernel v0.8: fork + waitpid + mmap + Network Stack Edition");
+    println!("[ZIQA] ZiqaKernel v1.0: fd table + pipe + exec + net Edition");
 
     // ── klog: set level and log boot messages ─────────────────────────────────
     KLOG.lock().min_level = Level::Debug;
-    ziqa_kernel::klog!(Level::Info, "ZiqaKernel v0.8 booting");
+    ziqa_kernel::klog!(Level::Info, "ZiqaKernel v1.0 booting");
     ziqa_kernel::klog!(Level::Info, "Hardware: GDT, IDT, PIC, Heap initialized");
+
+    // ── Run kernel self-tests ─────────────────────────────────────────────────
+    println!("\n━━━ Kernel Self-Tests ━━━");
+    ziqa_kernel::tests::run_all();
+    println!();
 
     // ── Network Stack ─────────────────────────────────────────────────────────
     ziqa_kernel::net::init();

@@ -17,6 +17,7 @@ pub mod timer;
 pub mod klog;
 pub mod shell;
 pub mod net;
+pub mod tests;
 
 use abi::AbiPlugin;
 
