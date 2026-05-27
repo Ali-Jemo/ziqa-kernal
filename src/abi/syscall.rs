@@ -43,6 +43,10 @@ pub mod nr {
     pub const CLOCK_NANOSLEEP: u64 = 230;
     pub const GETPPID:    u64 = 110;
     pub const SCHED_YIELD: u64 = 24;
+    pub const FORK:       u64 = 57;
+    pub const WAITPID:    u64 = 61;  // wait4 in Linux; simplified as waitpid
+    pub const MMAP:       u64 = 9;
+    pub const MUNMAP:     u64 = 11;
 }
 
 /// Error codes (negated errno values)
@@ -105,6 +109,70 @@ pub fn dispatch_syscall(
                 ctx.process.state = ProcessState::Ready;
             }
             return Ok(0);
+        }
+
+        nr::FORK => {
+            // Clone the current process; child gets pid, parent gets child pid
+            let parent_pid = ctx.process.pid;
+            let child = crate::process::scheduler::SCHEDULER.lock().fork(parent_pid);
+            klog_syscall("fork", child.map(|p| p.0).unwrap_or(u64::MAX));
+            match child {
+                Some(child_pid) => return Ok(child_pid.0), // parent sees child pid
+                None => return Err(crate::abi::AbiError::Other("fork: out of slots")),
+            }
+        }
+
+        nr::WAITPID => {
+            // args: [child_pid_or_neg1, status_ptr (ignored), options (ignored)]
+            let child_arg = ctx.args[0] as i64;
+            let parent_pid = ctx.process.pid;
+            let result = crate::process::scheduler::SCHEDULER.lock().waitpid(parent_pid, child_arg);
+            klog_syscall("waitpid", ctx.args[0]);
+            match result {
+                Some((pid, _code)) => return Ok(pid.0),
+                None => return Ok(0), // no zombie child yet
+            }
+        }
+
+        nr::MMAP => {
+            // args: [addr_hint, length, prot, flags, fd, offset]
+            let length = ctx.args[1] as usize;
+            if length == 0 {
+                return Err(crate::abi::AbiError::Other("mmap: zero length"));
+            }
+            use crate::memory::{MemoryRegion, paging::{MemoryRegionFlags}};
+            use crate::memory::VirtAddr as KVirtAddr;
+            // Allocate a virtual region above 0x1000_0000 based on region count
+            let base = 0x1000_0000u64 + (ctx.process.region_count as u64) * 0x10_0000;
+            let region = MemoryRegion {
+                start: KVirtAddr::new(base),
+                size: length,
+                flags: MemoryRegionFlags::read_write(),
+                is_file_backed: ctx.args[4] as i64 >= 0,
+                file_offset: ctx.args[5],
+            };
+            ctx.process.add_region(region);
+            klog_syscall("mmap", base);
+            return Ok(base);
+        }
+
+        nr::MUNMAP => {
+            // args: [addr, length]
+            let addr = ctx.args[0];
+            use crate::memory::VirtAddr as KVirtAddr;
+            let target = KVirtAddr::new(addr);
+            // Remove the matching region
+            for slot in ctx.process.regions.iter_mut() {
+                if let Some(r) = slot {
+                    if r.start == target {
+                        *slot = None;
+                        ctx.process.region_count = ctx.process.region_count.saturating_sub(1);
+                        klog_syscall("munmap", addr);
+                        return Ok(0);
+                    }
+                }
+            }
+            return Err(crate::abi::AbiError::Other("munmap: region not found"));
         }
 
         nr::WRITE => {

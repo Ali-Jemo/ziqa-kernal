@@ -28,6 +28,7 @@ pub struct Scheduler {
     /// Tracks current time slice for running task
     timeslice_remaining: u32,
     /// Load tracking for each priority level (number of ticks consumed)
+    #[allow(dead_code)]
     priority_load: [u64; PRIORITY_LEVELS as usize],
 }
 
@@ -83,6 +84,37 @@ impl Scheduler {
                 }
             }
         }
+    }
+
+    /// Fork: clone the parent process, returning the child's Pid.
+    /// The child is an exact copy of the parent with a new PID and parent set.
+    pub fn fork(&mut self, parent_pid: Pid) -> Option<Pid> {
+        // Find parent
+        let parent_clone = self.tasks.iter()
+            .filter_map(|s| s.as_ref())
+            .find(|p| p.pid == parent_pid)
+            .map(|p| {
+                use crate::process::{Process, ProcessState};
+                let child_pid = self.table.alloc_pid();
+                let mut child = Process::new(child_pid, p.abi, p.entry_point, p.stack_top);
+                child.cpu_state = p.cpu_state;
+                child.priority = p.priority;
+                child.parent = parent_pid.0;
+                child.regions = p.regions.clone();
+                child.region_count = p.region_count;
+                child.state = ProcessState::Ready;
+                child
+            })?;
+
+        let child_pid = parent_clone.pid;
+        for slot in self.tasks.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(parent_clone);
+                self.count += 1;
+                return Some(child_pid);
+            }
+        }
+        None
     }
 
     /// Wait for a child process to exit.

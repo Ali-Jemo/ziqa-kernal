@@ -36,12 +36,16 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         ziqa_kernel::drivers::vga::Color::Black,
     );
 
-    println!("[ZIQA] ZiqaKernel v0.7: Signals + klog + Timer + Syscall Edition");
+    println!("[ZIQA] ZiqaKernel v0.8: fork + waitpid + mmap + Network Stack Edition");
 
     // ── klog: set level and log boot messages ─────────────────────────────────
     KLOG.lock().min_level = Level::Debug;
-    ziqa_kernel::klog!(Level::Info, "ZiqaKernel v0.7 booting");
+    ziqa_kernel::klog!(Level::Info, "ZiqaKernel v0.8 booting");
     ziqa_kernel::klog!(Level::Info, "Hardware: GDT, IDT, PIC, Heap initialized");
+
+    // ── Network Stack ─────────────────────────────────────────────────────────
+    ziqa_kernel::net::init();
+    ziqa_kernel::klog!(Level::Info, "Network stack initialized");
 
     // ── VFS & RamFS Setup ─────────────────────────────────────────────────────
     {
@@ -96,6 +100,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
         // ── IPC & Shared Memory demo ──────────────────────────────────────────
         demo_ipc_shm(p);
+
+        // ── fork / waitpid demo ───────────────────────────────────────────────
+        demo_fork_waitpid(p);
     }
 
     // ── Timer / uptime ────────────────────────────────────────────────────────
@@ -110,7 +117,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
 
     ziqa_kernel::shell::start();
-    loop { x86_64::instructions::hlt(); }
 }
 
 fn demo_signals(pid: Pid) {
@@ -241,6 +247,75 @@ fn demo_advanced_subsystems(pid: Pid) {
     uring.submit(sqe).unwrap();
     let processed = uring.process_requests();
     println!("  [io_uring] processed {} requests", processed);
+}
+
+fn demo_fork_waitpid(parent: Pid) {
+    println!("\n━━━ fork / waitpid Demo ━━━");
+
+    let registry = ziqa_kernel::init_abi_registry();
+
+    ziqa_kernel::process::scheduler::with_process_mut(parent, |proc| {
+        use ziqa_kernel::abi::syscall::{SyscallContext, nr};
+
+        // fork()
+        let mut ctx = SyscallContext::new(nr::FORK, [0; 6], proc);
+        let child_pid = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx);
+        println!("  fork() -> child PID={:?}", child_pid);
+
+        // mmap(0, 4096, PROT_RW, MAP_ANON, -1, 0)
+        let mut ctx2 = SyscallContext::new(
+            nr::MMAP,
+            [0, 4096, 3, 0x22, u64::MAX, 0],
+            proc,
+        );
+        let addr = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx2);
+        println!("  mmap(4096) -> addr={:?}", addr);
+
+        // munmap the region we just mapped
+        if let Ok(a) = addr {
+            let mut ctx3 = SyscallContext::new(nr::MUNMAP, [a, 4096, 0, 0, 0, 0], proc);
+            let r = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx3);
+            println!("  munmap(0x{:x}) -> {:?}", a, r);
+        }
+    });
+
+    // Exit the child so waitpid can reap it
+    if let Ok(child_pid_val) = {
+        let mut tmp = 0u64;
+        ziqa_kernel::process::scheduler::with_process_mut(parent, |proc| {
+            use ziqa_kernel::abi::syscall::{SyscallContext, nr};
+            let registry2 = ziqa_kernel::init_abi_registry();
+            let mut ctx = SyscallContext::new(nr::FORK, [0; 6], proc);
+            let r = ziqa_kernel::abi::syscall::dispatch_syscall(&registry2, &mut ctx);
+            if let Ok(v) = r { tmp = v; }
+        });
+        if tmp > 0 { Ok::<u64, ()>(tmp) } else { Err(()) }
+    } {
+        // Exit the child
+        SCHEDULER.lock().exit_process(Pid(child_pid_val), 0);
+
+        // waitpid(-1) from parent
+        let reaped = SCHEDULER.lock().waitpid(parent, -1);
+        println!("  waitpid(-1) -> {:?}", reaped.map(|(p, c)| (p.0, c)));
+    }
+
+    // ── Loopback ping demo ────────────────────────────────────────────────────
+    println!("\n━━━ Network Loopback Demo ━━━");
+    {
+        let ping = b"PING ziqa 0.8";
+        let mut net = ziqa_kernel::net::NET.lock();
+        if let Some(lo) = net.get_mut("lo") {
+            let _ = lo.transmit(ping);
+            match lo.receive() {
+                Ok(pkt) => {
+                    let s = core::str::from_utf8(&pkt.data[..pkt.len]).unwrap_or("?");
+                    println!("  lo: sent {} bytes, echoed back: \"{}\"", ping.len(), s);
+                }
+                Err(_) => println!("  lo: no packet received"),
+            }
+        }
+    }
+    println!("  [OK] Network loopback working");
 }
 
 #[panic_handler]

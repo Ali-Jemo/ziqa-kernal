@@ -1,10 +1,8 @@
 /// ELF64 Loader for ZiqaKernel
-///
 /// Parses ELF64 binaries and maps their LOAD segments into a Process.
-/// Handles static-linked ELF64 executables (the kind produced by `musl-gcc -static`).
 
 use crate::abi::AbiError;
-use crate::memory::{VirtAddr, MemoryRegion, MemoryRegionFlags};
+use crate::memory::{VirtAddr, MemoryRegion};
 use crate::process::Process;
 use crate::println;
 
@@ -100,20 +98,10 @@ fn parse_phdr(data: &[u8], offset: usize) -> Result<Elf64Phdr, AbiError> {
     })
 }
 
-fn phdr_flags_to_memory_flags(p_flags: u32) -> MemoryRegionFlags {
-    MemoryRegionFlags {
-        readable: (p_flags & PF_R) != 0,
-        writable: (p_flags & PF_W) != 0,
-        executable: (p_flags & PF_X) != 0,
-        user_accessible: true,
-    }
-}
-
 /// Load an ELF64 binary into a process.
 pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     let header = parse_header(binary)?;
 
-    // Copy fields to avoid unaligned reference errors in println! and elsewhere
     let entry = header.e_entry;
     let phnum = header.e_phnum;
     let etype = header.e_type;
@@ -132,32 +120,27 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
         let ph_off = phoff as usize + i * phentsize as usize;
         let phdr = parse_phdr(binary, ph_off)?;
 
-        // Copy phdr fields to avoid unaligned reference errors
-        let p_type = phdr.p_type;
-        let p_flags = phdr.p_flags;
-        let p_vaddr = phdr.p_vaddr;
-        let p_memsz = phdr.p_memsz;
-        let p_offset = phdr.p_offset;
-
-        match p_type {
-            PT_LOAD => {
-                let flags = phdr_flags_to_memory_flags(p_flags);
-                let region = MemoryRegion {
-                    start: VirtAddr::new(p_vaddr),
-                    size: p_memsz as usize,
-                    flags,
-                    is_file_backed: true,
-                    file_offset: p_offset,
-                };
-                if !process.add_region(region) {
-                    return Err(AbiError::Other("Too many memory regions"));
-                }
-                load_count += 1;
+        if phdr.p_type == PT_LOAD {
+            let flags = crate::memory::paging::MemoryRegionFlags {
+                readable: (phdr.p_flags & PF_R) != 0,
+                writable: (phdr.p_flags & PF_W) != 0,
+                executable: (phdr.p_flags & PF_X) != 0,
+                user_accessible: true,
+                copy_on_write: false,
+            };
+            let region = MemoryRegion {
+                start: VirtAddr::new(phdr.p_vaddr),
+                size: phdr.p_memsz as usize,
+                flags,
+                is_file_backed: false,
+                file_offset: phdr.p_offset,
+            };
+            if !process.add_region(region) {
+                return Err(AbiError::Other("Too many memory regions"));
             }
-            PT_INTERP => {
-                println!("[ELF] WARNING: dynamic linker required (not supported)");
-            }
-            _ => {}
+            load_count += 1;
+        } else if phdr.p_type == PT_INTERP {
+            println!("[ELF] WARNING: dynamic linker required (not supported)");
         }
     }
 

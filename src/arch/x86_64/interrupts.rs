@@ -1,6 +1,7 @@
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::paging::{FrameAllocator, Mapper};
 use lazy_static::lazy_static;
 use crate::println;
 
@@ -78,14 +79,55 @@ extern "x86-interrupt" fn page_fault_handler(
     );
     
     // Handle demand paging
+    let scheduler = crate::process::scheduler::SCHEDULER.lock();
+    let current_proc = scheduler.current_task();
+    if let Some(proc) = current_proc {
+        println!("[MM] Current process {} found", proc.pid.0);
+        if let Some(region) = proc.address_space.find_region(fault_addr) {
+            println!("[MM] Found region for address {:?} with flags {:?}", fault_addr, region.flags);
+        } else {
+            println!("[MM] No region found for address {:?}", fault_addr);
+        }
+    }
+    drop(scheduler); // Release lock before potentially blocking or performing complex operations
+
     if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-        // Protection violation - likely a write to a read-only page (copy-on-write)
-        println!("[MM] Protection violation, handling copy-on-write");
+        // ... (rest unchanged)
+        println!("[MM] Protection violation, handling copy-on-write at addr {:?}", fault_addr);
         // TODO: Implement copy-on-write
     } else {
         // Page not present - demand paging opportunity
-        println!("[MM] Page not present, attempting demand paging");
-        // TODO: Implement demand paging
+        println!("[MM] Page not present, attempting demand paging at addr {:?}", fault_addr);
+        
+        let scheduler = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(proc) = scheduler.current_task() {
+            if let Some(_region) = proc.address_space.find_region(fault_addr) {
+                if let Some(frame) = crate::memory::FRAME_ALLOCATOR.lock().as_mut().unwrap().allocate_frame() {
+                    let page = x86_64::structures::paging::Page::containing_address(fault_addr);
+                    let flags = x86_64::structures::paging::PageTableFlags::PRESENT | 
+                                x86_64::structures::paging::PageTableFlags::WRITABLE | 
+                                x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+                    
+                    unsafe {
+                        // We need access to the page table mapper here. 
+                        // Using the global KERNEL_MAPPER for now as a placeholder.
+                        let mut mapper = crate::memory::paging::KERNEL_MAPPER.lock();
+                        if let Some(ref mut m) = *mapper {
+                             m.mapper.map_to(page, frame, flags, &mut *crate::memory::FRAME_ALLOCATOR.lock().as_mut().unwrap())
+                                .expect("Failed to map demand page")
+                                .flush();
+                             println!("[MM] Demand page successfully mapped");
+                             return; // Success
+                        }
+                    }
+                } else {
+                    println!("[MM] Out of memory - frame allocation failed");
+                }
+            } else {
+                println!("[MM] Invalid access - no region found");
+            }
+        }
+        drop(scheduler);
     }
     
     // For now halt on unhandled faults
