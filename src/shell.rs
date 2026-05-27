@@ -1,10 +1,10 @@
 /// Interactive shell for ZiqaKernel
-/// Simple command-line interface for kernel debugging and interaction
 
-use crate::println;
+use alloc::vec::Vec;
+use crate::{print, println};
 use crate::klog::Level;
-use crate::process::{AbiKind, Pid};
-use crate::memory::VirtAddress;
+use crate::process::AbiKind;
+use x86_64::VirtAddr;
 
 pub struct Shell {
     prompt: &'static str,
@@ -21,130 +21,73 @@ impl Shell {
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> ! {
         println!("[ZIQA] Starting interactive shell...");
-        println!("[ZIQA] Available commands: help, uptime, klog, spawn, echo");
-
         loop {
-            self.print_prompt();
+            print!("{}", self.prompt);
             self.read_line();
 
-            if let Some(cmd) = self.parse_command() {
-                match cmd {
-                    ShellCmd::Help => self.cmd_help(),
-                    ShellCmd::Uptime => self.cmd_uptime(),
-                    ShellCmd::Klog(level) => self.cmd_klog(level),
-                    ShellCmd::Spawn => self.cmd_spawn(),
-                    ShellCmd::Echo(msg) => self.cmd_echo(msg),
-                    ShellCmd::Unknown => self.cmd_unknown(),
+            let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
+            let trimmed = input.trim();
+            if !trimmed.is_empty() {
+                let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+                match parts[0] {
+                    "help" => self.cmd_help(),
+                    "uptime" => self.cmd_uptime(),
+                    "klog" => self.cmd_klog(parts.get(1).copied().unwrap_or("info")),
+                    "spawn" => self.cmd_spawn(),
+                    "ps" => self.cmd_ps(),
+                    "clear" => { for _ in 0..25 { println!(""); } },
+                    "echo" => println!("{}", parts.get(1).copied().unwrap_or("")),
+                    _ => println!("Unknown command: {}", parts[0]),
                 }
             }
-
             self.cursor = 0;
         }
     }
 
-    fn print_prompt(&self) {
-        print!("{}", self.prompt);
-    }
-
     fn read_line(&mut self) {
-        // Uses keyboard driver ring buffer
         use crate::drivers::keyboard::read_stdin;
         let n = read_stdin(&mut self.input_buf);
         self.cursor = n;
     }
 
-    fn parse_command(&self) -> Option<ShellCmd<'static>> {
-        let input = core::str::from_utf8(&self.input_buf[..self.cursor]).ok()?;
-        let trimmed = input.trim();
-
-        if trimmed.is_empty() {
-            return Some(ShellCmd::Unknown);
-        }
-
-        let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
-        match parts[0] {
-            "help" => Some(ShellCmd::Help),
-            "uptime" => Some(ShellCmd::Uptime),
-            "klog" => {
-                let level = if parts.len() > 1 && parts[1] == "debug" {
-                    Level::Debug
-                } else if parts.len() > 1 && parts[1] == "error" {
-                    Level::Error
-                } else {
-                    Level::Info
-                };
-                Some(ShellCmd::Klog(level))
-            }
-            "spawn" => Some(ShellCmd::Spawn),
-            "echo" => Some(ShellCmd::Echo(parts.get(1).copied().unwrap_or(""))),
-            _ => Some(ShellCmd::Unknown),
-        }
-    }
-
     fn cmd_help(&self) {
-        println!("ZiqaKernel v0.6 Shell Commands:");
-        println!("  help          - Show this help");
-        println!("  uptime        - Show system uptime");
-        println!("  klog [level]  - Show kernel log (error/debug/info)");
-        println!("  spawn         - Spawn a demo process");
-        println!("  echo <msg>    - Echo a message");
+        println!("Available commands: help, uptime, klog, spawn, ps, clear, echo");
     }
 
     fn cmd_uptime(&self) {
-        let ticks = crate::timer::uptime_ticks();
-        let ms = crate::timer::uptime_ms();
-        println!("Uptime: {} ticks, {} ms", ticks, ms);
+        println!("Uptime: {} ms", crate::timer::uptime_ms());
     }
 
-    fn cmd_klog(&self, level: Level) {
-        println!("Kernel log (level >= {:?}):", level);
+    fn cmd_klog(&self, level_str: &str) {
+        let level = match level_str {
+            "debug" => Level::Debug,
+            "error" => Level::Error,
+            _ => Level::Info,
+        };
         crate::klog::KLOG.lock().dump_level(level);
     }
 
     fn cmd_spawn(&self) {
         let pid = crate::process::scheduler::spawn(
-            AbiKind::ZiqaNative,
-            VirtAddress::new(0x400000),
-            VirtAddress::new(0x7FFF0000),
+            AbiKind::LinuxElf,
+            VirtAddr::new(0x400000),
+            VirtAddr::new(0x7fff_ffff_000),
         );
-        if let Some(p) = pid {
-            println!("Spawned demo process PID={:?}", p);
-        } else {
-            println!("Failed to spawn process (max processes reached)");
-        }
+        println!("Spawned PID={:?}", pid);
     }
 
-    fn cmd_echo(&self, msg: &'static str) {
-        println!("{}", msg);
-    }
-
-    fn cmd_unknown(&self) {
-        println!("Unknown command. Type 'help' for available commands.");
+    fn cmd_ps(&self) {
+        crate::process::scheduler::SCHEDULER.lock().print_process_list();
     }
 }
 
-enum ShellCmd<'a> {
-    Help,
-    Uptime,
-    Klog(Level),
-    Spawn,
-    Echo(&'a str),
-    Unknown,
+pub fn start() -> ! {
+    let mut shell = Shell::new();
+    shell.run();
 }
 
-pub static mut SHELL: Shell = Shell::new();
-
-pub fn init() {
-    unsafe {
-        SHELL = Shell::new();
-    }
-}
-
-pub fn run() {
-    init();
-    unsafe {
-        SHELL.run();
-    }
+pub fn run() -> ! {
+    start()
 }

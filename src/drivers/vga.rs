@@ -10,29 +10,36 @@ const WIDTH: usize = 80;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {
-    Black=0, Blue, Green, Cyan, Red, Magenta, Brown, LightGray,
+    Black = 0, Blue, Green, Cyan, Red, Magenta, Brown, LightGray,
     DarkGray, LightBlue, LightGreen, LightCyan, LightRed, Pink, Yellow, White,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 struct ColorCode(u8);
 
 impl ColorCode {
-    fn new(fg: Color, bg: Color) -> Self { ColorCode((bg as u8) << 4 | fg as u8) }
+    fn new(fg: Color, bg: Color) -> ColorCode {
+        ColorCode((bg as u8) << 4 | (fg as u8))
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct ScreenChar { ascii: u8, color: ColorCode }
+struct ScreenChar {
+    ascii: u8,
+    color: ColorCode,
+}
 
 #[repr(transparent)]
-struct Buffer { chars: [[Volatile<ScreenChar>; WIDTH]; HEIGHT] }
+struct Buffer {
+    chars: [[Volatile<ScreenChar>; WIDTH]; HEIGHT],
+}
 
 pub struct Writer {
     col: usize,
     color: ColorCode,
-    buf: &'static mut Buffer,
+    buffer: &'static mut Buffer,
 }
 
 impl Writer {
@@ -42,7 +49,7 @@ impl Writer {
             b => {
                 if self.col >= WIDTH { self.newline(); }
                 let row = HEIGHT - 1;
-                self.buf.chars[row][self.col].write(ScreenChar { ascii: b, color: self.color });
+                self.buffer.chars[row][self.col].write(ScreenChar { ascii: b, color: self.color });
                 self.col += 1;
             }
         }
@@ -51,12 +58,25 @@ impl Writer {
     fn newline(&mut self) {
         for row in 1..HEIGHT {
             for col in 0..WIDTH {
-                let c = self.buf.chars[row][col].read();
-                self.buf.chars[row-1][col].write(c);
+                let character = self.buffer.chars[row][col].read();
+                self.buffer.chars[row - 1][col].write(character);
             }
         }
+        self.clear_row(HEIGHT - 1);
+        self.col = 0;
+    }
+
+    fn clear_row(&mut self, row: usize) {
         let blank = ScreenChar { ascii: b' ', color: self.color };
-        for col in 0..WIDTH { self.buf.chars[HEIGHT-1][col].write(blank); }
+        for col in 0..WIDTH {
+            self.buffer.chars[row][col].write(blank);
+        }
+    }
+
+    pub fn clear_screen(&mut self) {
+        for row in 0..HEIGHT {
+            self.clear_row(row);
+        }
         self.col = 0;
     }
 
@@ -80,26 +100,22 @@ impl fmt::Write for Writer {
 lazy_static! {
     pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
         col: 0,
-        color: ColorCode::new(Color::LightGreen, Color::Black),
-        buf: unsafe { &mut *(0xb8000 as *mut Buffer) },
+        color: ColorCode::new(Color::Yellow, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
     });
 }
 
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
+pub fn print(args: fmt::Arguments) {
     use core::fmt::Write;
     use x86_64::instructions::interrupts;
-    interrupts::without_interrupts(|| { WRITER.lock().write_fmt(args).unwrap(); });
+    interrupts::without_interrupts(|| {
+        WRITER.lock().write_fmt(args).unwrap();
+    });
 }
 
-#[macro_export]
-macro_rules! vga_print {
-    ($($arg:tt)*) => ($crate::drivers::vga::_print(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! vga_println {
-    () => ($crate::vga_print!("\n"));
-    ($fmt:expr) => ($crate::vga_print!(concat!($fmt, "\n")));
-    ($fmt:expr, $($arg:tt)*) => ($crate::vga_print!(concat!($fmt, "\n"), $($arg)*));
+pub fn clear_screen() {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().clear_screen();
+    });
 }

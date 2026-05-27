@@ -3,7 +3,7 @@
 
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
-use ziqa_kernel::{println, vga_println};
+use ziqa_kernel::println;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::ebpf::{BpfInstruction, op as bpf_op, verifier::BpfVerifier, vm::BpfVm};
 use ziqa_kernel::io::uring::{IoUring, SqEntry, op as io_op};
@@ -30,12 +30,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         ziqa_kernel::drivers::vga::Color::LightCyan,
         ziqa_kernel::drivers::vga::Color::Black,
     );
-    vga_println!("╔══════════════════════════════════════════╗");
-    vga_println!("║   ZiqaKernel v0.7  —  نواة زيقا          ║");
-    vga_println!("╠══════════════════════════════════════════╣");
-    vga_println!("║  [OK] Signals  [OK] klog  [OK] Timer     ║");
-    vga_println!("║  [OK] Syscalls [OK] ZiqaFS [OK] eBPF     ║");
-    vga_println!("╚══════════════════════════════════════════╝");
 
     ziqa_kernel::drivers::vga::WRITER.lock().set_color(
         ziqa_kernel::drivers::vga::Color::White,
@@ -114,10 +108,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("\n━━━ Kernel Log (last {} entries) ━━━", KLOG.lock().count());
     KLOG.lock().dump_level(Level::Info);
 
-    vga_println!("");
-    vga_println!("ZiqaKernel v0.7 operational.");
 
     ziqa_kernel::shell::start();
+    loop { x86_64::instructions::hlt(); }
 }
 
 fn demo_signals(pid: Pid) {
@@ -253,6 +246,5 @@ fn demo_advanced_subsystems(pid: Pid) {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("\n[PANIC] {}", info);
-    vga_println!("\n[PANIC] {}", info);
     loop { x86_64::instructions::hlt(); }
 }

@@ -124,7 +124,7 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
         entry, phnum,
         if etype == ET_EXEC { "EXEC" } else { "DYN" });
 
-    process.entry_point = VirtAddress::new(entry);
+    process.entry_point = VirtAddr::new(entry);
     process.cpu_state.rip = entry;
 
     let mut load_count = 0u32;

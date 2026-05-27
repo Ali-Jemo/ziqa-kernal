@@ -45,8 +45,6 @@ impl Scheduler {
             priority_load: [0; PRIORITY_LEVELS as usize],
         }
     }
-}
-    }
 
     /// Create a new process (starts at highest priority)
     pub fn spawn(&mut self, abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> {
