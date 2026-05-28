@@ -114,14 +114,15 @@ The boot sequence proceeds from firmware through the bootloader, HAL initializat
            ├── cwd              Current working directory (128 bytes)
            ├── brk              Program break for sbrk/brk
            ├── mmap_bump        Bump allocator base for mmap (0x7000_0000)
-           ├── binary_data      Raw ELF binary for demand-paging page-fault-on-demand copy
-           └── Scheduling       priority 0-3, parent PID
+            ├── binary_data      Raw ELF binary for demand-paging page-fault-on-demand copy
+            ├── page_table_frame Per-process CR3 root (None = bootloader default)
+            └── Scheduling       priority 0-3, parent PID
 ```
 
 | Syscall | Description |
 |---------|-------------|
 | `spawn` | Create new process with ABI kind, entry point, stack |
-| `fork` | Clone process — full copy of regions, CPU state, FDs |
+| `fork` | Clone process — copy-on-write page tables, full copy of CPU state, FDs, binary_data |
 | `exec` | Reset process image — clear regions, new entry, fresh FD table |
 | `exit` | Mark as Exited, notify parent via SIGCHLD |
 | `waitpid` | Reap zombie child, return (pid, exit_code) |
@@ -160,7 +161,9 @@ The boot sequence proceeds from firmware through the bootloader, HAL initializat
  └──────────────────┘  └──────────────────┘  │ map + flush TLB      │
                                               └──────────────────────┘
 
-**Demand Paging**: The page-fault handler (`interrupts.rs`) checks if the faulting address falls within a registered memory region. If so, it allocates a physical frame from `FRAME_ALLOCATOR`, maps it via `Mapper::map_to()`, and copies the corresponding ELF segment data from the process's `binary_data` field into the newly-mapped page. This enables on-demand loading of ELF segments — only the faulted pages are physically allocated.
+**Demand Paging**: The page-fault handler checks if the faulting address falls within a registered memory region. If so, it allocates a physical frame, maps it via `current_mapper()` (a fresh `OffsetPageTable` from the active CR3), and copies the corresponding ELF segment data from `binary_data` into the newly-mapped page.
+
+**Copy-on-Write Fork**: `fork()` shares pages between parent and child by making user page table entries read-only and marking the regions `copy_on_write`. A subsequent write by either process triggers a `PROTECTION_VIOLATION` page fault; the handler detects the COW flag, allocates a new frame, copies the page content, and remaps it writable in the faulting process's page table. Each process has its own root page table (`Process.page_table_frame`) — the child's user hierarchy is recursively cloned while kernel entries (higher half) are shared by pointer.
 
 ```
 
@@ -786,7 +789,7 @@ build-std-features = ["compiler-builtins-mem"]
 
 ## Shell Commands
 
-The shell supports **24 commands**, command history (up to 50 entries), Tab autocomplete (commands + VFS paths/PIDs), ANSI color output, and a `cwd` prompt that shows the current directory.
+The shell supports **24 commands**, command history (up to 50 entries), Tab autocomplete with colored output (green=commands, blue=VFS paths/dirs, yellow=PIDs) with longest-common-prefix filling, and a `cwd` prompt that shows the current directory.
 
 **Filesystem**
 
@@ -932,7 +935,7 @@ pub trait AbiPlugin: Send + Sync {
 - [x] **100+ Linux syscalls achieved** (~111 handled)
 
 ### Medium Term
-- [ ] Copy-on-write for fork (shared pages → page fault → copy)
+- [x] Copy-on-write for fork (shared pages → per-process page tables → page fault → private copy)
 - [ ] SMP / multi-core (APIC, IPI, per-CPU run queues)
 - [ ] ext2/4 filesystem driver
 - [x] Ethernet driver (VirtIO-net: VirtQueue descriptor rings, TX/RX — commented out)

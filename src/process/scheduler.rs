@@ -13,6 +13,7 @@ use spin::Mutex;
 use crate::process::{Process, ProcessTable, ProcessState, Pid, AbiKind};
 use crate::process::signal::{SignalAction, default_action, DefaultDisposition};
 use crate::memory::VirtAddr;
+use x86_64::registers::control::{Cr3, Cr3Flags};
 
 const MAX_TASKS: usize = 64;
 const PRIORITY_LEVELS: u8 = 4;
@@ -86,34 +87,62 @@ impl Scheduler {
         }
     }
 
-    /// Fork: clone the parent process, returning the child's Pid.
-    /// The child is an exact copy of the parent with a new PID and parent set.
+    /// Fork: clone the parent process with copy-on-write page tables.
+    /// Returns the child's Pid, or None if the fork fails.
     pub fn fork(&mut self, parent_pid: Pid) -> Option<Pid> {
-        // Find parent
-        let parent_clone = self.tasks.iter()
-            .filter_map(|s| s.as_ref())
-            .find(|p| p.pid == parent_pid)
-            .map(|p| {
-                use crate::process::{Process, ProcessState};
-                let child_pid = self.table.alloc_pid();
-                let mut child = Process::new(child_pid, p.abi, p.entry_point, p.stack_top);
-                child.cpu_state = p.cpu_state;
-                child.priority = p.priority;
-                child.parent = parent_pid.0;
-                child.regions = p.regions.clone();
-                child.region_count = p.region_count;
-                child.state = ProcessState::Ready;
-                child
-            })?;
+        // Step 1: Set up COW page tables (makes parent pages read-only, clones for child)
+        let child_l4_frame = crate::memory::paging::cow_fork_parent();
 
-        let child_pid = parent_clone.pid;
+        // Step 2: Find the parent and create the child
+        let parent_index = self.tasks.iter().position(|s| {
+            s.as_ref().map(|p| p.pid == parent_pid).unwrap_or(false)
+        })?;
+
+        let parent = self.tasks[parent_index].as_ref().unwrap();
+
+        let child_pid = self.table.alloc_pid();
+        let mut child = Process::new(child_pid, parent.abi, parent.entry_point, parent.stack_top);
+        child.cpu_state = parent.cpu_state;
+        child.priority = parent.priority;
+        child.parent = parent_pid.0;
+        child.regions = parent.regions.clone();
+        child.region_count = parent.region_count;
+        child.binary_data = parent.binary_data.clone();
+        child.state = ProcessState::Ready;
+        child.fds.clone_from(&parent.fds);
+
+        // Set the child's page table frame
+        if let Some(frame) = child_l4_frame {
+            child.page_table_frame = Some(frame);
+        }
+
+        // Mark all writable regions as copy_on_write in BOTH parent and child
+        for region_opt in self.tasks[parent_index].as_mut().unwrap().regions.iter_mut() {
+            if let Some(ref mut r) = region_opt {
+                if r.flags.writable {
+                    r.flags.copy_on_write = true;
+                }
+            }
+        }
+        for region_opt in child.regions.iter_mut() {
+            if let Some(ref mut r) = region_opt {
+                if r.flags.writable {
+                    r.flags.copy_on_write = true;
+                }
+            }
+        }
+
+        // Insert the child into a free slot
         for slot in self.tasks.iter_mut() {
             if slot.is_none() {
-                *slot = Some(parent_clone);
+                *slot = Some(child);
                 self.count += 1;
                 return Some(child_pid);
             }
         }
+
+        // No free slots — clean up the child's page table frames (best-effort)
+        // For now just return None (the frames will be leaked — acceptable on failure)
         None
     }
 
@@ -293,6 +322,13 @@ impl Scheduler {
                     _ => 40,  // Background tasks get long quanta
                 };
                 self.current = idx;
+
+                // Load the process's page table if it has its own
+                if let Some(frame) = proc.page_table_frame {
+                    unsafe {
+                        Cr3::write(frame, Cr3Flags::empty());
+                    }
+                }
             }
         } else {
             // No ready tasks
@@ -321,6 +357,12 @@ impl Scheduler {
             if let Some(proc) = slot {
                 if proc.pid == pid {
                     self.current = i;
+                    // Load the process's page table if it has its own
+                    if let Some(frame) = proc.page_table_frame {
+                        unsafe {
+                            Cr3::write(frame, Cr3Flags::empty());
+                        }
+                    }
                     return true;
                 }
             }

@@ -5,6 +5,7 @@ pub mod signal;
 
 use crate::capability::CapabilitySpace;
 use crate::memory::{VirtAddr, MemoryRegion};
+use x86_64::structures::paging::PhysFrame;
 use signal::SignalState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,14 @@ impl FdTable {
     pub fn open_count(&self) -> usize {
         self.entries.iter().filter(|e| e.is_some()).count()
     }
+
+    pub fn clone_from(&mut self, other: &Self) {
+        for i in 0..MAX_FDS {
+            self.entries[i] = other.entries[i];
+            self.paths[i] = other.paths[i];
+            self.path_lens[i] = other.path_lens[i];
+        }
+    }
 }
 
 // ── Process ───────────────────────────────────────────────────────────────────
@@ -207,6 +216,9 @@ pub struct Process {
     pub mmap_bump: u64,
     /// Raw ELF binary data for page-fault-on-demand copying
     pub binary_data: alloc::vec::Vec<u8>,
+    /// Physical frame of this process's root (L4) page table.
+    /// `None` means it shares the bootloader's / kernel's page table.
+    pub page_table_frame: Option<PhysFrame>,
 }
 
 impl Process {
@@ -239,6 +251,7 @@ impl Process {
             cwd_len: 1,
             mmap_bump: 0x7000_0000,
             binary_data: alloc::vec::Vec::new(),
+            page_table_frame: None,
         }
     }
 

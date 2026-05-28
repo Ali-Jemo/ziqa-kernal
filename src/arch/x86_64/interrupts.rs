@@ -100,8 +100,32 @@ extern "x86-interrupt" fn page_fault_handler(
     drop(scheduler); // Release lock before potentially blocking or performing complex operations
 
     if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-        println!("[MM] Protection violation, handling copy-on-write at addr {:?}", fault_addr);
-        // TODO: Implement copy-on-write
+        // Check if this is a COW page — allocate a private copy and remap writable
+        let cow_handled = {
+            let scheduler = crate::process::scheduler::SCHEDULER.lock();
+            let is_cow = scheduler.current_task().map(|proc| {
+                proc.regions.iter().any(|opt| {
+                    opt.as_ref().map(|r| {
+                        let start = r.start.as_u64();
+                        let end = start + r.size as u64;
+                        r.flags.copy_on_write
+                            && fault_addr.as_u64() >= start
+                            && fault_addr.as_u64() < end
+                    }).unwrap_or(false)
+                })
+            }).unwrap_or(false);
+            drop(scheduler);
+            if is_cow {
+                crate::memory::paging::handle_cow_fault(fault_addr)
+            } else {
+                false
+            }
+        };
+        if cow_handled {
+            println!("[MM] COW fault resolved at {:?}", fault_addr);
+            return;
+        }
+        println!("[MM] Protection violation, but NOT a COW page — halting");
     } else {
         // Page not present - demand paging opportunity
         println!("[MM] Page not present, attempting demand paging at addr {:?}", fault_addr);
@@ -148,41 +172,39 @@ extern "x86-interrupt" fn page_fault_handler(
 
             if let Some(frame) = fa.allocate_frame() {
                 unsafe {
-                    let mut mapper = crate::memory::paging::KERNEL_MAPPER.lock();
-                    if let Some(ref mut m) = *mapper {
-                        // Use map_to with the SAME frame allocator reference —
-                        // no double locking, no frame reuse.
-                        match m.mapper.map_to(page, frame, flags, fa) {
-                            Ok(flusher) => {
-                                flusher.flush();
+                    let mut mapper = crate::memory::paging::current_mapper();
+                    // Use map_to with the SAME frame allocator reference —
+                    // no double locking, no frame reuse.
+                    match mapper.map_to(page, frame, flags, fa) {
+                        Ok(flusher) => {
+                            flusher.flush();
 
-                                // Copy ELF binary data into the newly mapped page
-                                if let Some((bin_ptr, bin_len)) = binary_info {
-                                    let page_addr = page.start_address().as_u64();
-                                    let in_region_off = page_addr.saturating_sub(region_start);
-                                    let binary_off = file_offset as usize + in_region_off as usize;
-                                    let copy_size = 4096usize.min(
-                                        bin_len.saturating_sub(binary_off)
+                            // Copy ELF binary data into the newly mapped page
+                            if let Some((bin_ptr, bin_len)) = binary_info {
+                                let page_addr = page.start_address().as_u64();
+                                let in_region_off = page_addr.saturating_sub(region_start);
+                                let binary_off = file_offset as usize + in_region_off as usize;
+                                let copy_size = 4096usize.min(
+                                    bin_len.saturating_sub(binary_off)
+                                );
+                                if copy_size > 0 {
+                                    core::ptr::copy_nonoverlapping(
+                                        bin_ptr.add(binary_off),
+                                        page_addr as *mut u8,
+                                        copy_size,
                                     );
-                                    if copy_size > 0 {
-                                        core::ptr::copy_nonoverlapping(
-                                            bin_ptr.add(binary_off),
-                                            page_addr as *mut u8,
-                                            copy_size,
-                                        );
-                                        println!("[MM] Copied {} bytes from binary to {:x}", copy_size, page_addr);
-                                    }
+                                    println!("[MM] Copied {} bytes from binary to {:x}", copy_size, page_addr);
                                 }
+                            }
 
-                                println!("[MM] Demand page mapped + populated");
-                                return;
-                            }
-                            Err(_e) => {
-                                // Page was already mapped (race or stale TLB).
-                                // This is the panic you were seeing — now handled gracefully.
-                                println!("[MM] Page already mapped at {:?}, skipping", fault_addr);
-                                return;
-                            }
+                            println!("[MM] Demand page mapped + populated");
+                            return;
+                        }
+                        Err(_e) => {
+                            // Page was already mapped (race or stale TLB).
+                            // This is the panic you were seeing — now handled gracefully.
+                            println!("[MM] Page already mapped at {:?}, skipping", fault_addr);
+                            return;
                         }
                     }
                 }
