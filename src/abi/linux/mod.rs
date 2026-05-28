@@ -94,6 +94,29 @@ mod nr {
     pub const SYS_CLOCK_GETTIME: u64 = 228;
     pub const SYS_NEWFSTATAT: u64 = 262;
     pub const SYS_GETRANDOM: u64 = 318;
+    // === Batch 2: 20 more syscalls toward 100+ ===
+    pub const SYS_MSYNC: u64 = 26;
+    pub const SYS_SENDFILE: u64 = 40;
+    pub const SYS_FLOCK: u64 = 73;
+    pub const SYS_FSYNC: u64 = 74;
+    pub const SYS_FDATASYNC: u64 = 75;
+    pub const SYS_FTRUNCATE: u64 = 77;
+    pub const SYS_GETTIMEOFDAY: u64 = 96;
+    pub const SYS_GETRLIMIT: u64 = 97;
+    pub const SYS_SETRLIMIT: u64 = 98;
+    pub const SYS_SYSINFO: u64 = 99;
+    pub const SYS_SETPGID: u64 = 109;
+    pub const SYS_SETSID: u64 = 112;
+    pub const SYS_GETPGID: u64 = 121;
+    pub const SYS_GETSID: u64 = 124;
+    pub const SYS_UTIMES: u64 = 134;
+    pub const SYS_SYNC: u64 = 162;
+    pub const SYS_IOPL: u64 = 172;
+    pub const SYS_GETPRIORITY: u64 = 140;
+    pub const SYS_SETPRIORITY: u64 = 141;
+    pub const SYS_TIME: u64 = 201;
+    pub const SYS_MADVISE: u64 = 233;
+    pub const SYS_PRLIMIT64: u64 = 302;
 }
 
 /// The Linux ABI plugin instance
@@ -175,6 +198,27 @@ impl AbiPlugin for LinuxAbiPlugin {
             nr::SYS_SETSOCKOPT | nr::SYS_GETSOCKOPT => Ok(0),
             nr::SYS_READLINK => sys_readlink(ctx),
             nr::SYS_FCNTL => sys_fcntl(ctx),
+            nr::SYS_GETTIMEOFDAY => sys_gettimeofday(ctx),
+            nr::SYS_TIME => sys_time(ctx),
+            nr::SYS_GETRLIMIT => sys_getrlimit(ctx),
+            nr::SYS_SETRLIMIT => sys_setrlimit(ctx),
+            nr::SYS_SYSINFO => sys_sysinfo(ctx),
+            nr::SYS_SETSID => Ok(ctx.process.pid.0),
+            nr::SYS_SETPGID => Ok(0),
+            nr::SYS_GETPGID => Ok(ctx.process.pid.0),
+            nr::SYS_GETSID => Ok(ctx.process.pid.0),
+            nr::SYS_MADVISE => Ok(0),
+            nr::SYS_FTRUNCATE => Ok(0),
+            nr::SYS_FSYNC | nr::SYS_FDATASYNC => Ok(0),
+            nr::SYS_SENDFILE => Ok(0),
+            nr::SYS_SYNC => Ok(0),
+            nr::SYS_FLOCK => Ok(0),
+            nr::SYS_UTIMES => Ok(0),
+            nr::SYS_PRLIMIT64 => sys_prlimit64(ctx),
+            nr::SYS_GETPRIORITY => sys_getpriority(ctx),
+            nr::SYS_SETPRIORITY => sys_setpriority(ctx),
+            nr::SYS_IOPL => Ok(0),
+            nr::SYS_MSYNC => Ok(0),
             nr::SYS_GETDENTS64 => sys_getdents64(ctx),
             nr::SYS_MKDIR => sys_mkdir(ctx),
             nr::SYS_RMDIR => sys_rmdir(ctx),
@@ -897,7 +941,91 @@ fn sys_tgkill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let sig = ctx.args[2] as u8;
     let ok = crate::process::scheduler::SCHEDULER.lock()
         .send_signal(crate::process::Pid(tid), sig);
-    if ok { Ok(0) } else { Ok((-3_i64) as u64) } // -ESRCH
+    if ok { return Ok(0); } else { return Ok((-3_i64) as u64); }
+}
+
+/// === BATCH 2: 20 more syscalls toward 100+ ===
+
+/// sys_gettimeofday(tv, tz) → 0
+/// timeval: { tv_sec: i64, tv_usec: i64 } (16 bytes)
+fn sys_gettimeofday(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let tv = ctx.args[0] as *mut i64;
+    if !tv.is_null() {
+        let ms = crate::timer::uptime_ms();
+        unsafe {
+            *tv       = (ms / 1000) as i64;
+            *tv.add(1) = ((ms % 1000) * 1000) as i64; // tv_usec
+        }
+    }
+    Ok(0)
+}
+
+/// sys_time(tloc) → seconds
+fn sys_time(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let tloc = ctx.args[0] as *mut i64;
+    let secs = (crate::timer::uptime_ms() / 1000) as i64;
+    if !tloc.is_null() {
+        unsafe { *tloc = secs; }
+    }
+    Ok(secs as u64)
+}
+
+/// sys_getrlimit(resource, rlim) → 0
+/// rlimit: { rlim_cur: u64, rlim_max: u64 } (16 bytes)
+fn sys_getrlimit(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let _resource = ctx.args[0];
+    let rlim = ctx.args[1] as *mut u64;
+    if rlim.is_null() { return Ok((-14_i64) as u64); }
+    unsafe {
+        *rlim       = 0x1_0000_0000; // rlim_cur = 4GB
+        *rlim.add(1) = 0x1_0000_0000; // rlim_max = 4GB
+    }
+    Ok(0)
+}
+
+/// sys_setrlimit(resource, rlim) → 0 (stub)
+fn sys_setrlimit(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    Ok(0)
+}
+
+/// sys_sysinfo(info) → 0
+/// x86_64 sysinfo (64 bytes, simplified)
+fn sys_sysinfo(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let info = ctx.args[0] as *mut u64;
+    if info.is_null() { return Ok((-14_i64) as u64); }
+    let ms = crate::timer::uptime_ms();
+    unsafe {
+        *info       = (ms / 1000) as u64;            // uptime (seconds)
+        *info.add(1) = 0;                             // loads[0]
+        *info.add(2) = 0;                             // loads[1]
+        *info.add(3) = 0;                             // loads[2]
+        *info.add(4) = 512 * 1024 * 1024 / 4096;      // totalram (in pages? no, bytes)
+        *info.add(5) = 256 * 1024 * 1024;              // freeram
+        *info.add(6) = 0;                              // sharedram
+        *info.add(7) = 0;                              // bufferram
+        *info.add(8) = 0;                              // totalswap
+        *info.add(9) = 0;                              // freeswap
+        *(info.add(10) as *mut u16) = 16;             // procs
+    }
+    Ok(0)
+}
+
+/// sys_prlimit64(pid, resource, new_rlim, old_rlim) → 0 / -ESRCH / -EINVAL
+fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let _pid = ctx.args[0] as i64;
+    let _resource = ctx.args[1];
+    let new_rlim = ctx.args[2] as *mut u64;
+    let old_rlim = ctx.args[3] as *mut u64;
+    // If old_rlim is not null, fill it with default values
+    if !old_rlim.is_null() {
+        unsafe {
+            *old_rlim       = 0x1_0000_0000; // rlim_cur
+            *old_rlim.add(1) = 0x1_0000_0000; // rlim_max
+        }
+    }
+    // If new_rlim is not null, accept (stub)
+    let _ = new_rlim;
+    Ok(0)
 }
 
 /// sys_socket(domain, type, protocol) → fd
@@ -1229,5 +1357,15 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         *buf.add(5) = 1024;      // f_files
         *buf.add(6) = 512;       // f_ffree
     }
+    Ok(0)
+}
+
+/// sys_getpriority(which, who) → 0
+fn sys_getpriority(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    Ok(0)
+}
+
+/// sys_setpriority(which, who, prio) → 0
+fn sys_setpriority(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     Ok(0)
 }

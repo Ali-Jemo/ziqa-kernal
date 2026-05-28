@@ -185,29 +185,93 @@ impl Shell {
         let last_space = input.rfind(' ').map(|i| i + 1).unwrap_or(0);
         let prefix = &input[last_space..];
 
-        let matches: Vec<&&str> = COMMANDS.iter().filter(|c| c.starts_with(prefix)).collect();
+        let is_first_word = last_space == 0;
 
-        match matches.len() {
-            0 => {}
-            1 => {
-                let cmd = matches[0].as_bytes();
-                let new_end = last_space + cmd.len();
-                self.input_buf[last_space..new_end].copy_from_slice(cmd);
+        let candidates: Vec<String> = if is_first_word {
+            COMMANDS.iter().filter(|c| c.starts_with(prefix)).map(|s| s.to_string()).collect()
+        } else if !prefix.is_empty() {
+            let cmd_end = input.find(' ').unwrap_or(input.len());
+            let cmd = &input[..cmd_end];
+            self.complete_arg(cmd, prefix)
+        } else {
+            Vec::new()
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        if candidates.len() == 1 {
+            let completion = &candidates[0];
+            let bytes = completion.as_bytes();
+            let new_end = last_space + bytes.len();
+            self.input_buf[last_space..new_end].copy_from_slice(bytes);
+            for i in new_end..*idx {
+                self.input_buf[i] = 0;
+            }
+            *idx = new_end;
+            self.refresh_line(*idx);
+        } else {
+            let common = longest_common_prefix(&candidates);
+            if common.len() > prefix.len() {
+                let bytes = common.as_bytes();
+                let new_end = last_space + common.len();
+                self.input_buf[last_space..new_end].copy_from_slice(bytes);
                 for i in new_end..*idx {
                     self.input_buf[i] = 0;
                 }
                 *idx = new_end;
                 self.refresh_line(*idx);
-            }
-            _ => {
+            } else {
                 println!("");
-                for m in matches {
-                    print!("{}  ", m);
+                for c in &candidates {
+                    if is_first_word {
+                        print!("{}{}{}  ", C_GREEN, c, C_RESET);
+                    } else if c.parse::<u64>().is_ok() {
+                        print!("{}{}{}  ", C_YELLOW, c, C_RESET);
+                    } else if VFS.lock().is_dir(c) {
+                        print!("{}{}{}  ", C_BLUE, c, C_RESET);
+                    } else {
+                        print!("{}  ", c);
+                    }
                 }
                 println!("");
                 self.refresh_line(*idx);
             }
         }
+    }
+
+    fn complete_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
+        if matches!(cmd, "ls" | "cd" | "edit" | "rm" | "cat" | "mkdir" | "dir" | "spawnelf" | "spawn") {
+            let vfs = VFS.lock();
+            let all = vfs.list();
+            let cwd = self.cwd_str();
+            let search_prefix = if prefix.starts_with('/') {
+                prefix.to_string()
+            } else if cwd == "/" {
+                alloc::format!("/{}", prefix)
+            } else {
+                alloc::format!("{}/{}", cwd, prefix)
+            };
+            let matched: Vec<String> = all.into_iter().filter(|p| p.starts_with(&search_prefix)).collect();
+            if matched.is_empty() {
+                return Vec::new();
+            }
+            if prefix.starts_with('/') {
+                return matched;
+            }
+            let cwd_prefix: String = if cwd == "/" { "/".to_string() } else { alloc::format!("{}/", cwd) };
+            return matched.into_iter().map(|p| {
+                p.strip_prefix(&cwd_prefix).unwrap_or(&p).to_string()
+            }).collect();
+        }
+
+        if matches!(cmd, "kill" | "exec") {
+            let pids = crate::process::scheduler::list_pids();
+            return pids.iter().map(|p| alloc::format!("{}", p.0)).filter(|s| s.starts_with(prefix)).collect();
+        }
+
+        Vec::new()
     }
 
     fn read_line(&mut self) {
@@ -603,6 +667,29 @@ impl Shell {
             Err(_) => println!("cat: {}: No such file", resolved),
         }
     }
+}
+
+fn longest_common_prefix(strings: &[String]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    if strings.len() == 1 {
+        return strings[0].clone();
+    }
+    let first = strings[0].as_bytes();
+    let mut len = first.len();
+    for s in &strings[1..] {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < len && i < bytes.len() && first[i] == bytes[i] {
+            i += 1;
+        }
+        len = i;
+        if len == 0 {
+            break;
+        }
+    }
+    strings[0][..len].to_string()
 }
 
 pub fn start() -> ! {

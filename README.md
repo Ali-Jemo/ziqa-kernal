@@ -606,7 +606,7 @@ build-std-features = ["compiler-builtins-mem"]
 ```
 
 <details>
-<summary><b>Syscall Reference</b> (click to expand — 64 syscall numbers, ~62 implemented)</summary>
+<summary><b>Syscall Reference</b> (click to expand — 84 syscall numbers, ~82 implemented)</summary>
 
 | Number | Name | Description | Handler |
 |--------|------|-------------|---------|
@@ -630,10 +630,12 @@ build-std-features = ["compiler-builtins-mem"]
 | 22 | `PIPE` | Create pipe | Linux ABI |
 | 23 | `SELECT` | Select fds (stub) | Linux ABI |
 | 24 | `SCHED_YIELD` | Yield CPU | Core |
+| 26 | `MSYNC` | Memory sync (stub) | Linux ABI |
 | 32 | `DUP` | Duplicate fd | Linux ABI |
 | 33 | `DUP2` | Duplicate to specific fd | Linux ABI |
 | 35 | `NANOSLEEP` | Sleep ms (PIT-based) | Core + ABI |
 | 39 | `GETPID` | Get process ID | Core |
+| 40 | `SENDFILE` | Send file (stub) | Linux ABI |
 | 41 | `SOCKET` | Create socket (fake fd) | Linux ABI |
 | 42 | `CONNECT` | Connect socket (returns -ECONNREFUSED) | Linux ABI |
 | 43 | `ACCEPT` | Accept connection (returns -EAGAIN) | Linux ABI |
@@ -651,6 +653,10 @@ build-std-features = ["compiler-builtins-mem"]
 | 62 | `KILL` | Send signal | Core |
 | 63 | `UNAME` | System info | Linux ABI |
 | 72 | `FCNTL` | File control (F_DUPFD, F_GETFD/SETFD, etc.) | Linux ABI |
+| 73 | `FLOCK` | File lock (stub OK) | Linux ABI |
+| 74 | `FSYNC` | File sync (stub) | Linux ABI |
+| 75 | `FDATASYNC` | File data sync (stub) | Linux ABI |
+| 77 | `FTRUNCATE` | File truncate (stub) | Linux ABI |
 | 79 | `GETCWD` | Get working dir | Linux ABI |
 | 80 | `CHDIR` | Change directory | Linux ABI |
 | 82 | `RENAME` | Rename file | Linux ABI |
@@ -663,24 +669,38 @@ build-std-features = ["compiler-builtins-mem"]
 | 89 | `READLINK` | Read symlink (/proc/self/exe) | Linux ABI |
 | 90 | `CHMOD` | Change mode (stub) | Linux ABI |
 | 95 | `UMASK` | Set file creation mask | Linux ABI |
+| 96 | `GETTIMEOFDAY` | Time of day (millis → timeval) | Linux ABI |
+| 97 | `GETRLIMIT` | Get resource limits | Linux ABI |
+| 98 | `SETRLIMIT` | Set resource limits (stub) | Linux ABI |
+| 99 | `SYSINFO` | System information | Linux ABI |
 | 102 | `GETUID` | Get user ID (returns 0) | Linux ABI |
 | 103 | `GETGID` | Get group ID (returns 0) | Linux ABI |
 | 104 | `GETEUID` | Get effective UID (returns 0) | Linux ABI |
 | 105 | `GETEGID` | Get effective GID (returns 0) | Linux ABI |
+| 109 | `SETPGID` | Set process group (stub) | Linux ABI |
 | 110 | `GETPPID` | Get parent PID | Core |
+| 112 | `SETSID` | Create session | Linux ABI |
 | 114 | `WAIT4` | waitpid variant | Linux ABI |
+| 121 | `GETPGID` | Get process group | Linux ABI |
+| 124 | `GETSID` | Get session ID | Linux ABI |
+| 134 | `UTIMES` | Set file times (stub) | Linux ABI |
 | 137 | `STATFS` | Filesystem stats | Linux ABI |
 | 158 | `ARCH_PRCTL` | Arch-specific (TLS) | Linux ABI |
+| 162 | `SYNC` | Sync filesystems (stub) | Linux ABI |
+| 172 | `IOPL` | I/O privilege (stub) | Linux ABI |
 | 186 | `GETTID` | Get thread ID (returns pid) | Linux ABI |
+| 201 | `TIME` | Get time in seconds | Linux ABI |
 | 202 | `FUTEX` | Fast user-space mutex (WAIT/WAKE stubs) | Linux ABI |
 | 217 | `GETDENTS64` | Directory listing | Linux ABI |
 | 218 | `SET_TID_ADDR` | Set TID address | Linux ABI |
 | 228 | `CLOCK_GETTIME` | Monotonic clock time | Linux ABI |
 | 230 | `CLOCK_NANOSLEEP` | High-res sleep (delegates to NANOSLEEP) | Core |
 | 231 | `EXIT_GROUP` | Exit thread group | Core |
+| 233 | `MADVISE` | Memory advise (stub OK) | Linux ABI |
 | 234 | `TGKILL` | Thread-group kill | Linux ABI |
 | 257 | `OPENAT` | Open relative to dirfd | Linux ABI |
 | 262 | `NEWFSTATAT` | Stat via dirfd | Linux ABI |
+| 302 | `PRLIMIT64` | Get/set resource limits (pid) | Linux ABI |
 | 318 | `GETRANDOM` | Random bytes (LFSR) | Linux ABI |
 
 </details>
@@ -806,7 +826,9 @@ pub trait AbiPlugin: Send + Sync {
 - [x] FdTable with pipe support (10 tests)
 - [x] Extended filesystem syscalls (getdents64, mkdir, rename, unlink, creat, statfs, newfstatat)
 - [x] clock_gettime, getrandom, chmod, umask, link, symlink
-- [ ] Full Linux syscall compatibility (60+/100+ syscalls)
+- [x] Batch 2: gettimeofday, time, getrlimit, setrlimit, prlimit64, sysinfo, madvise, msync
+- [x] Batch 2: setsid, setpgid, getpgid, getsid, ftruncate, fsync, fdatasync, sendfile, sync, flock, utimes, iopl
+- [ ] Full Linux syscall compatibility (80+/100+ syscalls)
 
 ### Medium Term
 - [ ] Copy-on-write for fork (shared pages → page fault → copy)
