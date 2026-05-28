@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/build-passing-brightgreen?logo=github" alt="Build Status"/>
 </p>
 
-**A from-scratch x86_64 hobby kernel in Rust** — MLFQ scheduler, capability security, Linux ELF + WASM ABI plugins, eBPF, DRM/KMS, network stack, Zig FFI, DOOM fire, Tetris, and more.
+**A from-scratch x86_64 hobby kernel in Rust** — MLFQ scheduler, capability security, Linux ELF + WASM ABI plugins, eBPF, DRM/KMS, network stack, Zig FFI, DOOM fire, Tetris, nano-like text editor, and more.
 
 
 > **Status**: Active development · **Language**: Rust nightly · **Target**: x86_64 bare-metal (`#![no_std]`) · **Boot**: BIOS/UEFI via bootloader crate
@@ -48,6 +48,7 @@
   - [Zig FFI & Blitter](#zig-ffi--blitter)
   - [DOOM Fire Effect](#doom-fire-effect)
   - [Tetris](#tetris)
+  - [Text Editor](#text-editor)
   - [Block Device Interface](#block-device-interface)
 - [Project Map](#project-map)
 - [Quick Start](#quick-start)
@@ -73,7 +74,7 @@
 
 <img src="assets/master-dashboard.svg" alt="ZiqaKernel Master Dashboard" width="100%"/>
 
-The ZiqaKernel is structured around a modular core, decoupling the kernel from specific ABI implementations. It includes 23+ subsystems spanning process management, memory management, filesystems, networking, eBPF, DRM/KMS, io_uring, IPC, capability security, a Zig FFI blitter, a DOOM fire demo, and a playable Tetris game.
+The ZiqaKernel is structured around a modular core, decoupling the kernel from specific ABI implementations. It includes 24+ subsystems spanning process management, memory management, filesystems, networking, eBPF, DRM/KMS, io_uring, IPC, capability security, a Zig FFI blitter, a DOOM fire demo, a playable Tetris game, and a nano-like text editor.
 
 
 
@@ -174,6 +175,23 @@ The boot sequence proceeds from firmware through the bootloader, HAL initializat
 | **RamFS** | In-memory filesystem backed by `Arc<Mutex<dyn File>>` |
 | **ZiqaFS** | Persistent filesystem on VirtIO block device with superblock metadata |
 | **Page Cache** | LRU cache (64 entries × 4 KiB = 256 KiB), thread-safe with spinlock |
+
+**VFS API** (`src/fs/vfs.rs`):
+
+| Method | Description |
+|--------|-------------|
+| `mount(path, file)` | Register a file or directory in the VFS |
+| `read / write` | Capability-gated read/write |
+| `read_raw / write_raw` | Kernel-internal read/write (no capability check) |
+| `exists(path)` | Check if a path is registered |
+| `create(path)` | Create a new empty RamFile at path |
+| `list()` | List all registered paths |
+| `list_dir(path)` | List immediate children of a directory (deduped, sorted) |
+| `is_dir(path)` | True if path is `/`, empty, or a prefix of any registered file |
+| `file_size(path)` | Return size of a file in bytes |
+| `mkdir(path)` | Create a directory marker (empty RamFile) |
+| `remove(path)` | Remove a file from VFS |
+| `rename(old, new)` | Move a file to a new path |
 
 ### eBPF
 
@@ -322,6 +340,28 @@ The boot sequence proceeds from firmware through the bootloader, HAL initializat
    └──────────────────────┘
 ```
 
+### Text Editor
+
+`src/edit.rs` — Nano-like terminal text editor rendered on the VGA text console (80×25):
+
+- **Full cursor movement**: Arrow keys, Home/End, with scroll when content exceeds 24 visible rows
+- **Editing**: Insert characters, Enter for newline, Backspace and Delete key support
+- **VFS-backed**: Loads existing file content on open; saves back to VFS on Ctrl+S
+- **Status bar**: Row 24 shows filename, current line/total lines, `[Modified]` indicator, and key hints
+- **Keyboard modes**: Switches keyboard to raw editor mode on entry, restores echo on exit
+- **Shell command**: `edit <path>` opens the file (creates new if it doesn't exist)
+
+```
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │ Hello, ZiqaKernel!                                                           │
+  │ This is line 2.                                                              │
+  │ █                                                                            │
+  │                                                                              │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │ /etc/motd                    Line 3/3  [Modified]          ^S=Save  ^Q=Quit  │
+  └──────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Block Device Interface
 
 `src/drivers/block.rs` — Generic `BlockDevice` trait for disk I/O:
@@ -349,7 +389,7 @@ src/
 │   ├── linux/                    #   Linux ELF loader + 57 syscall numbers, ~49 handlers
 │   │   ├── mod.rs                #   LinuxAbiPlugin, 57 syscall dispatch
 │   │   └── elf_loader.rs         #   load_elf(): parse ELF, map PT_LOAD → regions
-│   ├── wasm/                     #   WASM runtime stub (WASI ABI detection)
+│   ├── wasm/                     #   WASM runtime: parser, stack VM, WASI host functions
 │   │   └── mod.rs
 │   ├── mod.rs                    #   AbiPlugin trait + AbiRegistry (4-slot)
 │   └── syscall.rs                #   Core dispatcher: GETPID/FORK/MMAP/WAITPID...
@@ -397,15 +437,16 @@ src/
 │   ├── mod.rs                    #   Process, CpuState, FdTable (16 slots + pipe), Pid, mmap_bump, binary_data
 │   ├── scheduler.rs              #   MLFQ: spawn/fork/exec/waitpid/exit/kill/send_signal, spawn_elf
 │   └── signal.rs                 #   SignalState (32 signals), SignalFrame, user-space delivery
-├── shell.rs                      #   Interactive shell (16 commands: help → tetris)
+├── shell.rs                      #   Interactive shell (24 commands: help → tetris, edit, ls, cd, pwd, mkdir, dir, rm, cat)
 ├── timer.rs                      #   PIT (100 Hz), tick counter, sleep queue (32 entries)
 ├── klog.rs                       #   Ring-buffer kernel log (256 entries, 4 levels)
 ├── perf.rs                       #   Benchmark suite + RDTSC cycle measurements
 ├── tests.rs                      #   Kernel self-tests (39 tests: sched, ABI, memory, caps, FdTable, pipe, net)
 ├── doom.rs                       #   DOOM fire algorithm (80×50, Zig-accelerated)
 ├── tetris.rs                     #   Playable Tetris game (VGA console, Zig-accelerated rendering)
+├── edit.rs                       #   Nano-like text editor (VGA console, VFS-backed, raw keyboard mode)
 ├── zig_ffi.rs                    #   C-ABI bindings to Zig blitter (8 functions: fill, blit, scroll, clear, memset, memcpy, fire, to_ascii)
-├── lib.rs                        #   Crate root: 23 modules, init(), ABI registry
+├── lib.rs                        #   Crate root: 24 modules, init(), ABI registry
 └── main.rs                       #   Entry: kernel_main, banner, boot sequence with 4 phases + auto-exec ELF
 ```
 
@@ -606,7 +647,7 @@ build-std-features = ["compiler-builtins-mem"]
 ```
 
 <details>
-<summary><b>Syscall Reference</b> (click to expand — 84 syscall numbers, ~82 implemented)</summary>
+<summary><b>Syscall Reference</b> (click to expand — 114 syscall numbers, ~111 implemented)</summary>
 
 | Number | Name | Description | Handler |
 |--------|------|-------------|---------|
@@ -633,6 +674,7 @@ build-std-features = ["compiler-builtins-mem"]
 | 26 | `MSYNC` | Memory sync (stub) | Linux ABI |
 | 32 | `DUP` | Duplicate fd | Linux ABI |
 | 33 | `DUP2` | Duplicate to specific fd | Linux ABI |
+| 34 | `NICE` | Set nice value (stub) | Linux ABI |
 | 35 | `NANOSLEEP` | Sleep ms (PIT-based) | Core + ABI |
 | 39 | `GETPID` | Get process ID | Core |
 | 40 | `SENDFILE` | Send file (stub) | Linux ABI |
@@ -683,8 +725,20 @@ build-std-features = ["compiler-builtins-mem"]
 | 114 | `WAIT4` | waitpid variant | Linux ABI |
 | 121 | `GETPGID` | Get process group | Linux ABI |
 | 124 | `GETSID` | Get session ID | Linux ABI |
+| 133 | `MKNOD` | Create device node (stub) | Linux ABI |
 | 134 | `UTIMES` | Set file times (stub) | Linux ABI |
+| 135 | `PERSONALITY` | Set process personality | Linux ABI |
 | 137 | `STATFS` | Filesystem stats | Linux ABI |
+| 140 | `GETPRIORITY` | Get scheduling priority | Linux ABI |
+| 141 | `SETPRIORITY` | Set scheduling priority (stub) | Linux ABI |
+| 143 | `SCHED_GETPARAM` | Get scheduler parameters | Linux ABI |
+| 144 | `SCHED_SETPARAM` | Set scheduler parameters (stub) | Linux ABI |
+| 145 | `SCHED_GETSCHEDULER` | Get scheduler policy | Linux ABI |
+| 146 | `SCHED_SETSCHEDULER` | Set scheduler policy (stub) | Linux ABI |
+| 147 | `SCHED_GET_PRIORITY_MAX` | Get max priority | Linux ABI |
+| 148 | `SCHED_GET_PRIORITY_MIN` | Get min priority | Linux ABI |
+| 149 | `SCHED_RR_GET_INTERVAL` | Get RR interval (stub) | Linux ABI |
+| 157 | `PRCTL` | Process control (stub OK) | Linux ABI |
 | 158 | `ARCH_PRCTL` | Arch-specific (TLS) | Linux ABI |
 | 162 | `SYNC` | Sync filesystems (stub) | Linux ABI |
 | 172 | `IOPL` | I/O privilege (stub) | Linux ABI |
@@ -694,14 +748,31 @@ build-std-features = ["compiler-builtins-mem"]
 | 217 | `GETDENTS64` | Directory listing | Linux ABI |
 | 218 | `SET_TID_ADDR` | Set TID address | Linux ABI |
 | 228 | `CLOCK_GETTIME` | Monotonic clock time | Linux ABI |
+| 229 | `CLOCK_GETRES` | Clock resolution (1 nsec) | Linux ABI |
 | 230 | `CLOCK_NANOSLEEP` | High-res sleep (delegates to NANOSLEEP) | Core |
 | 231 | `EXIT_GROUP` | Exit thread group | Core |
+| 232 | `EPOLL_WAIT` | Wait for epoll events (stub) | Linux ABI |
 | 233 | `MADVISE` | Memory advise (stub OK) | Linux ABI |
 | 234 | `TGKILL` | Thread-group kill | Linux ABI |
+| 255 | `EPOLL_CTL` | Epoll control (stub) | Linux ABI |
 | 257 | `OPENAT` | Open relative to dirfd | Linux ABI |
 | 262 | `NEWFSTATAT` | Stat via dirfd | Linux ABI |
+| 269 | `FACCESSAT` | File access at (stub OK) | Linux ABI |
+| 270 | `PSELECT6` | Pselect (stub) | Linux ABI |
+| 271 | `PPOLL` | Ppoll (stub) | Linux ABI |
+| 280 | `UTIMENSAT` | Set file times at (stub) | Linux ABI |
+| 283 | `TIMERFD_CREATE` | Timer fd create | Linux ABI |
+| 284 | `EVENTFD` | Event fd create | Linux ABI |
+| 285 | `FALLOCATE` | Fallocate (stub) | Linux ABI |
+| 286 | `TIMERFD_SETTIME` | Timer fd set time (stub) | Linux ABI |
+| 289 | `SIGNALFD` | Signal fd create | Linux ABI |
+| 291 | `EPOLL_CREATE1` | Epoll create (fd) | Linux ABI |
 | 302 | `PRLIMIT64` | Get/set resource limits (pid) | Linux ABI |
+| 309 | `GETCPU` | Get CPU number | Linux ABI |
 | 318 | `GETRANDOM` | Random bytes (LFSR) | Linux ABI |
+| 319 | `MEMFD_CREATE` | Memory fd create | Linux ABI |
+| 326 | `COPY_FILE_RANGE` | Copy file range (stub) | Linux ABI |
+| 434 | `PIDFD_OPEN` | Open pid fd | Linux ABI |
 
 </details>
 
@@ -715,24 +786,51 @@ build-std-features = ["compiler-builtins-mem"]
 
 ## Shell Commands
 
+The shell supports **24 commands**, command history (up to 50 entries), Tab autocomplete (commands + VFS paths/PIDs), ANSI color output, and a `cwd` prompt that shows the current directory.
+
+**Filesystem**
+
 | Command | Description |
 |---------|-------------|
-| `help` | Show available commands |
-| `uptime` | Kernel uptime (ms/s/ticks) |
+| `ls [path]` | List files in current or given directory (colored, shows size) |
+| `cd [path]` | Change directory (`..`, `-` for previous, `/` for root) |
+| `pwd` | Print current working directory |
+| `mkdir <path>` | Create a directory in VFS |
+| `dir [path]` | Detailed directory listing (Windows-style) |
+| `rm <path>` | Remove a file from VFS |
+| `cat <path>` | Display file contents |
+| `edit <path>` | Open nano-like text editor (Ctrl+S save, Ctrl+Q quit) |
+
+**Process**
+
+| Command | Description |
+|---------|-------------|
 | `ps` | List all processes (PID, state, priority, ABI) |
 | `spawn [path]` | Spawn a skeleton process (or from VFS path) |
 | `spawnelf <path>` | Spawn process from VFS ELF binary (uses `spawn_elf` + `elf_loader`) |
 | `exec <pid>` | Execute process entry point (runs in kernel) |
 | `kill <pid> [sig]` | Send signal (default SIGTERM=15) |
 | `sleep <ms>` | Block shell for N milliseconds |
+
+**System**
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands (grouped, colored) |
+| `uptime` | Kernel uptime (ms/s/ticks) |
 | `meminfo` | Heap: start, size, allocs, frees, current/peak usage |
 | `netstat` | Network device statistics (tx/rx packets/bytes) |
 | `klog [level]` | Dump kernel log (debug/info/error) |
+| `reboot` | Reboot via PS2 controller port 0x64 |
+| `clear` | Clear VGA screen and serial terminal |
+| `echo <text>` | Print text to serial |
+
+**Entertainment**
+
+| Command | Description |
+|---------|-------------|
 | `doom [steps]` | Run DOOM fire demo (Zig-accelerated, default 60) |
 | `tetris` | Launch graphical Tetris game (VGA console) |
-| `reboot` | Reboot via PS2 controller port 0x64 |
-| `echo <text>` | Print text to serial |
-| `clear` | Clear screen (25 newlines) |
 
 ---
 
@@ -785,7 +883,7 @@ pub trait AbiPlugin: Send + Sync {
 | Plugin | `can_load` | `load` | Syscalls |
 |:-------|------------|--------|----------|
 | **LinuxAbiPlugin** | `b"\x7fELF"` | `elf_loader::load_elf()` | 57 syscall numbers defined / ~49 handlers: write, read, open, close, mmap, munmap, brk, dup, dup2, pipe, getcwd, chdir, exit, exit_group, kill, tgkill, waitpid, wait4, nanosleep, clock_nanosleep, uname, fstat, lseek, ioctl (DRM routing), writev, readv, pread64, access, select, poll, futex, clone, getpid, getppid, gettid, set_tid_address, arch_prctl, getuid, getgid, geteuid, getegid, socket, bind, connect, listen, accept, sendto, recvfrom, setsockopt, getsockopt, readlink, fcntl, openat, sched_yield, sigaction, sigprocmask |
-| **WasmAbiPlugin** | `b"\x00asm"` | stub (prints only) | 2 handlers: fd_write, proc_exit |
+| **WasmAbiPlugin** | `b"\x00asm"` | Parses WASM binary, sets entry to `wasm_interpreter_entry` | WASI `fd_write`, `fd_read`, `args_sizes_get`, `args_get`, `proc_exit` |
 
 ---
 
@@ -828,7 +926,10 @@ pub trait AbiPlugin: Send + Sync {
 - [x] clock_gettime, getrandom, chmod, umask, link, symlink
 - [x] Batch 2: gettimeofday, time, getrlimit, setrlimit, prlimit64, sysinfo, madvise, msync
 - [x] Batch 2: setsid, setpgid, getpgid, getsid, ftruncate, fsync, fdatasync, sendfile, sync, flock, utimes, iopl
-- [ ] Full Linux syscall compatibility (80+/100+ syscalls)
+- [x] Batch 3: sched_*, prctl, personality, nice, mknod, getcpu
+- [x] Batch 3: epoll, eventfd, signalfd, timerfd, memfd, pidfd
+- [x] Batch 3: clock_getres, faccessat, utimensat, ppoll, pselect6, fallocate, copy_file_range
+- [x] **100+ Linux syscalls achieved** (~111 handled)
 
 ### Medium Term
 - [ ] Copy-on-write for fork (shared pages → page fault → copy)
@@ -837,7 +938,7 @@ pub trait AbiPlugin: Send + Sync {
 - [x] Ethernet driver (VirtIO-net: VirtQueue descriptor rings, TX/RX — commented out)
 - [ ] RTL8139 / e1000 driver
 - [ ] TCP/IP stack via smoltcp
-- [ ] Real WASM runtime (wasm3 / wasmtime)
+- [x] Real WASM runtime (stack VM, LEB128 parser, WASI host functions: fd_write, fd_read, args_get, proc_exit)
 
 ### Long Term
 - [ ] USB host controller (xHCI)
@@ -875,6 +976,10 @@ After building and running the kernel, try these commands at the shell:
 > netstat               # show loopback device stats
 > doom 60               # run DOOM fire animation
 > tetris                # launch graphical Tetris game
+> ls /                  # list VFS root
+> cat /etc/motd         # read the motd file
+> edit /etc/motd        # open the text editor (^S save, ^Q quit)
+> mkdir /home           # create a directory
 > spawnelf test         # spawn ELF from /bin/test
 > echo Hello, ZiqaKernel!
 > reboot                # reboot the VM

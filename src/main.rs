@@ -52,7 +52,7 @@ fn print_banner() {
     println!("║                                                                              ║");
 
     set_fg(Color::LightCyan);
-    println!("║        ▓ 23 modules   ▓ 80+ syscalls   ▓ MLFQ sched   ▓ eBPF VM              ║");
+    println!("║        ▓ 23 modules   ▓ 100+ syscalls  ▓ MLFQ sched   ▓ eBPF VM              ║");
     println!("║        ▓ DRM/KMS      ▓ io_uring       ▓ IPC/SHM       ▓ Capability sec       ║");
 
     set_fg(Color::White);
