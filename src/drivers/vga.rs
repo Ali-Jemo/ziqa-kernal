@@ -66,10 +66,36 @@ impl Writer {
         self.col = 0;
     }
 
-    fn clear_row(&mut self, row: usize) {
+    pub fn clear_row(&mut self, row: usize) {
         let blank = ScreenChar { ascii: b' ', color: self.color };
         for col in 0..WIDTH {
             self.buffer.chars[row][col].write(blank);
+        }
+    }
+
+    pub fn write_char_at(&mut self, row: usize, col: usize, byte: u8, fg: Color, bg: Color) {
+        if row < HEIGHT && col < WIDTH {
+            let color = ColorCode::new(fg, bg);
+            self.buffer.chars[row][col].write(ScreenChar { ascii: byte, color });
+        }
+    }
+
+    pub fn read_char_at(&self, row: usize, col: usize) -> u8 {
+        if row < HEIGHT && col < WIDTH {
+            self.buffer.chars[row][col].read().ascii
+        } else {
+            b' '
+        }
+    }
+
+    pub fn read_color_at(&self, row: usize, col: usize) -> (Color, Color) {
+        if row < HEIGHT && col < WIDTH {
+            let c = self.buffer.chars[row][col].read().color.0;
+            let fg = match c & 0x0F { 0 => Color::Black, 1 => Color::Blue, 2 => Color::Green, 3 => Color::Cyan, 4 => Color::Red, 5 => Color::Magenta, 6 => Color::Brown, 7 => Color::LightGray, 8 => Color::DarkGray, 9 => Color::LightBlue, 10 => Color::LightGreen, 11 => Color::LightCyan, 12 => Color::LightRed, 13 => Color::Pink, 14 => Color::Yellow, 15 => Color::White, _ => Color::Black };
+            let bg = match (c >> 4) & 0x0F { 0 => Color::Black, 1 => Color::Blue, 2 => Color::Green, 3 => Color::Cyan, 4 => Color::Red, 5 => Color::Magenta, 6 => Color::Brown, 7 => Color::LightGray, 8 => Color::DarkGray, 9 => Color::LightBlue, 10 => Color::LightGreen, 11 => Color::LightCyan, 12 => Color::LightRed, 13 => Color::Pink, 14 => Color::Yellow, 15 => Color::White, _ => Color::Black };
+            (fg, bg)
+        } else {
+            (Color::Black, Color::Black)
         }
     }
 
@@ -124,6 +150,29 @@ pub fn print(args: fmt::Arguments) {
     interrupts::without_interrupts(|| {
         WRITER.lock().write_fmt(args).unwrap();
     });
+}
+
+pub fn set_cursor_pos(row: usize, col: usize) {
+    use x86_64::instructions::port::Port;
+    let pos = row * WIDTH + col;
+    unsafe {
+        let mut addr: Port<u8> = Port::new(0x3D4);
+        let mut data: Port<u8> = Port::new(0x3D5);
+        addr.write(0x0F);
+        data.write((pos & 0xFF) as u8);
+        addr.write(0x0E);
+        data.write(((pos >> 8) & 0xFF) as u8);
+    }
+}
+
+pub fn hide_cursor() {
+    use x86_64::instructions::port::Port;
+    unsafe {
+        let mut addr: Port<u8> = Port::new(0x3D4);
+        let mut data: Port<u8> = Port::new(0x3D5);
+        addr.write(0x0A);
+        data.write(0x20);
+    }
 }
 
 pub fn print_raw(bytes: &[u8]) {

@@ -21,6 +21,7 @@ pub mod tests;
 pub mod zig_ffi;
 pub mod doom;
 pub mod tetris;
+pub mod edit;
 
 // Store boot info for later use
 pub static BOOT_INFO: spin::Mutex<Option<&'static bootloader::BootInfo>> = spin::Mutex::new(None);

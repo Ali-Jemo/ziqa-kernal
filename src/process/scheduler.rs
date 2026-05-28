@@ -392,9 +392,25 @@ impl Scheduler {
             }
         }
     }
+
+    pub fn get_pid_list(&self) -> alloc::vec::Vec<crate::process::Pid> {
+        let mut pids = alloc::vec::Vec::new();
+        for slot in self.tasks.iter() {
+            if let Some(proc) = slot {
+                pids.push(proc.pid);
+            }
+        }
+        pids
+    }
 }
 
+pub fn list_pids() -> alloc::vec::Vec<crate::process::Pid> {
+    SCHEDULER.lock().get_pid_list()
+}
 pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
+    let registry = crate::init_abi_registry();
+    let plugin = registry.detect(binary)?;
+
     let pid = x86_64::instructions::interrupts::without_interrupts(|| {
         let mut sched = SCHEDULER.lock();
         if sched.count >= MAX_TASKS {
@@ -406,10 +422,10 @@ pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
     // Use safe address 16MB
     let entry = VirtAddr::new(0x1000000);
     let stack = VirtAddr::new(0x7FFF_FFFF_000);
-    let mut proc = Process::new(pid, AbiKind::LinuxElf, entry, stack);
+    let mut proc = Process::new(pid, plugin.kind(), entry, stack);
     proc.binary_data = binary.to_vec();
 
-    match crate::abi::linux::elf_loader::load_elf(binary, &mut proc) {
+    match plugin.load(binary, &mut proc) {
         Ok(()) => {
             proc.make_ready();
             x86_64::instructions::interrupts::without_interrupts(|| {

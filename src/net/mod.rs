@@ -99,17 +99,57 @@ impl NetDevice {
         }
     }
 
+    pub const fn physical(name: &'static str, mac: [u8; 6]) -> Self {
+        Self {
+            name,
+            mac,
+            is_loopback: false,
+            tx_queue: PacketQueue::new(),
+            rx_queue: PacketQueue::new(),
+            tx_packets: 0,
+            rx_packets: 0,
+            tx_bytes: 0,
+            rx_bytes: 0,
+        }
+    }
+
+    fn poll_hardware(&mut self) {
+        if !self.is_loopback {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                #[allow(static_mut_refs)]
+                if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
+                    while let Some((pkt_data, pkt_len)) = net.receive() {
+                        let pkt = Packet::new(&pkt_data[..pkt_len]);
+                        let _ = self.rx_queue.push(pkt);
+                        self.rx_packets += 1;
+                        self.rx_bytes += pkt_len as u64;
+                    }
+                }
+            }
+        }
+    }
+
     /// Transmit a packet. For loopback, immediately enqueues to rx.
     pub fn transmit(&mut self, data: &[u8]) -> Result<(), NetError> {
-        let pkt = Packet::new(data);
         self.tx_packets += 1;
-        self.tx_bytes += pkt.len as u64;
+        self.tx_bytes += data.len() as u64; // count exact bytes
         if self.is_loopback {
+            let pkt = Packet::new(data);
             // Loopback: echo straight to rx
             self.rx_queue.push(pkt)?;
             self.rx_packets += 1;
             self.rx_bytes += data.len().min(MTU) as u64;
         } else {
+            // Physical: transmit via VIRTIO_NET
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                #[allow(static_mut_refs)]
+                if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
+                    let _ = net.transmit(data);
+                }
+            }
+            let pkt = Packet::new(data);
             self.tx_queue.push(pkt)?;
         }
         Ok(())
@@ -117,12 +157,17 @@ impl NetDevice {
 
     /// Receive the next packet from the rx queue.
     pub fn receive(&mut self) -> Result<Packet, NetError> {
+        self.poll_hardware();
         self.rx_queue.pop()
     }
 
     /// Number of packets waiting in rx queue
-    pub fn rx_pending(&self) -> usize { self.rx_queue.len() }
+    pub fn rx_pending(&mut self) -> usize {
+        self.poll_hardware();
+        self.rx_queue.len()
+    }
 }
+
 
 /// Global network device registry
 pub struct NetStack {

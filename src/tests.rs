@@ -392,7 +392,111 @@ pub fn run_all() {
         net.device_count() >= 1  // At least loopback
     });
 
+    test!("wasm: interpreter parses and executes hello.wasm", {
+        use crate::process::scheduler::{SCHEDULER, spawn_elf};
+        let pid_opt = spawn_elf(crate::abi::wasm::TEST_WASM);
+        if let Some(pid) = pid_opt {
+            let orig_pid = {
+                let sched = SCHEDULER.lock();
+                sched.current_task().map(|t| t.pid)
+            };
+            {
+                let mut sched = SCHEDULER.lock();
+                sched.set_current(pid);
+            }
+            crate::abi::wasm::wasm_interpreter_entry();
+            if let Some(orig) = orig_pid {
+                let mut sched = SCHEDULER.lock();
+                sched.set_current(orig);
+            }
+            let sched = SCHEDULER.lock();
+            let proc = sched.get_process(pid);
+            if let Some(p) = proc {
+                p.exit_code == 0
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    });
+
+    test!("wasm: loop control flow executes successfully", {
+        use crate::process::scheduler::{SCHEDULER, spawn_elf};
+        const TEST_WASM_LOOP: &[u8] = &[
+            0x00, 0x61, 0x73, 0x6d,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00,
+            0x07, 0x0a, 0x01, 0x06, b'_', b's', b't', b'a', b'r', b't', 0x00, 0x00,
+            0x0a, 23, 0x01, 21,
+            0x01, 0x7f,
+            0x41, 0x05,
+            0x21, 0x00,
+            0x03, 0x40,
+            0x20, 0x00,
+            0x41, 0x01,
+            0x6b,
+            0x21, 0x00,
+            0x20, 0x00,
+            0x0d, 0x00,
+            0x0b,
+            0x0b,
+        ];
+        let pid_opt = spawn_elf(TEST_WASM_LOOP);
+        if let Some(pid) = pid_opt {
+            let orig_pid = {
+                let sched = SCHEDULER.lock();
+                sched.current_task().map(|t| t.pid)
+            };
+            {
+                let mut sched = SCHEDULER.lock();
+                sched.set_current(pid);
+            }
+            crate::abi::wasm::wasm_interpreter_entry();
+            if let Some(orig) = orig_pid {
+                let mut sched = SCHEDULER.lock();
+                sched.set_current(orig);
+            }
+            let sched = SCHEDULER.lock();
+            let proc = sched.get_process(pid);
+            if let Some(p) = proc {
+                p.exit_code == 0
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    });
+
+    test!("net: eth0 transmission and reception stats", {
+        use crate::net::NET;
+        let has_eth0 = {
+            let net = NET.lock();
+            net.device_count() >= 2
+        };
+        if !has_eth0 {
+            false
+        } else {
+            let ping_pkt = b"PING test";
+            let mut net = NET.lock();
+            if let Some(eth0) = net.get_mut("eth0") {
+                let tx_before = eth0.tx_packets;
+                let rx_before = eth0.rx_packets;
+                let _ = eth0.transmit(ping_pkt);
+                let _ = eth0.receive();
+                eth0.tx_packets == tx_before + 1 && eth0.rx_packets == rx_before + 1
+            } else {
+                false
+            }
+        }
+    });
+
+
     println!("[TEST] Results: {}/{} passed", passed, passed + failed);
+
+
     if failed > 0 {
         println!("[TEST] WARNING: {} test(s) FAILED", failed);
     } else {

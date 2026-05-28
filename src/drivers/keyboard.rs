@@ -70,7 +70,7 @@ pub fn push_scancode(scancode: u8) {
                     }
                 }
                 DecodedKey::RawKey(k) => {
-                    let code = match k {
+                    let code: u8 = match k {
                         KeyCode::ArrowUp    => 0x80,
                         KeyCode::ArrowDown  => 0x81,
                         KeyCode::ArrowLeft  => 0x82,
@@ -82,7 +82,10 @@ pub fn push_scancode(scancode: u8) {
                         KeyCode::Delete     => 0x88,
                         _ => return,
                     };
-                    INPUT_BUF.lock().push(code);
+                    // ArrowUp/Down to shell for history; all raw keys to editor
+                    if code == 0x80 || code == 0x81 {
+                        INPUT_BUF.lock().push(code);
+                    }
                     EDITOR_BUF.lock().push(code);
                 }
             }
