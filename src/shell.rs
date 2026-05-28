@@ -7,13 +7,15 @@ use crate::{print, println};
 use crate::klog::Level;
 use crate::process::AbiKind;
 use crate::fs::vfs::VFS;
+use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
 use x86_64::VirtAddr;
 
 const COMMANDS: &[&str] = &[
     "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
-    "sleep", "meminfo", "netstat", "klog", "doom", "tetris",
+    "sleep", "meminfo", "diskinfo", "netstat", "klog", "doom", "tetris",
     "reboot", "echo", "clear", "edit", "ls", "cd", "pwd", "mkdir",
-    "dir", "rm", "cat",
+    "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
+    "mv", "cp", "touch", "stat", "du",
 ];
 
 const MAX_HISTORY: usize = 50;
@@ -126,6 +128,7 @@ impl Shell {
                     "kill"    => self.cmd_kill(arg1.as_deref(), arg2.as_deref()),
                     "sleep"   => self.cmd_sleep(arg1.as_deref()),
                     "meminfo" => self.cmd_meminfo(),
+                    "diskinfo" => self.cmd_diskinfo(),
                     "netstat" => self.cmd_netstat(),
                     "doom"    => self.cmd_doom(arg1.as_deref()),
                     "tetris"  => self.cmd_tetris(),
@@ -137,9 +140,18 @@ impl Shell {
                     "mkdir"   => self.cmd_mkdir(arg1.as_deref()),
                     "dir"     => self.cmd_dir(arg1.as_deref()),
                     "rm"      => self.cmd_rm(arg1.as_deref()),
+                    "rmdir"   => self.cmd_rm(arg1.as_deref()),
                     "cat"     => self.cmd_cat(arg1.as_deref()),
+                    "mv"      => self.cmd_mv(arg1.as_deref(), arg2.as_deref()),
+                    "cp"      => self.cmd_cp(arg1.as_deref(), arg2.as_deref()),
+                    "touch"   => self.cmd_touch(arg1.as_deref()),
+                    "stat"    => self.cmd_stat(arg1.as_deref()),
+                    "du"      => self.cmd_du(arg1.as_deref()),
                     "clear"   => self.cmd_clear(),
                     "echo"    => println!("{}", arg1.as_deref().unwrap_or("")),
+                    "ping"     => self.cmd_ping(arg1.as_deref()),
+                    "wget"     => self.cmd_wget(arg1.as_deref()),
+                    "ifconfig" => self.cmd_ifconfig(),
                     _         => println!("Unknown command: {}. Type 'help'.", cmd),
                 }
             }
@@ -346,6 +358,11 @@ impl Shell {
                 ("dir [path]", "detailed directory listing"),
                 ("rm <path>", "remove a file"),
                 ("cat <path>", "display file contents"),
+                ("mv <src> <dst>", "move/rename a file"),
+                ("cp <src> <dst>", "copy a file"),
+                ("touch <path>", "create file or update mtime"),
+                ("stat <path>", "show inode details"),
+                ("du [path]", "disk usage (blocks)"),
                 ("edit <path>", "nano-like text editor"),
             ]),
             ("Process", &[
@@ -360,6 +377,7 @@ impl Shell {
                 ("help", "show this message"),
                 ("uptime", "kernel uptime"),
                 ("meminfo", "heap memory statistics"),
+                ("diskinfo", "ZiqaFS disk usage + fsck"),
                 ("netstat", "network device statistics"),
                 ("klog [level]", "dump kernel log (debug/info/error)"),
                 ("reboot", "reboot the system"),
@@ -450,10 +468,13 @@ impl Shell {
             entry
         };
 
-        unsafe {
-            let func: extern "C" fn() = core::mem::transmute(entry_vaddr);
-            func();
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(proc) = sched.get_process_mut(pid) {
+            proc.state = crate::process::ProcessState::Ready;
         }
+        drop(sched);
+        
+        crate::process::scheduler::yield_now();
     }
 
     fn cmd_ps(&self) {
@@ -495,6 +516,30 @@ impl Shell {
         println!("  Current blocks:   {}", stats.current_blocks);
         println!("  Current usage:    {} bytes", stats.current_usage_bytes());
         println!("  Peak usage:       {} bytes", stats.peak_usage_bytes);
+    }
+
+    fn cmd_diskinfo(&self) {
+        use crate::fs::ziqafs::ZIQAFS;
+        let guard = ZIQAFS.lock();
+        if let Some(fs_arc) = guard.as_ref() {
+            let mut fs = fs_arc.lock();
+            let st = crate::fs::ziqafs::ZiqaFs::statfs(&fs);
+            println!("ZiqaFS Disk Info:");
+            println!("  Block size:    {} bytes", st.block_size);
+            println!("  Total blocks:  {}", st.total_blocks);
+            println!("  Free blocks:   {} ({} KiB)", st.free_blocks, st.free_blocks as u64 * st.block_size as u64 / 1024);
+            println!("  Total inodes:  {}", st.total_inodes);
+            println!("  Free inodes:   {}", st.free_inodes);
+            let r = crate::fs::ziqafs::ZiqaFs::fsck(&mut fs);
+            if r.ok {
+                println!("  fsck:          OK");
+            } else {
+                println!("  fsck:          ERRORS (errs={} leaked_blocks={} leaked_inodes={})",
+                    r.errors, r.leaked_blocks, r.leaked_inodes);
+            }
+        } else {
+            println!("diskinfo: ZiqaFS not mounted");
+        }
     }
 
     fn cmd_netstat(&self) {
@@ -611,6 +656,32 @@ impl Shell {
             println!("mkdir: {}: File exists", resolved);
             return;
         }
+        if resolved.starts_with("/disk/") {
+            let name = resolved.trim_start_matches("/disk/");
+            let fs_guard = ZIQAFS.lock();
+            if let Some(ref fs) = *fs_guard {
+                let parent_id = if let Some(idx) = name.rfind('/') {
+                    let dir_part = &name[..idx];
+                    let mut fsl = fs.lock();
+                    ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
+                } else {
+                    ROOT_INODE
+                };
+                let leaf_name = name.rsplit('/').next().unwrap_or(name);
+                let mut fsl = fs.lock();
+                match ZiqaFs::create_dir(&mut fsl, parent_id, leaf_name) {
+                    Ok(_) => {
+                        vfs.mkdir(&resolved);
+                        println!("mkdir: created {} (ziqafs)", resolved);
+                        return;
+                    }
+                    Err(e) => {
+                        println!("mkdir: {}: {:?}", resolved, e);
+                        return;
+                    }
+                }
+            }
+        }
         vfs.mkdir(&resolved);
         println!("mkdir: created {}", resolved);
     }
@@ -642,6 +713,22 @@ impl Shell {
             None => { println!("Usage: rm <path>"); return; }
         };
         let resolved = self.resolve_path(p);
+        if resolved.starts_with("/disk/") {
+            let name = resolved.trim_start_matches("/disk/");
+            let fs_guard = ZIQAFS.lock();
+            if let Some(ref fs) = *fs_guard {
+                let parent_id = if let Some(idx) = name.rfind('/') {
+                    let dir_part = &name[..idx];
+                    let mut fsl = fs.lock();
+                    ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
+                } else {
+                    ROOT_INODE
+                };
+                let leaf_name = name.rsplit('/').next().unwrap_or(name);
+                let mut fsl = fs.lock();
+                let _ = ZiqaFs::unlink(&mut fsl, parent_id, leaf_name);
+            }
+        }
         match VFS.lock().remove(&resolved) {
             Ok(_) => println!("rm: removed {}", resolved),
             Err(_) => println!("rm: {}: No such file", resolved),
@@ -665,6 +752,282 @@ impl Shell {
                 }
             }
             Err(_) => println!("cat: {}: No such file", resolved),
+        }
+    }
+
+    fn cmd_ping(&self, target: Option<&str>) {
+        let target = match target {
+            Some(t) => t,
+            None => {
+                println!("Usage: ping <host|ip>");
+                return;
+            }
+        };
+        
+        let ip = match crate::net::dns::resolve(target) {
+            Some(ip) => ip,
+            None => {
+                println!("ping: cannot resolve '{}'", target);
+                return;
+            }
+        };
+        
+        println!("PING {} ({})", target, ip);
+        
+        let mut stack_guard = crate::net::stack::TCPIP.lock();
+        if let Some(stack) = stack_guard.as_mut() {
+            use smoltcp::socket::icmp;
+            use smoltcp::wire::{IpAddress, Icmpv4Repr, Icmpv4Packet};
+            
+            let icmp_rx_buffer = icmp::PacketBuffer::new(
+                alloc::vec![icmp::PacketMetadata::EMPTY; 4],
+                alloc::vec![0; 1024],
+            );
+            let icmp_tx_buffer = icmp::PacketBuffer::new(
+                alloc::vec![icmp::PacketMetadata::EMPTY; 4],
+                alloc::vec![0; 1024],
+            );
+            let icmp_socket = icmp::Socket::new(icmp_rx_buffer, icmp_tx_buffer);
+            let handle = stack.sockets.add(icmp_socket);
+            
+            let ident = 0x1234;
+            {
+                let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
+                socket.bind(icmp::Endpoint::Ident(ident)).ok();
+            }
+            
+            for seq in 0..3u16 {
+                let start = crate::timer::uptime_ms();
+                
+                // Send echo request
+                {
+                    let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
+                    let repr = Icmpv4Repr::EchoRequest {
+                        ident,
+                        seq_no: seq,
+                        data: b"ziqa",
+                    };
+                    let payload = socket.send(repr.buffer_len(), IpAddress::Ipv4(ip)).ok();
+                    if let Some(payload) = payload {
+                        let mut packet = Icmpv4Packet::new_unchecked(payload);
+                        repr.emit(&mut packet, &smoltcp::phy::ChecksumCapabilities::default());
+                    }
+                }
+                
+                // Poll for reply
+                let mut got_reply = false;
+                for _ in 0..500 {
+                    stack.poll();
+                    let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
+                    if socket.can_recv() {
+                        if let Ok((data, _addr)) = socket.recv() {
+                            let elapsed = crate::timer::uptime_ms() - start;
+                            println!("  {} bytes from {}: seq={} time={}ms", data.len(), ip, seq, elapsed);
+                            got_reply = true;
+                            break;
+                        }
+                    }
+                    // yield control slightly
+                    x86_64::instructions::nop();
+                }
+                if !got_reply {
+                    println!("  Request timeout for seq {}", seq);
+                }
+            }
+            
+            stack.sockets.remove(handle);
+        } else {
+            println!("ping: TCP/IP stack not initialized");
+        }
+    }
+
+    fn cmd_wget(&self, url: Option<&str>) {
+        let url = match url {
+            Some(u) => u,
+            None => {
+                println!("Usage: wget <url>");
+                println!("  Example: wget http://example.com/");
+                return;
+            }
+        };
+        
+        let url = url.strip_prefix("http://").unwrap_or(url);
+        let (host, path) = match url.find('/') {
+            Some(i) => (&url[..i], &url[i..]),
+            None => (url, "/"),
+        };
+        
+        let (host, port) = match host.find(':') {
+            Some(i) => (&host[..i], host[i+1..].parse::<u16>().unwrap_or(80)),
+            None => (host, 80u16),
+        };
+        
+        let ip = match crate::net::dns::resolve(host) {
+            Some(ip) => ip,
+            None => {
+                println!("wget: cannot resolve '{}'", host);
+                return;
+            }
+        };
+        
+        println!("Connecting to {} ({}):{} ...", host, ip, port);
+        
+        match crate::net::http::get(host, path, ip, port) {
+            Ok(response) => {
+                println!("HTTP {} - {} bytes received", response.status, response.body.len());
+                if response.body.len() < 2048 {
+                    if let Ok(text) = core::str::from_utf8(&response.body) {
+                        println!("{}", text);
+                    } else {
+                        println!("(binary data, {} bytes)", response.body.len());
+                    }
+                } else {
+                    let filename = path.rsplit('/').next().unwrap_or("download");
+                    let filepath = alloc::format!("/tmp/{}", filename);
+                    
+                    use crate::fs::ramfs::RamFile;
+                    use alloc::sync::Arc;
+                    
+                    let file = Arc::new(spin::Mutex::new(RamFile::from_bytes(&response.body)));
+                    VFS.lock().mount(&filepath, file);
+                    println!("Saved to {}", filepath);
+                }
+            }
+            Err(e) => println!("wget: {}", e),
+        }
+    }
+
+    fn cmd_ifconfig(&self) {
+        let stack_guard = crate::net::stack::TCPIP.lock();
+        if let Some(stack) = stack_guard.as_ref() {
+            let mac = stack.mac();
+            println!("eth0:");
+            println!("  inet 10.0.2.15/24");
+            println!("  gateway 10.0.2.2");
+            println!("  ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            println!("  mtu 1500");
+        } else {
+            println!("ifconfig: TCP/IP stack not initialized");
+        }
+        println!();
+        println!("lo:");
+        println!("  inet 127.0.0.1/8");
+        println!("  loopback");
+        
+        println!();
+        println!("Statistics:");
+        crate::net::NET.lock().print_stats();
+    }
+
+    fn cmd_mv(&self, src: Option<&str>, dst: Option<&str>) {
+        let (src, dst) = match (src, dst) {
+            (Some(s), Some(d)) => (s, d),
+            _ => { println!("Usage: mv <src> <dst>"); return; }
+        };
+        let src_path = self.resolve_path(src);
+        let dst_path = self.resolve_path(dst);
+        match VFS.lock().rename(&src_path, &dst_path) {
+            Ok(_) => println!("mv: {} -> {}", src_path, dst_path),
+            Err(_) => println!("mv: {}: No such file", src_path),
+        }
+    }
+
+    fn cmd_cp(&self, src: Option<&str>, dst: Option<&str>) {
+        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
+        let (src, dst) = match (src, dst) {
+            (Some(s), Some(d)) => (s, d),
+            _ => { println!("Usage: cp <src> <dst>"); return; }
+        };
+        let src_path = self.resolve_path(src);
+        let dst_path = self.resolve_path(dst);
+        let guard = ZIQAFS.lock();
+        if let Some(fs_arc) = guard.as_ref() {
+            let mut fs = fs_arc.lock();
+            let src_id = match ZiqaFs::root_lookup(&mut fs, &src_path) {
+                Ok(id) => id,
+                Err(_) => { println!("cp: {}: No such file", src_path); return; }
+            };
+            let dst_name = dst_path.rsplit('/').next().unwrap_or(&dst_path);
+            match ZiqaFs::copy_file(&mut fs, src_id, ROOT_INODE, dst_name) {
+                Ok(_) => println!("cp: {} -> {}", src_path, dst_path),
+                Err(e) => println!("cp: {:?}", e),
+            }
+        } else {
+            println!("cp: ZiqaFS not mounted");
+        }
+    }
+
+    fn cmd_touch(&self, path: Option<&str>) {
+        let p = match path {
+            Some(s) => s,
+            None => { println!("Usage: touch <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        let mut vfs = VFS.lock();
+        if !vfs.exists(&resolved) {
+            vfs.create(&resolved);
+            println!("touch: created {}", resolved);
+        } else {
+            // File exists — just update mtime via a zero-byte write
+            let _ = vfs.write_raw(&resolved, &[], 0);
+            println!("touch: updated {}", resolved);
+        }
+    }
+
+    fn cmd_stat(&self, path: Option<&str>) {
+        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs};
+        let p = match path {
+            Some(s) => s,
+            None => { println!("Usage: stat <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        let guard = ZIQAFS.lock();
+        if let Some(fs_arc) = guard.as_ref() {
+            let mut fs = fs_arc.lock();
+            match ZiqaFs::root_lookup(&mut fs, &resolved) {
+                Ok(inode_id) => {
+                    if let Ok(inode) = ZiqaFs::get_inode(&mut fs, inode_id) {
+                        let kind = if inode.mode == 0o040000 { "directory" } else { "regular file" };
+                        println!("  File:   {}", resolved);
+                        println!("  Inode:  {}", inode_id);
+                        println!("  Type:   {}", kind);
+                        println!("  Size:   {} bytes", inode.size);
+                        println!("  Links:  {}", inode.nlink);
+                        println!("  mtime:  {}s", inode.mtime);
+                        println!("  ctime:  {}s", inode.ctime);
+                        println!("  atime:  {}s", inode.atime);
+                    }
+                }
+                Err(_) => println!("stat: {}: No such file", resolved),
+            }
+        } else {
+            // Fallback to VFS size
+            let vfs = VFS.lock();
+            if let Some(size) = vfs.file_size(&resolved) {
+                println!("  File:  {}", resolved);
+                println!("  Size:  {} bytes", size);
+            } else {
+                println!("stat: {}: No such file", resolved);
+            }
+        }
+    }
+
+    fn cmd_du(&self, path: Option<&str>) {
+        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, BLOCK_SIZE};
+        let p = path.map(|s| self.resolve_path(s)).unwrap_or_else(|| self.cwd_str().to_string());
+        let guard = ZIQAFS.lock();
+        if let Some(fs_arc) = guard.as_ref() {
+            let mut fs = fs_arc.lock();
+            match ZiqaFs::root_lookup(&mut fs, &p) {
+                Ok(inode_id) => {
+                    let blocks = ZiqaFs::du(&mut fs, inode_id);
+                    println!("{}\t{} ({} KiB)", blocks, p, blocks as usize * BLOCK_SIZE / 1024);
+                }
+                Err(_) => println!("du: {}: No such file", p),
+            }
+        } else {
+            println!("du: ZiqaFS not mounted");
         }
     }
 }
