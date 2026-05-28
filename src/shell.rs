@@ -1,6 +1,8 @@
 /// Interactive shell for ZiqaKernel
 
 use alloc::vec::Vec;
+use alloc::string::String;
+use alloc::string::ToString;
 use crate::{print, println};
 use crate::klog::Level;
 use crate::process::AbiKind;
@@ -10,7 +12,8 @@ use x86_64::VirtAddr;
 const COMMANDS: &[&str] = &[
     "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
     "sleep", "meminfo", "netstat", "klog", "doom", "tetris",
-    "reboot", "echo", "clear",
+    "reboot", "echo", "clear", "edit", "ls", "cd", "pwd", "mkdir",
+    "dir", "rm", "cat",
 ];
 
 const MAX_HISTORY: usize = 50;
@@ -21,6 +24,8 @@ pub struct Shell {
     cursor: usize,
     history: Vec<[u8; 256]>,
     history_pos: isize,
+    cwd: [u8; 256],
+    cwd_len: usize,
 }
 
 impl Shell {
@@ -31,13 +36,60 @@ impl Shell {
             cursor: 0,
             history: Vec::new(),
             history_pos: -1,
+            cwd: [0; 256],
+            cwd_len: 0,
+        }
+    }
+
+    fn cwd_str(&self) -> &str {
+        if self.cwd_len == 0 {
+            "/"
+        } else {
+            core::str::from_utf8(&self.cwd[..self.cwd_len]).unwrap_or("/")
+        }
+    }
+
+    fn resolve_path(&self, path: &str) -> alloc::string::String {
+        if path.is_empty() {
+            return self.cwd_str().to_string();
+        }
+        if path.starts_with('/') {
+            Self::normalize(path)
+        } else {
+            let base = self.cwd_str();
+            if base == "/" {
+                Self::normalize(&alloc::format!("/{}", path))
+            } else {
+                Self::normalize(&alloc::format!("{}/{}", base, path))
+            }
+        }
+    }
+
+    fn normalize(path: &str) -> alloc::string::String {
+        let mut parts: Vec<&str> = Vec::new();
+        for seg in path.split('/') {
+            match seg {
+                "" | "." => continue,
+                ".." => { parts.pop(); }
+                s => parts.push(s),
+            }
+        }
+        if parts.is_empty() {
+            "/".to_string()
+        } else {
+            alloc::format!("/{}", parts.join("/"))
         }
     }
 
     pub fn run(&mut self) -> ! {
         println!("[ZIQA] Starting interactive shell...");
         loop {
-            print!("{}", self.prompt);
+            let cwd = self.cwd_str();
+            if cwd == "/" {
+                print!("{}", self.prompt);
+            } else {
+                print!("{} {}", cwd, self.prompt);
+            }
             self.read_line();
 
             let has_input = self.input_buf[..self.cursor].iter().any(|&b| b != b' ' && b != b'\t' && b != b'\r' && b != b'\n');
@@ -46,26 +98,35 @@ impl Shell {
                 let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
                 let trimmed = input.trim();
                 let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
-                match parts[0] {
+                let cmd = parts[0].to_string();
+                let arg1 = parts.get(1).copied().map(String::from);
+                let arg2 = parts.get(2).copied().map(String::from);
+                match cmd.as_str() {
                     "help"    => self.cmd_help(),
                     "uptime"  => self.cmd_uptime(),
-                    "klog"    => self.cmd_klog(parts.get(1).copied().unwrap_or("info")),
-                    "spawn"   => self.cmd_spawn(parts.get(1).copied()),
-                    "spawnelf" => self.cmd_spawn_elf(parts.get(1).copied()),
-                    "exec"    => self.cmd_exec(parts.get(1).copied()),
+                    "klog"    => self.cmd_klog(arg1.as_deref().unwrap_or("info")),
+                    "spawn"   => self.cmd_spawn(arg1.as_deref()),
+                    "spawnelf" => self.cmd_spawn_elf(arg1.as_deref()),
+                    "exec"    => self.cmd_exec(arg1.as_deref()),
                     "ps"      => self.cmd_ps(),
-                    "kill"    => self.cmd_kill(parts.get(1).copied(), parts.get(2).copied()),
-                    "sleep"   => self.cmd_sleep(parts.get(1).copied()),
+                    "kill"    => self.cmd_kill(arg1.as_deref(), arg2.as_deref()),
+                    "sleep"   => self.cmd_sleep(arg1.as_deref()),
                     "meminfo" => self.cmd_meminfo(),
                     "netstat" => self.cmd_netstat(),
-                    "doom"    => self.cmd_doom(parts.get(1).copied()),
+                    "doom"    => self.cmd_doom(arg1.as_deref()),
                     "tetris"  => self.cmd_tetris(),
                     "reboot"  => self.cmd_reboot(),
-                    "edit"    => self.cmd_edit(parts.get(1).copied()),
-                    "ls"      => self.cmd_ls(),
-                    "clear"   => { for _ in 0..25 { println!(""); } },
-                    "echo"    => println!("{}", parts.get(1).copied().unwrap_or("")),
-                    _         => println!("Unknown command: {}. Type 'help'.", parts[0]),
+                    "edit"    => self.cmd_edit(arg1.as_deref()),
+                    "ls"      => self.cmd_ls(arg1.as_deref()),
+                    "cd"      => self.cmd_cd(arg1.as_deref()),
+                    "pwd"     => self.cmd_pwd(),
+                    "mkdir"   => self.cmd_mkdir(arg1.as_deref()),
+                    "dir"     => self.cmd_dir(arg1.as_deref()),
+                    "rm"      => self.cmd_rm(arg1.as_deref()),
+                    "cat"     => self.cmd_cat(arg1.as_deref()),
+                    "clear"   => self.cmd_clear(),
+                    "echo"    => println!("{}", arg1.as_deref().unwrap_or("")),
+                    _         => println!("Unknown command: {}. Type 'help'.", cmd),
                 }
             }
             self.history_pos = -1;
@@ -211,6 +272,14 @@ impl Shell {
         println!("  tetris            - run graphical Tetris game on VGA console");
         println!("  echo <text>       - print text");
         println!("  clear             - clear screen");
+        println!("  edit <path>       - edit a file (nano-like text editor)");
+        println!("  ls [path]         - list files in VFS");
+        println!("  cd [path]         - change current directory");
+        println!("  pwd               - print current directory");
+        println!("  mkdir <path>      - create a directory");
+        println!("  dir [path]        - detailed directory listing");
+        println!("  rm <path>         - remove a file");
+        println!("  cat <path>        - display file contents");
     }
 
     fn cmd_uptime(&self) {
@@ -249,16 +318,17 @@ impl Shell {
             Some(s) => s,
             None => { println!("Usage: spawnelf <path>"); return; }
         };
+        let resolved = self.resolve_path(p);
         let mut buf = [0u8; 65536];
-        match crate::fs::vfs::VFS.lock().read_raw(p, &mut buf, 0) {
+        match crate::fs::vfs::VFS.lock().read_raw(&resolved, &mut buf, 0) {
             Ok(n) if n > 0 => {
                 let data = &buf[..n];
                 match crate::process::scheduler::spawn_elf(data) {
-                    Some(pid) => println!("Spawned PID={} from '{}'", pid.0, p),
-                    None => println!("spawnelf: failed to spawn from '{}'", p),
+                    Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
+                    None => println!("spawnelf: failed to spawn from '{}'", resolved),
                 }
             }
-            _ => println!("spawnelf: file '{}' not found in VFS", p),
+            _ => println!("spawnelf: file '{}' not found in VFS", resolved),
         }
     }
 
@@ -348,8 +418,130 @@ impl Shell {
         crate::doom::run(steps);
     }
 
+    fn cmd_clear(&self) {
+        crate::drivers::vga::clear_screen();
+        use core::fmt::Write;
+        let mut serial = crate::drivers::uart::SERIAL1.lock();
+        write!(serial, "\x1b[2J\x1b[H").ok();
+    }
+
     fn cmd_tetris(&self) {
         crate::tetris::run();
+    }
+
+    fn cmd_edit(&self, path: Option<&str>) {
+        let p = match path {
+            Some(s) => s,
+            None => { println!("Usage: edit <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        crate::edit::edit_file(&resolved);
+    }
+
+    fn cmd_ls(&self, target: Option<&str>) {
+        let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
+        let vfs = VFS.lock();
+        if !vfs.is_dir(&dir) {
+            println!("ls: {}: No such directory", dir);
+            return;
+        }
+        let entries = vfs.list_dir(&dir);
+        if entries.is_empty() {
+            println!("{}: (empty)", dir);
+        } else {
+            println!("{}:", dir);
+            for e in &entries {
+                if vfs.is_dir(e) {
+                    println!("  {}/", e);
+                } else {
+                    println!("  {}", e);
+                }
+            }
+        }
+    }
+
+    fn cmd_cd(&mut self, target: Option<&str>) {
+        let raw = target.unwrap_or("/");
+        let resolved = self.resolve_path(raw);
+        let vfs = VFS.lock();
+        if !vfs.is_dir(&resolved) {
+            println!("cd: {}: No such directory", resolved);
+            return;
+        }
+        let bytes = resolved.as_bytes();
+        let n = bytes.len().min(255);
+        self.cwd[..n].copy_from_slice(&bytes[..n]);
+        self.cwd_len = n;
+    }
+
+    fn cmd_pwd(&self) {
+        println!("{}", self.cwd_str());
+    }
+
+    fn cmd_mkdir(&self, target: Option<&str>) {
+        let p = match target {
+            Some(s) => s,
+            None => { println!("Usage: mkdir <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        let mut vfs = VFS.lock();
+        if vfs.exists(&resolved) {
+            println!("mkdir: {}: File exists", resolved);
+            return;
+        }
+        vfs.mkdir(&resolved);
+        println!("mkdir: created {}", resolved);
+    }
+
+    fn cmd_dir(&self, target: Option<&str>) {
+        let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
+        let vfs = VFS.lock();
+        if !vfs.is_dir(&dir) {
+            println!("dir: {}: No such directory", dir);
+            return;
+        }
+        let entries = vfs.list_dir(&dir);
+        println!(" Directory of {}", dir);
+        println!("");
+        for e in &entries {
+            if vfs.is_dir(e) {
+                println!("  <DIR>          {}", e);
+            } else {
+                println!("                 {}", e);
+            }
+        }
+    }
+
+    fn cmd_rm(&self, target: Option<&str>) {
+        let p = match target {
+            Some(s) => s,
+            None => { println!("Usage: rm <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        match VFS.lock().remove(&resolved) {
+            Ok(_) => println!("rm: removed {}", resolved),
+            Err(_) => println!("rm: {}: No such file", resolved),
+        }
+    }
+
+    fn cmd_cat(&self, target: Option<&str>) {
+        let p = match target {
+            Some(s) => s,
+            None => { println!("Usage: cat <path>"); return; }
+        };
+        let resolved = self.resolve_path(p);
+        let mut buf = [0u8; 4096];
+        match VFS.lock().read_raw(&resolved, &mut buf, 0) {
+            Ok(0) => {}
+            Ok(n) => {
+                if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                    print!("{}", s);
+                } else {
+                    println!("(binary data, {} bytes)", n);
+                }
+            }
+            Err(_) => println!("cat: {}: No such file", resolved),
+        }
     }
 }
 
