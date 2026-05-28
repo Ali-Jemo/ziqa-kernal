@@ -52,7 +52,7 @@ fn print_banner() {
     println!("║                                                                              ║");
 
     set_fg(Color::LightCyan);
-    println!("║        ▓ 23 modules   ▓ 50+ syscalls   ▓ MLFQ sched   ▓ eBPF VM              ║");
+    println!("║        ▓ 23 modules   ▓ 60+ syscalls   ▓ MLFQ sched   ▓ eBPF VM              ║");
     println!("║        ▓ DRM/KMS      ▓ io_uring       ▓ IPC/SHM       ▓ Capability sec       ║");
 
     set_fg(Color::White);
@@ -86,7 +86,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     set_fg(Color::LightGreen);
     ziqa_kernel::net::init();
+    ziqa_kernel::drivers::virtio_net::init().ok();
     set_fg(Color::White);
+
 
     // ── Self-tests ──
     section("Self-tests");
@@ -111,8 +113,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
             include_bytes!("../assets/test_elf.bin")
         )));
         vfs.mount("/bin/test", test_elf);
+
+        let test_wasm = Arc::new(Mutex::new(RamFile::from_bytes(
+            ziqa_kernel::abi::wasm::TEST_WASM
+        )));
+        vfs.mount("/bin/hello.wasm", test_wasm);
+
     }
-    println!(" ~ VFS .................................. /etc/motd, /bin/test mounted");
+    println!(" ~ VFS .................................. /etc/motd, /bin/test, /bin/hello.wasm mounted");
+
     ziqa_kernel::klog!(Level::Info, "VFS: mounted RamFS at /etc/motd and /bin/test");
 
     // ZiqaFS

@@ -18,6 +18,16 @@ const COMMANDS: &[&str] = &[
 
 const MAX_HISTORY: usize = 50;
 
+// ANSI escape sequences for terminal colors
+const C_RESET: &str = "\x1b[0m";
+const C_BOLD: &str = "\x1b[1m";
+const C_DIM: &str = "\x1b[2m";
+const C_RED: &str = "\x1b[31m";
+const C_GREEN: &str = "\x1b[32m";
+const C_YELLOW: &str = "\x1b[33m";
+const C_BLUE: &str = "\x1b[34m";
+const C_CYAN: &str = "\x1b[36m";
+
 pub struct Shell {
     prompt: &'static str,
     input_buf: [u8; 256],
@@ -26,6 +36,8 @@ pub struct Shell {
     history_pos: isize,
     cwd: [u8; 256],
     cwd_len: usize,
+    prev_cwd: [u8; 256],
+    prev_cwd_len: usize,
 }
 
 impl Shell {
@@ -38,6 +50,8 @@ impl Shell {
             history_pos: -1,
             cwd: [0; 256],
             cwd_len: 0,
+            prev_cwd: [0; 256],
+            prev_cwd_len: 0,
         }
     }
 
@@ -255,31 +269,52 @@ impl Shell {
     }
 
     fn cmd_help(&self) {
-        println!("Commands:");
-        println!("  help              - this message");
-        println!("  uptime            - kernel uptime in ms");
-        println!("  ps                - list processes");
-        println!("  spawn [path]      - spawn process (skeleton, or from VFS path)");
-        println!("  spawnelf <path>   - spawn process from VFS ELF binary");
-        println!("  exec <pid>        - execute process entry point (runs in kernel)");
-        println!("  kill <pid> [sig]  - send signal to process (default: SIGTERM=15)");
-        println!("  sleep <ms>        - sleep current shell process N milliseconds");
-        println!("  meminfo           - heap memory statistics");
-        println!("  netstat           - network device statistics");
-        println!("  klog [level]      - dump kernel log (debug/info/error)");
-        println!("  reboot            - reboot the system");
-        println!("  doom [steps]      - run DOOM fire demo (default: 60 steps)");
-        println!("  tetris            - run graphical Tetris game on VGA console");
-        println!("  echo <text>       - print text");
-        println!("  clear             - clear screen");
-        println!("  edit <path>       - edit a file (nano-like text editor)");
-        println!("  ls [path]         - list files in VFS");
-        println!("  cd [path]         - change current directory");
-        println!("  pwd               - print current directory");
-        println!("  mkdir <path>      - create a directory");
-        println!("  dir [path]        - detailed directory listing");
-        println!("  rm <path>         - remove a file");
-        println!("  cat <path>        - display file contents");
+        println!("{}{}  ⚡ ZiqaKernel Shell ⚡{}", C_CYAN, C_BOLD, C_RESET);
+        println!("{}  ─────────────────────────────────────{}", C_DIM, C_RESET);
+        println!("");
+
+        let groups: &[(&str, &[(&str, &str)])] = &[
+            ("Filesystem", &[
+                ("ls [path]", "list files in current directory"),
+                ("cd [path]", "change directory (.. / - for previous)"),
+                ("pwd", "print working directory"),
+                ("mkdir <path>", "create a directory"),
+                ("dir [path]", "detailed directory listing"),
+                ("rm <path>", "remove a file"),
+                ("cat <path>", "display file contents"),
+                ("edit <path>", "nano-like text editor"),
+            ]),
+            ("Process", &[
+                ("ps", "list processes"),
+                ("spawn [path]", "spawn skeleton or ELF process"),
+                ("spawnelf <path>", "spawn ELF from VFS"),
+                ("exec <pid>", "execute process entry point"),
+                ("kill <pid> [sig]", "send signal to process"),
+                ("sleep <ms>", "sleep N milliseconds"),
+            ]),
+            ("System", &[
+                ("help", "show this message"),
+                ("uptime", "kernel uptime"),
+                ("meminfo", "heap memory statistics"),
+                ("netstat", "network device statistics"),
+                ("klog [level]", "dump kernel log (debug/info/error)"),
+                ("reboot", "reboot the system"),
+                ("clear", "clear screen"),
+                ("echo <text>", "print text"),
+            ]),
+            ("Entertainment", &[
+                ("doom [steps]", "DOOM fire demo"),
+                ("tetris", "graphical Tetris on VGA console"),
+            ]),
+        ];
+
+        for (group_name, cmds) in groups {
+            println!("{}  {} ›{}", C_YELLOW, group_name, C_RESET);
+            for (cmd, desc) in *cmds {
+                println!("    {:<18} {}{}{}", cmd, C_DIM, desc, C_RESET);
+            }
+            println!("");
+        }
     }
 
     fn cmd_uptime(&self) {
@@ -442,19 +477,25 @@ impl Shell {
         let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
         let vfs = VFS.lock();
         if !vfs.is_dir(&dir) {
-            println!("ls: {}: No such directory", dir);
+            println!("{}ls{}: {}: {}No such directory{}", C_RED, C_RESET, dir, C_DIM, C_RESET);
             return;
         }
         let entries = vfs.list_dir(&dir);
+
+        println!("{}{}  [{}]{}", C_CYAN, C_BOLD, dir, C_RESET);
+
+        println!("  {}D  {} .{}", C_BLUE, C_DIM, C_RESET);
+        println!("  {}D  {} ..{}", C_BLUE, C_DIM, C_RESET);
+
         if entries.is_empty() {
-            println!("{}: (empty)", dir);
+            println!("  {}(empty){}", C_DIM, C_RESET);
         } else {
-            println!("{}:", dir);
             for e in &entries {
+                let name = e.rsplit('/').next().unwrap_or(e);
                 if vfs.is_dir(e) {
-                    println!("  {}/", e);
-                } else {
-                    println!("  {}", e);
+                    println!("  {}D  {}{} {}", C_BLUE, C_DIM, name, C_RESET);
+                } else if let Some(size) = vfs.file_size(e) {
+                    println!("  {:>8}  {}{}", size, name, C_RESET);
                 }
             }
         }
@@ -462,16 +503,33 @@ impl Shell {
 
     fn cmd_cd(&mut self, target: Option<&str>) {
         let raw = target.unwrap_or("/");
-        let resolved = self.resolve_path(raw);
+        let resolved = if raw == "-" {
+            if self.prev_cwd_len == 0 {
+                println!("{}cd{}: {}no previous directory{}", C_RED, C_RESET, C_DIM, C_RESET);
+                return;
+            }
+            core::str::from_utf8(&self.prev_cwd[..self.prev_cwd_len]).unwrap_or("/").to_string()
+        } else {
+            self.resolve_path(raw)
+        };
         let vfs = VFS.lock();
         if !vfs.is_dir(&resolved) {
-            println!("cd: {}: No such directory", resolved);
+            println!("{}cd{}: {}: {}No such directory{}", C_RED, C_RESET, resolved, C_DIM, C_RESET);
             return;
         }
+        // Save current as previous before changing
+        let cur = alloc::string::String::from(self.cwd_str());
+        let prev_bytes = cur.as_bytes();
+        let pn = prev_bytes.len().min(255);
+        self.prev_cwd[..pn].copy_from_slice(&prev_bytes[..pn]);
+        self.prev_cwd_len = pn;
+
         let bytes = resolved.as_bytes();
         let n = bytes.len().min(255);
         self.cwd[..n].copy_from_slice(&bytes[..n]);
         self.cwd_len = n;
+
+        println!("{}▸ {}{}", C_GREEN, self.cwd_str(), C_RESET);
     }
 
     fn cmd_pwd(&self) {
@@ -506,6 +564,8 @@ impl Shell {
         for e in &entries {
             if vfs.is_dir(e) {
                 println!("  <DIR>          {}", e);
+            } else if let Some(size) = vfs.file_size(e) {
+                println!("  {:>8}  {}", size, e);
             } else {
                 println!("                 {}", e);
             }

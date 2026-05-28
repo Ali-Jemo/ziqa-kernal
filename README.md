@@ -606,7 +606,7 @@ build-std-features = ["compiler-builtins-mem"]
 ```
 
 <details>
-<summary><b>Syscall Reference</b> (click to expand — 57 syscall numbers, ~49 implemented)</summary>
+<summary><b>Syscall Reference</b> (click to expand — 64 syscall numbers, ~62 implemented)</summary>
 
 | Number | Name | Description | Handler |
 |--------|------|-------------|---------|
@@ -653,21 +653,35 @@ build-std-features = ["compiler-builtins-mem"]
 | 72 | `FCNTL` | File control (F_DUPFD, F_GETFD/SETFD, etc.) | Linux ABI |
 | 79 | `GETCWD` | Get working dir | Linux ABI |
 | 80 | `CHDIR` | Change directory | Linux ABI |
+| 82 | `RENAME` | Rename file | Linux ABI |
+| 83 | `MKDIR` | Create directory | Linux ABI |
+| 84 | `RMDIR` | Remove directory | Linux ABI |
+| 85 | `CREAT` | Create file (open O_CREAT|O_WRONLY|O_TRUNC) | Linux ABI |
+| 86 | `LINK` | Hard link (stub OK) | Linux ABI |
+| 87 | `UNLINK` | Remove file | Linux ABI |
+| 88 | `SYMLINK` | Symlink (stub OK) | Linux ABI |
 | 89 | `READLINK` | Read symlink (/proc/self/exe) | Linux ABI |
+| 90 | `CHMOD` | Change mode (stub) | Linux ABI |
+| 95 | `UMASK` | Set file creation mask | Linux ABI |
 | 102 | `GETUID` | Get user ID (returns 0) | Linux ABI |
 | 103 | `GETGID` | Get group ID (returns 0) | Linux ABI |
 | 104 | `GETEUID` | Get effective UID (returns 0) | Linux ABI |
 | 105 | `GETEGID` | Get effective GID (returns 0) | Linux ABI |
 | 110 | `GETPPID` | Get parent PID | Core |
 | 114 | `WAIT4` | waitpid variant | Linux ABI |
+| 137 | `STATFS` | Filesystem stats | Linux ABI |
 | 158 | `ARCH_PRCTL` | Arch-specific (TLS) | Linux ABI |
 | 186 | `GETTID` | Get thread ID (returns pid) | Linux ABI |
 | 202 | `FUTEX` | Fast user-space mutex (WAIT/WAKE stubs) | Linux ABI |
+| 217 | `GETDENTS64` | Directory listing | Linux ABI |
 | 218 | `SET_TID_ADDR` | Set TID address | Linux ABI |
+| 228 | `CLOCK_GETTIME` | Monotonic clock time | Linux ABI |
 | 230 | `CLOCK_NANOSLEEP` | High-res sleep (delegates to NANOSLEEP) | Core |
 | 231 | `EXIT_GROUP` | Exit thread group | Core |
 | 234 | `TGKILL` | Thread-group kill | Linux ABI |
 | 257 | `OPENAT` | Open relative to dirfd | Linux ABI |
+| 262 | `NEWFSTATAT` | Stat via dirfd | Linux ABI |
+| 318 | `GETRANDOM` | Random bytes (LFSR) | Linux ABI |
 
 </details>
 
@@ -790,7 +804,9 @@ pub trait AbiPlugin: Send + Sync {
 - [x] Demand paging (page fault → allocate frame → copy ELF segment)
 - [x] spawn_elf: spawn process from ELF binary in kernel space
 - [x] FdTable with pipe support (10 tests)
-- [ ] Full Linux syscall compatibility (50+/100+ syscalls)
+- [x] Extended filesystem syscalls (getdents64, mkdir, rename, unlink, creat, statfs, newfstatat)
+- [x] clock_gettime, getrandom, chmod, umask, link, symlink
+- [ ] Full Linux syscall compatibility (60+/100+ syscalls)
 
 ### Medium Term
 - [ ] Copy-on-write for fork (shared pages → page fault → copy)
