@@ -116,6 +116,7 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     process.cpu_state.rip = entry;
 
     let mut load_count = 0u32;
+    let mut max_vaddr: u64 = 0;
     for i in 0..phnum as usize {
         let ph_off = phoff as usize + i * phentsize as usize;
         let phdr = parse_phdr(binary, ph_off)?;
@@ -138,12 +139,16 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
             if !process.add_region(region) {
                 return Err(AbiError::Other("Too many memory regions"));
             }
+            let end = phdr.p_vaddr + phdr.p_memsz;
+            if end > max_vaddr { max_vaddr = end; }
             load_count += 1;
         } else if phdr.p_type == PT_INTERP {
             println!("[ELF] WARNING: dynamic linker required (not supported)");
         }
     }
 
-    println!("[ELF] loaded {} segments", load_count);
+    // Align brk to next page boundary
+    process.brk = (max_vaddr + 0xFFF) & !0xFFF;
+    println!("[ELF] loaded {} segments, brk=0x{:x}", load_count, process.brk);
     Ok(())
 }

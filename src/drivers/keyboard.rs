@@ -86,6 +86,15 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
     n
 }
 
+/// Clear all pending input in the keyboard buffer.
+pub fn clear_stdin() {
+    let mut ring = INPUT_BUF.lock();
+    ring.head = 0;
+    ring.tail = 0;
+    ring.count = 0;
+}
+
+
 /// Returns true if there is pending keyboard input.
 pub fn has_input() -> bool {
     !INPUT_BUF.lock().is_empty()

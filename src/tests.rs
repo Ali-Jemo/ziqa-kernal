@@ -112,14 +112,14 @@ pub fn run_all() {
     test!("fdtable: alloc assigns fd >= 3", {
         use crate::process::{FdTable, FdTarget, FileDesc};
         let mut t = FdTable::new();
-        let fd = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0 });
+        let fd = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0, offset: 0 });
         fd == Some(3)
     });
 
     test!("fdtable: close removes fd", {
         use crate::process::{FdTable, FdTarget, FileDesc};
         let mut t = FdTable::new();
-        let fd = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0 }).unwrap();
+        let fd = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0, offset: 0 }).unwrap();
         t.close(fd) && t.get(fd).is_none()
     });
 
@@ -132,18 +132,18 @@ pub fn run_all() {
     test!("fdtable: sequential allocation", {
         use crate::process::{FdTable, FdTarget, FileDesc};
         let mut t = FdTable::new();
-        let fd1 = t.alloc(FileDesc { target: FdTarget::File(10), flags: 0 });
-        let fd2 = t.alloc(FileDesc { target: FdTarget::File(11), flags: 0 });
-        let fd3 = t.alloc(FileDesc { target: FdTarget::File(12), flags: 0 });
+        let fd1 = t.alloc(FileDesc { target: FdTarget::File(10), flags: 0, offset: 0 });
+        let fd2 = t.alloc(FileDesc { target: FdTarget::File(11), flags: 0, offset: 0 });
+        let fd3 = t.alloc(FileDesc { target: FdTarget::File(12), flags: 0, offset: 0 });
         fd1 == Some(3) && fd2 == Some(4) && fd3 == Some(5)
     });
 
     test!("fdtable: reuse fd after close", {
         use crate::process::{FdTable, FdTarget, FileDesc};
         let mut t = FdTable::new();
-        let fd1 = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0 }).unwrap();
+        let fd1 = t.alloc(FileDesc { target: FdTarget::File(1), flags: 0, offset: 0 }).unwrap();
         t.close(fd1);
-        let fd2 = t.alloc(FileDesc { target: FdTarget::File(2), flags: 0 });
+        let fd2 = t.alloc(FileDesc { target: FdTarget::File(2), flags: 0, offset: 0 });
         fd2 == Some(3) // First reused slot
     });
 
@@ -162,7 +162,7 @@ pub fn run_all() {
     test!("fdtable: get returns same fd", {
         use crate::process::{FdTable, FdTarget, FileDesc};
         let mut t = FdTable::new();
-        let fd = t.alloc(FileDesc { target: FdTarget::File(42), flags: 0x10 }).unwrap();
+        let fd = t.alloc(FileDesc { target: FdTarget::File(42), flags: 0x10, offset: 0 }).unwrap();
         match t.get(fd).map(|d| d.target) {
             Some(FdTarget::File(num)) => num == 42,
             _ => false,
@@ -217,13 +217,13 @@ pub fn run_all() {
         use crate::process::Pid;
         let chan = ipc::create_channel().unwrap();
         let mut full = false;
-        for _ in 0..16 {
+        for _ in 0..17 {
             if ipc::send(chan, Pid(1), b"x").is_err() {
                 full = true;
                 break;
             }
         }
-        full // Should be full after 16 messages
+        full // Should be full after 17 messages (capacity 16)
     });
 
     test!("pipe: message data truncated at MSG_MAX", {
@@ -324,6 +324,7 @@ pub fn run_all() {
             let _ = lo.transmit(b"stat");
             let tx_after = lo.tx_packets;
             let rx_after = lo.rx_packets;
+            let _ = lo.receive();
             tx_after == tx_before + 1 && rx_after == rx_before + 1
         } else { false }
     });
@@ -337,6 +338,7 @@ pub fn run_all() {
             let _ = lo.transmit(b"bytes");
             let tx_bytes_after = lo.tx_bytes;
             let rx_bytes_after = lo.rx_bytes;
+            let _ = lo.receive();
             tx_bytes_after == tx_bytes_before + 5 && rx_bytes_after == rx_bytes_before + 5
         } else { false }
     });
@@ -362,6 +364,8 @@ pub fn run_all() {
             let _ = lo.transmit(b"pkt1");
             let _ = lo.transmit(b"pkt2");
             let pending_after = lo.rx_pending();
+            let _ = lo.receive();
+            let _ = lo.receive();
             pending_after == pending_before + 2
         } else { false }
     });

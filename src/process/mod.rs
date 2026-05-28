@@ -56,33 +56,56 @@ pub enum FdTarget {
     PipeRead(u32),
     /// Pipe write end — backed by IPC channel id
     PipeWrite(u32),
-    /// Regular file — stores a VFS path id / inode id
-    File(u32),
+    /// Regular file — index into FdTable::paths
+    File(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct FileDesc {
     pub target: FdTarget,
     pub flags: u32,
+    pub offset: usize,
 }
 
 const MAX_FDS: usize = 16;
 
 pub struct FdTable {
     entries: [Option<FileDesc>; MAX_FDS],
+    /// Paths for File fds — indexed by FdTarget::File(idx)
+    pub paths: [[u8; 64]; MAX_FDS],
+    pub path_lens: [usize; MAX_FDS],
 }
 
 impl FdTable {
     pub const fn new() -> Self {
         const NONE: Option<FileDesc> = None;
-        let mut t = Self { entries: [NONE; MAX_FDS] };
-        t.entries[0] = Some(FileDesc { target: FdTarget::Stdin,  flags: 0 });
-        t.entries[1] = Some(FileDesc { target: FdTarget::Stdout, flags: 0 });
-        t.entries[2] = Some(FileDesc { target: FdTarget::Stderr, flags: 0 });
+        let mut t = Self {
+            entries: [NONE; MAX_FDS],
+            paths: [[0u8; 64]; MAX_FDS],
+            path_lens: [0usize; MAX_FDS],
+        };
+        t.entries[0] = Some(FileDesc { target: FdTarget::Stdin,  flags: 0, offset: 0 });
+        t.entries[1] = Some(FileDesc { target: FdTarget::Stdout, flags: 0, offset: 0 });
+        t.entries[2] = Some(FileDesc { target: FdTarget::Stderr, flags: 0, offset: 0 });
         t
     }
 
-    /// Allocate the lowest free fd >= 3; returns the fd number.
+    /// Allocate the lowest free fd >= 3 with a VFS path; returns the fd number.
+    pub fn alloc_file(&mut self, path: &[u8], flags: u32) -> Option<usize> {
+        for (i, slot) in self.entries.iter_mut().enumerate().skip(3) {
+            if slot.is_none() {
+                let n = path.len().min(63);
+                self.paths[i][..n].copy_from_slice(&path[..n]);
+                self.paths[i][n] = 0;
+                self.path_lens[i] = n;
+                *slot = Some(FileDesc { target: FdTarget::File(i as u8), flags, offset: 0 });
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Allocate a generic fd (pipe, etc.)
     pub fn alloc(&mut self, desc: FileDesc) -> Option<usize> {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(3) {
             if slot.is_none() {
@@ -97,13 +120,58 @@ impl FdTable {
         self.entries.get(fd)?.as_ref()
     }
 
+    pub fn get_mut(&mut self, fd: usize) -> Option<&mut FileDesc> {
+        self.entries.get_mut(fd)?.as_mut()
+    }
+
+    /// Get the VFS path for a File fd.
+    pub fn path_of(&self, fd: usize) -> Option<&[u8]> {
+        let desc = self.entries.get(fd)?.as_ref()?;
+        if let FdTarget::File(_) = desc.target {
+            Some(&self.paths[fd][..self.path_lens[fd]])
+        } else {
+            None
+        }
+    }
+
     /// Close fd >= 3; returns true if it was open.
     pub fn close(&mut self, fd: usize) -> bool {
         if fd < 3 { return false; }
         if let Some(slot) = self.entries.get_mut(fd) {
-            if slot.is_some() { *slot = None; return true; }
+            if slot.is_some() {
+                *slot = None;
+                self.path_lens[fd] = 0;
+                return true;
+            }
         }
         false
+    }
+
+    /// Duplicate src_fd into dst_fd (or lowest free if dst_fd is None).
+    pub fn dup(&mut self, src_fd: usize, dst_fd: Option<usize>) -> Option<usize> {
+        let desc = *self.entries.get(src_fd)?.as_ref()?;
+        match dst_fd {
+            Some(d) => {
+                if d < MAX_FDS {
+                    self.entries[d] = Some(FileDesc { offset: 0, ..desc });
+                    self.paths[d] = self.paths[src_fd];
+                    self.path_lens[d] = self.path_lens[src_fd];
+                    return Some(d);
+                }
+                None
+            }
+            None => {
+                for (i, slot) in self.entries.iter_mut().enumerate().skip(3) {
+                    if slot.is_none() {
+                        *slot = Some(FileDesc { offset: 0, ..desc });
+                        self.paths[i] = self.paths[src_fd];
+                        self.path_lens[i] = self.path_lens[src_fd];
+                        return Some(i);
+                    }
+                }
+                None
+            }
+        }
     }
 
     pub fn open_count(&self) -> usize {
@@ -130,6 +198,15 @@ pub struct Process {
     pub parent: u64,
     pub exit_code: i64,
     pub fds: FdTable,
+    /// Program break (heap top) for sys_brk
+    pub brk: u64,
+    /// Current working directory (null-terminated, max 128 bytes)
+    pub cwd: [u8; 128],
+    pub cwd_len: usize,
+    /// Next available virtual address for mmap (bump allocator)
+    pub mmap_bump: u64,
+    /// Raw ELF binary data for page-fault-on-demand copying
+    pub binary_data: alloc::vec::Vec<u8>,
 }
 
 impl Process {
@@ -153,6 +230,15 @@ impl Process {
             parent: 0,
             exit_code: 0,
             fds: FdTable::new(),
+            brk: 0,
+            cwd: {
+                let mut b = [0u8; 128];
+                b[0] = b'/';
+                b
+            },
+            cwd_len: 1,
+            mmap_bump: 0x7000_0000,
+            binary_data: alloc::vec::Vec::new(),
         }
     }
 

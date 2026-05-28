@@ -1,4 +1,4 @@
-ENTRY_POINT = kernel_main;
+ENTRY(_start)
 
 SECTIONS
 {

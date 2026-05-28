@@ -1,41 +1,48 @@
 /// RamFS implementation for ZiqaKernel
 ///
-/// Stores files in-memory using fixed-size buffers for now.
+/// Stores files in-memory using dynamic buffers.
 
+extern crate alloc;
+use alloc::vec::Vec;
 use crate::fs::{File, FileType};
 use crate::abi::AbiError;
 
 pub struct RamFile {
-    pub data: [u8; 4096],
-    pub size: usize,
+    pub data: Vec<u8>,
 }
 
 impl RamFile {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            data: [0; 4096],
-            size: 0,
+            data: Vec::new(),
+        }
+    }
+    
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            data: bytes.to_vec(),
         }
     }
 }
 
 impl File for RamFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, AbiError> {
-        if offset >= self.size {
+        let size = self.data.len();
+        if offset >= size {
             return Ok(0);
         }
-        let available = self.size - offset;
+        let available = size - offset;
         let to_copy = available.min(buf.len());
         buf[..to_copy].copy_from_slice(&self.data[offset..offset + to_copy]);
         Ok(to_copy)
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, AbiError> {
-        if offset + buf.len() > self.data.len() {
-            return Err(AbiError::OutOfMemory);
+        let new_min_size = offset + buf.len();
+        if new_min_size > self.data.len() {
+            self.data.resize(new_min_size, 0);
         }
-        self.data[offset..offset + buf.len()].copy_from_slice(buf);
-        self.size = self.size.max(offset + buf.len());
+        self.data[offset..new_min_size].copy_from_slice(buf);
         Ok(buf.len())
     }
 
@@ -44,6 +51,6 @@ impl File for RamFile {
     }
 
     fn size(&self) -> usize {
-        self.size
+        self.data.len()
     }
 }

@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 680" font-family="'Courier New', monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="sendg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="recvg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="chng" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="shmg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="sig" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="ringg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="arrowblue" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#7aa2f7"/>
+    </marker>
+    <marker id="arrowgreen" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ece6a"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="680" fill="url(#bg)" rx="8"/>
+
+  <text x="360" y="28" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="sans-serif">IPC Mechanisms</text>
+
+  <!-- ===== Channel IPC ===== -->
+  <rect x="40" y="50" width="300" height="48" rx="4" fill="#1a1b26" stroke="#bb9af7" stroke-width="1.5"/>
+  <text x="190" y="72" text-anchor="middle" fill="#bb9af7" font-size="12" font-weight="bold" font-family="sans-serif">AbstractChannel Trait</text>
+  <text x="190" y="88" text-anchor="middle" fill="#565f89" font-size="9" font-family="sans-serif">pub trait AbstractChannel: Send { send(); recv(); close(); state() }</text>
+
+  <!-- Channel implementations -->
+  <rect x="40" y="110" width="140" height="60" rx="4" fill="url(#chng)" filter="url(#shadow)"/>
+  <text x="110" y="135" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">MpscChannel</text>
+  <text x="110" y="153" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">Multi-producer, single-consumer</text>
+
+  <rect x="200" y="110" width="140" height="60" rx="4" fill="url(#chng)" filter="url(#shadow)"/>
+  <text x="270" y="135" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">SharedChannel</text>
+  <text x="270" y="153" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">Lock-based, any-to-any</text>
+
+  <line x1="110" y1="170" x2="110" y2="200" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="270" y1="170" x2="270" y2="200" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Channel flow -->
+  <rect x="40" y="200" width="140" height="50" rx="4" fill="url(#sendg)" filter="url(#shadow)"/>
+  <text x="110" y="222" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">Sender A</text>
+  <text x="110" y="238" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">channel.send(msg)</text>
+
+  <rect x="200" y="200" width="140" height="50" rx="4" fill="url(#recvg)" filter="url(#shadow)"/>
+  <text x="270" y="222" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">Receiver B</text>
+  <text x="270" y="238" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">let msg = channel.recv()</text>
+
+  <line x1="180" y1="225" x2="200" y2="225" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===== Signal IPC ===== -->
+  <rect x="380" y="50" width="300" height="48" rx="4" fill="#1a1b26" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="530" y="72" text-anchor="middle" fill="#f7768e" font-size="12" font-weight="bold" font-family="sans-serif">Signals</text>
+  <text x="530" y="88" text-anchor="middle" fill="#565f89" font-size="9" font-family="sans-serif">Event-driven notifications between processes</text>
+
+  <!-- Signal flow -->
+  <rect x="380" y="110" width="140" height="60" rx="4" fill="url(#sig)" filter="url(#shadow)"/>
+  <text x="450" y="135" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">Sender Process</text>
+  <text x="450" y="153" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">sigqueue(pid, sig, val)</text>
+
+  <rect x="540" y="110" width="140" height="60" rx="4" fill="url(#sig)" filter="url(#shadow)"/>
+  <text x="610" y="135" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">Receiver Process</text>
+  <text x="610" y="153" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">action() or sigwait()</text>
+
+  <line x1="520" y1="140" x2="540" y2="140" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===== Shared Memory ===== -->
+  <rect x="380" y="200" width="300" height="50" rx="4" fill="#1a1b26" stroke="#e0af68" stroke-width="1.5"/>
+  <text x="530" y="222" text-anchor="middle" fill="#e0af68" font-size="12" font-weight="bold" font-family="sans-serif">Shared Memory (SHM)</text>
+  <text x="530" y="238" text-anchor="middle" fill="#565f89" font-size="9" font-family="sans-serif">Zero-copy region, mapped into multiple address spaces</text>
+
+  <rect x="400" y="265" width="90" height="60" rx="4" fill="url(#shmg)" filter="url(#shadow)"/>
+  <text x="445" y="290" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="sans-serif">Proc A</text>
+  <text x="445" y="308" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="sans-serif">mmap(SHM, fd)</text>
+
+  <rect x="570" y="265" width="90" height="60" rx="4" fill="url(#shmg)" filter="url(#shadow)"/>
+  <text x="615" y="290" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="sans-serif">Proc B</text>
+  <text x="615" y="308" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="sans-serif">mmap(SHM, fd)</text>
+
+  <!-- Shared region between them -->
+  <rect x="490" y="280" width="80" height="30" rx="4" fill="#2ac3de" filter="url(#shadow)" opacity="0.7"/>
+  <text x="530" y="299" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold" font-family="sans-serif">SHM Region</text>
+
+  <!-- ===== io_uring ===== -->
+  <rect x="40" y="290" width="300" height="48" rx="4" fill="#1a1b26" stroke="#2ac3de" stroke-width="1.5"/>
+  <text x="190" y="312" text-anchor="middle" fill="#2ac3de" font-size="12" font-weight="bold" font-family="sans-serif">io_uring</text>
+  <text x="190" y="328" text-anchor="middle" fill="#565f89" font-size="9" font-family="sans-serif">Submission + Completion ring pair for async I/O</text>
+
+  <rect x="40" y="350" width="300" height="55" rx="4" fill="url(#ringg)" filter="url(#shadow)"/>
+  <text x="190" y="372" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="sans-serif">SQ: ring[head..tail] → CQ: ring[cq_head..cq_tail]</text>
+  <text x="190" y="392" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">SQE: fd, op, flags, addr, len → CQE: user_data, res</text>
+
+  <!-- ===== Dispatch table ===== -->
+  <rect x="40" y="430" width="640" height="155" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+  <text x="360" y="455" text-anchor="middle" fill="#e0af68" font-size="12" font-weight="bold" font-family="sans-serif">IPC Dispatch Summary</text>
+  <line x1="60" y1="465" x2="660" y2="465" stroke="#3b4261" stroke-width="0.5"/>
+
+  <text x="60" y="483" fill="#7aa2f7" font-size="9" font-family="sans-serif">KERNEL_IPC_CHANNEL_SEND</text>
+  <text x="310" y="483" fill="#c0caf5" font-size="9" font-family="sans-serif">Send message via channel</text>
+  <text x="560" y="483" fill="#565f89" font-size="9" font-family="sans-serif">fd, msg ptr, len</text>
+
+  <text x="60" y="503" fill="#9ece6a" font-size="9" font-family="sans-serif">KERNEL_IPC_CHANNEL_RECV</text>
+  <text x="310" y="503" fill="#c0caf5" font-size="9" font-family="sans-serif">Receive message from channel</text>
+  <text x="560" y="503" fill="#565f89" font-size="9" font-family="sans-serif">fd, buf ptr, len</text>
+
+  <text x="60" y="523" fill="#f7768e" font-size="9" font-family="sans-serif">KERNEL_SIGNAL_KILL</text>
+  <text x="310" y="523" fill="#c0caf5" font-size="9" font-family="sans-serif">Send fatal signal</text>
+  <text x="560" y="523" fill="#565f89" font-size="9" font-family="sans-serif">pid, sig</text>
+
+  <text x="60" y="543" fill="#e0af68" font-size="9" font-family="sans-serif">KERNEL_SIGNAL_SIGQUEUE</text>
+  <text x="310" y="543" fill="#c0caf5" font-size="9" font-family="sans-serif">Queue signal with value</text>
+  <text x="560" y="543" fill="#565f89" font-size="9" font-family="sans-serif">pid, sig, val</text>
+
+  <text x="60" y="563" fill="#2ac3de" font-size="9" font-family="sans-serif">KERNEL_IO_URING_SETUP</text>
+  <text x="310" y="563" fill="#c0caf5" font-size="9" font-family="sans-serif">Allocate SQ/CQ ring pair</text>
+  <text x="560" y="563" fill="#565f89" font-size="9" font-family="sans-serif">size → ring fd</text>
+
+  <text x="60" y="583" fill="#bb9af7" font-size="9" font-family="sans-serif">KERNEL_IO_URING_ENTER</text>
+  <text x="310" y="583" fill="#c0caf5" font-size="9" font-family="sans-serif">Submit SQ entries + wait</text>
+  <text x="560" y="583" fill="#565f89" font-size="9" font-family="sans-serif">ring fd, to_submit, wait</text>
+
+  <!-- Legend -->
+  <rect x="40" y="605" width="640" height="55" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+  <text x="100" y="628" fill="#bb9af7" font-size="10" font-weight="bold" font-family="sans-serif">Channels</text>
+  <text x="210" y="628" fill="#f7768e" font-size="10" font-weight="bold" font-family="sans-serif">Signals</text>
+  <text x="310" y="628" fill="#e0af68" font-size="10" font-weight="bold" font-family="sans-serif">SHM</text>
+  <text x="400" y="628" fill="#2ac3de" font-size="10" font-weight="bold" font-family="sans-serif">io_uring</text>
+  <text x="500" y="633" fill="#c0caf5" font-size="9" font-family="sans-serif">|  All IPC backed by</text>
+  <text x="500" y="650" fill="#c0caf5" font-size="9" font-family="sans-serif">CapabilitySpace checks</text>
+</svg>

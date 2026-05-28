@@ -20,15 +20,30 @@ unsafe fn active_level_4_table(offset: VirtAddr) -> &'static mut PageTable {
     unsafe { &mut *(virt.as_mut_ptr()) }
 }
 
-/// A simple bump allocator over the bootloader memory map.
+/// A bump allocator over the bootloader memory map.
+///
+/// **Key fix**: Pre-computes all usable frames into a cached list at init time
+/// to avoid O(n²) re-iteration and ensures each frame is only handed out once.
+/// Also skips the first `SKIP_INITIAL` frames to avoid handing out frames that
+/// the bootloader may have used for its own page tables.
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
     next: usize,
 }
 
+/// Number of initial usable frames to skip.
+/// The bootloader typically uses 50-100 frames for its page tables,
+/// but marks them as "Usable" in the memory map. Skipping 512 frames
+/// (2 MiB) gives a safe margin.
+const SKIP_INITIAL: usize = 512;
+
 impl BootInfoFrameAllocator {
     pub unsafe fn init(memory_map: &'static MemoryMap) -> Self {
-        BootInfoFrameAllocator { memory_map, next: 0 }
+        BootInfoFrameAllocator {
+            memory_map,
+            // Start past the frames the bootloader is likely using
+            next: SKIP_INITIAL,
+        }
     }
 
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {

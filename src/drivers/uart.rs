@@ -19,11 +19,6 @@ pub fn _print(args: ::core::fmt::Arguments) {
     interrupts::without_interrupts(|| {
         SERIAL1.lock().write_fmt(args).expect("Printing to serial failed");
     });
-    
-    // Also write to VGA for visibility in QEMU
-    interrupts::without_interrupts(|| {
-        crate::drivers::vga::WRITER.lock().write_fmt(args).unwrap();
-    });
 }
 
 #[macro_export]

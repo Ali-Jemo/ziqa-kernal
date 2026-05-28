@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 500" width="750" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="bytesg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="verifyg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="jitg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="execg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="failg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="arrowgreen" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ece6a"/>
+    </marker>
+    <marker id="arrowred" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f7768e"/>
+    </marker>
+  </defs>
+  <rect width="750" height="500" fill="url(#bg)" rx="12"/>
+  <text x="375" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">eBPF Verifier &amp; Execution Pipeline</text>
+
+  <!-- Step 1: Bytecode -->
+  <rect x="250" y="55" width="250" height="50" rx="6" fill="url(#bytesg)" filter="url(#shadow)"/>
+  <text x="375" y="77" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">eBPF Bytecode</text>
+  <text x="375" y="95" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">supplied by userspace program</text>
+
+  <line x1="375" y1="105" x2="375" y2="135" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: Verifier -->
+  <rect x="100" y="135" width="550" height="140" rx="8" fill="#24283b" stroke="#e0af68" stroke-width="2" filter="url(#shadow)"/>
+  <text x="375" y="158" text-anchor="middle" fill="#e0af68" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Verifier</text>
+
+  <rect x="120" y="170" width="510" height="25" rx="4" fill="url(#verifyg)" opacity="0.3"/>
+  <text x="140" y="187" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">1. Structural checks: insn count ≤ 4096 · aligned · no loops</text>
+
+  <rect x="120" y="200" width="510" height="25" rx="4" fill="url(#verifyg)" opacity="0.3"/>
+  <text x="140" y="217" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">2. CFG construction: basic blocks · DFS reachability · dead code removal</text>
+
+  <rect x="120" y="230" width="510" height="25" rx="4" fill="url(#verifyg)" opacity="0.3"/>
+  <text x="140" y="247" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">3. Abstract interpretation: track 64-bit reg state · safe ptr · reject unsafe</text>
+
+  <!-- Decision -->
+  <line x1="200" y1="275" x2="200" y2="315" stroke="#f7768e" stroke-width="2" marker-end="url(#arrowred)"/>
+  <rect x="110" y="315" width="180" height="50" rx="6" fill="url(#failg)" filter="url(#shadow)"/>
+  <text x="200" y="338" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Verification Failed</text>
+  <text x="200" y="355" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="monospace">load denied</text>
+
+  <line x1="375" y1="275" x2="375" y2="315" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="550" y1="275" x2="550" y2="315" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrowgreen)"/>
+
+  <!-- Step 3: JIT / Interpreter -->
+  <rect x="290" y="315" width="170" height="50" rx="6" fill="url(#jitg)" filter="url(#shadow)"/>
+  <text x="375" y="338" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">JIT Compile</text>
+  <text x="375" y="355" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">64 ops → x86_64 native</text>
+
+  <rect x="490" y="315" width="160" height="50" rx="6" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="570" y="338" text-anchor="middle" fill="#565f89" font-size="13" font-family="system-ui, -apple-system, sans-serif">Interpreter</text>
+  <text x="570" y="355" text-anchor="middle" fill="#565f89" font-size="10" font-family="monospace">fetch-decode-exec</text>
+
+  <line x1="375" y1="365" x2="375" y2="400" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="490" y1="340" x2="490" y2="400" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Runtime -->
+  <rect x="200" y="400" width="350" height="50" rx="6" fill="url(#execg)" filter="url(#shadow)"/>
+  <text x="375" y="423" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">eBPF Runtime Execution</text>
+  <text x="375" y="441" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">R0 = return value · helpers · tail calls</text>
+
+  <!-- Register file -->
+  <g transform="translate(600, 400)">
+    <rect x="0" y="0" width="100" height="50" rx="4" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
+    <text x="50" y="15" text-anchor="middle" fill="#3b4261" font-size="8" font-family="monospace">R0–R10</text>
+    <text x="50" y="28" text-anchor="middle" fill="#565f89" font-size="8" font-family="monospace">11 regs</text>
+    <text x="50" y="42" text-anchor="middle" fill="#565f89" font-size="8" font-family="monospace">512B stack</text>
+  </g>
+</svg>

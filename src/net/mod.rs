@@ -1,4 +1,4 @@
-/// ZiqaKernel Network Stack Stub
+/// ZiqaKernel Network Stack
 ///
 /// Provides a minimal packet-oriented network abstraction with:
 /// - A `NetDevice` trait for network interfaces

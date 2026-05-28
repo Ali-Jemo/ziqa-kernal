@@ -83,8 +83,16 @@ extern "x86-interrupt" fn page_fault_handler(
     let current_proc = scheduler.current_task();
     if let Some(proc) = current_proc {
         println!("[MM] Current process {} found", proc.pid.0);
-        if let Some(region) = proc.address_space.find_region(fault_addr) {
-            println!("[MM] Found region for address {:?} with flags {:?}", fault_addr, region.flags);
+        // Check if fault address is within any of the process's memory regions
+        let has_region = proc.regions.iter().any(|opt_region| {
+            opt_region.as_ref().map(|region| {
+                let start = region.start.as_u64();
+                let end = start + region.size as u64;
+                fault_addr.as_u64() >= start && fault_addr.as_u64() < end
+            }).unwrap_or(false)
+        });
+        if has_region {
+            println!("[MM] Found region for address {:?}", fault_addr);
         } else {
             println!("[MM] No region found for address {:?}", fault_addr);
         }
@@ -92,42 +100,96 @@ extern "x86-interrupt" fn page_fault_handler(
     drop(scheduler); // Release lock before potentially blocking or performing complex operations
 
     if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-        // ... (rest unchanged)
         println!("[MM] Protection violation, handling copy-on-write at addr {:?}", fault_addr);
         // TODO: Implement copy-on-write
     } else {
         // Page not present - demand paging opportunity
         println!("[MM] Page not present, attempting demand paging at addr {:?}", fault_addr);
-        
-        let scheduler = crate::process::scheduler::SCHEDULER.lock();
-        if let Some(proc) = scheduler.current_task() {
-            if let Some(_region) = proc.address_space.find_region(fault_addr) {
-                if let Some(frame) = crate::memory::FRAME_ALLOCATOR.lock().as_mut().unwrap().allocate_frame() {
-                    let page = x86_64::structures::paging::Page::containing_address(fault_addr);
-                    let flags = x86_64::structures::paging::PageTableFlags::PRESENT | 
-                                x86_64::structures::paging::PageTableFlags::WRITABLE | 
-                                x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
-                    
-                    unsafe {
-                        // We need access to the page table mapper here. 
-                        // Using the global KERNEL_MAPPER for now as a placeholder.
-                        let mut mapper = crate::memory::paging::KERNEL_MAPPER.lock();
-                        if let Some(ref mut m) = *mapper {
-                             m.mapper.map_to(page, frame, flags, &mut *crate::memory::FRAME_ALLOCATOR.lock().as_mut().unwrap())
-                                .expect("Failed to map demand page")
-                                .flush();
-                             println!("[MM] Demand page successfully mapped");
-                             return; // Success
-                        }
-                    }
+
+        // Extract region + binary data info while holding the scheduler lock,
+        // then drop it before taking memory locks to avoid deadlocks.
+        let demand_info = {
+            let scheduler = crate::process::scheduler::SCHEDULER.lock();
+            if let Some(proc) = scheduler.current_task() {
+                let region_entry = proc.regions.iter().find(|opt_region| {
+                    opt_region.as_ref().map(|region| {
+                        let start = region.start.as_u64();
+                        let end = start + region.size as u64;
+                        fault_addr.as_u64() >= start && fault_addr.as_u64() < end
+                    }).unwrap_or(false)
+                });
+                if let Some(Some(region)) = region_entry {
+                    // Clone what we need before dropping the lock
+                    let binary_ptr = if !proc.binary_data.is_empty() {
+                        Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
+                    } else {
+                        None
+                    };
+                    Some((region.start.as_u64(), region.file_offset, binary_ptr))
                 } else {
-                    println!("[MM] Out of memory - frame allocation failed");
+                    println!("[MM] Invalid access - no region found");
+                    None
                 }
             } else {
-                println!("[MM] Invalid access - no region found");
+                None
+            }
+        }; // scheduler lock dropped here
+
+        if let Some((region_start, file_offset, binary_info)) = demand_info {
+            let page = x86_64::structures::paging::Page::containing_address(fault_addr);
+            let flags = x86_64::structures::paging::PageTableFlags::PRESENT |
+                        x86_64::structures::paging::PageTableFlags::WRITABLE |
+                        x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+
+            // Hold a SINGLE lock on the frame allocator for the entire operation.
+            // This prevents map_to from getting frames that conflict with our frame.
+            let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+            let fa = fa_guard.as_mut().unwrap();
+
+            if let Some(frame) = fa.allocate_frame() {
+                unsafe {
+                    let mut mapper = crate::memory::paging::KERNEL_MAPPER.lock();
+                    if let Some(ref mut m) = *mapper {
+                        // Use map_to with the SAME frame allocator reference —
+                        // no double locking, no frame reuse.
+                        match m.mapper.map_to(page, frame, flags, fa) {
+                            Ok(flusher) => {
+                                flusher.flush();
+
+                                // Copy ELF binary data into the newly mapped page
+                                if let Some((bin_ptr, bin_len)) = binary_info {
+                                    let page_addr = page.start_address().as_u64();
+                                    let in_region_off = page_addr.saturating_sub(region_start);
+                                    let binary_off = file_offset as usize + in_region_off as usize;
+                                    let copy_size = 4096usize.min(
+                                        bin_len.saturating_sub(binary_off)
+                                    );
+                                    if copy_size > 0 {
+                                        core::ptr::copy_nonoverlapping(
+                                            bin_ptr.add(binary_off),
+                                            page_addr as *mut u8,
+                                            copy_size,
+                                        );
+                                        println!("[MM] Copied {} bytes from binary to {:x}", copy_size, page_addr);
+                                    }
+                                }
+
+                                println!("[MM] Demand page mapped + populated");
+                                return;
+                            }
+                            Err(_e) => {
+                                // Page was already mapped (race or stale TLB).
+                                // This is the panic you were seeing — now handled gracefully.
+                                println!("[MM] Page already mapped at {:?}, skipping", fault_addr);
+                                return;
+                            }
+                        }
+                    }
+                }
+            } else {
+                println!("[MM] Out of memory - frame allocation failed");
             }
         }
-        drop(scheduler);
     }
     
     // For now halt on unhandled faults
@@ -161,13 +223,48 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
 
 // ── int 0x80 syscall gate ──
 
-/// Called when user-mode code executes `int 0x80`.
-/// Syscall number in RAX; args in RBX, RCX, RDX, RSI, RDI, RBP (Linux i386 convention).
-/// For x86_64 Linux ABI (via `syscall` instruction) we handle it the same way here.
+/// Called when `int 0x80` is executed.
+/// Reads registers directly via inline asm (first statement before any clobbering)
+/// and dispatches through the ABI-aware syscall dispatch.
+/// Return value is lost (RAX is restored by x86-interrupt epilogue); for testing
+/// the test binary doesn't check return values.
 extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
-    // In a full implementation we'd read RAX from the saved frame and dispatch.
-    // The ABI registry dispatch happens at a higher level (abi::syscall::dispatch_syscall).
-    // This stub acknowledges the interrupt and returns.
-    println!("[ZIQA] int 0x80 syscall gate hit");
+    let num: u64;
+    let mut args: [u64; 6] = [0; 6];
+    unsafe {
+        core::arch::asm!(
+            "mov {num}, rax",
+            "mov {a0}, rdi",
+            "mov {a1}, rsi",
+            "mov {a2}, rdx",
+            "mov {a3}, r10",
+            "mov {a4}, r8",
+            "mov {a5}, r9",
+            num = out(reg) num,
+            a0 = out(reg) args[0],
+            a1 = out(reg) args[1],
+            a2 = out(reg) args[2],
+            a3 = out(reg) args[3],
+            a4 = out(reg) args[4],
+            a5 = out(reg) args[5],
+            options(preserves_flags)
+        );
+    }
+
+    let registry = crate::init_abi_registry();
+    let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(proc) = scheduler.current_task_mut() {
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
+        match crate::abi::syscall::dispatch_syscall(&registry, &mut ctx) {
+            Ok(v) => {
+                println!("[ZIQA] syscall {} -> OK({})", num, v);
+            }
+            Err(e) => {
+                println!("[ZIQA] syscall {} -> ERR({:?})", num, e);
+            }
+        }
+    } else {
+        println!("[ZIQA] int 0x80 but no current process");
+    }
     // No EOI needed — software interrupt, not PIC-sourced.
 }

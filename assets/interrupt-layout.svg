@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 320" width="700" height="320">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="exceptg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="picg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="ioapicg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="syscallg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="freeg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="700" height="320" fill="url(#bg)" rx="12"/>
+  <text x="350" y="28" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Interrupt Vector Layout</text>
+
+  <!-- Vector bar -->
+  <g transform="translate(50, 50)">
+    <!-- Full bar background -->
+    <rect x="0" y="0" width="600" height="220" rx="6" fill="none" stroke="#3b4261" stroke-width="1.5"/>
+
+    <!-- Row: CPU Exceptions (0-31) -->
+    <rect x="0" y="0" width="600" height="50" rx="0" fill="url(#exceptg)" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="600" height="50" rx="6" fill="url(#exceptg)" opacity="0.3"/>
+    <text x="300" y="20" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Vectors 0–31: CPU Exceptions</text>
+    <text x="300" y="38" text-anchor="middle" fill="#1a1b26" font-size="11" font-family="system-ui, -apple-system, sans-serif">#DE  #DB  #BP  #OF  #BR  #UD  #NM  #DF  #TS  #NP  #SS  #GP  #PF  #MF  #AC  #MC  #XM</text>
+
+    <!-- Row: PIC (32-47) -->
+    <rect x="0" y="55" width="600" height="45" rx="0" fill="url(#picg)" filter="url(#shadow)"/>
+    <rect x="0" y="55" width="600" height="45" fill="url(#picg)" opacity="0.25"/>
+    <text x="300" y="73" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Vectors 32–39: PIC 1 (IRQ 0–7)</text>
+    <text x="300" y="90" text-anchor="middle" fill="#1a1b26" font-size="11" font-family="system-ui, -apple-system, sans-serif">Vectors 40–47: PIC 2 (IRQ 8–15)</text>
+
+    <!-- Row: IOAPIC (48-127) -->
+    <rect x="0" y="105" width="600" height="45" rx="0" fill="url(#ioapicg)" filter="url(#shadow)"/>
+    <rect x="0" y="105" width="600" height="45" fill="url(#ioapicg)" opacity="0.25"/>
+    <text x="300" y="123" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Vectors 48–127: IOAPIC / MSI</text>
+    <text x="300" y="140" text-anchor="middle" fill="#1a1b26" font-size="11" font-family="system-ui, -apple-system, sans-serif">Reserved for device interrupts (PCIe, AHCI, virtio, etc.)</text>
+
+    <!-- Row: Syscall (128) -->
+    <rect x="0" y="155" width="600" height="30" rx="0" fill="url(#syscallg)" filter="url(#shadow)"/>
+    <text x="300" y="175" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Vector 128 (0x80): Syscall Gate — int 0x80</text>
+
+    <!-- Row: Free (129-255) -->
+    <rect x="0" y="190" width="600" height="25" rx="0" fill="url(#freeg)" opacity="0.3" filter="url(#shadow)"/>
+    <text x="300" y="207" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">Vectors 129–255: Available / APIC thermals / IPI / spurious</text>
+  </g>
+</svg>

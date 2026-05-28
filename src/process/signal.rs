@@ -45,6 +45,10 @@ pub struct SignalState {
     pub blocked: u32,
     /// Per-signal action table
     pub actions: [SignalAction; sig::MAX as usize],
+    /// Pending signal number to deliver (when scheduled)
+    pub pending_signal: u8,
+    /// Signal handler address
+    pub handler_addr: u64,
 }
 
 impl SignalState {
@@ -53,6 +57,8 @@ impl SignalState {
             pending: 0,
             blocked: 0,
             actions: [SignalAction::Default; sig::MAX as usize],
+            pending_signal: 0,
+            handler_addr: 0,
         }
     }
 
@@ -109,10 +115,74 @@ pub fn default_action(signum: u8) -> DefaultDisposition {
     }
 }
 
+/// Default disposition for signals
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultDisposition {
     Terminate,
     CoreDump,
     Ignore,
     Stop,
+}
+
+/// x86_64 Signal frame layout (Linux-compatible)
+/// 
+/// When a signal is delivered, the kernel:
+/// 1. Pushes a sigframe onto the user stack
+/// 2. Modifies the process CPU state to jump to the handler
+/// 3. Sets sigreturn as the return address
+#[repr(C, packed)]
+pub struct SignalFrame {
+    /// Return address (points to sigreturn code)
+    pub return_ip: u64,
+    /// Signal number
+    pub signal: u64,
+    /// CPU state (restored by sigreturn)
+    pub cpu_state: super::CpuState,
+}
+
+impl SignalFrame {
+    pub const fn new(signal: u8, cpu: &super::CpuState) -> Self {
+        Self {
+            return_ip: 0, // Will be set to sigreturn trampoline
+            signal: signal as u64,
+            cpu_state: *cpu,
+        }
+    }
+}
+
+/// Deliver a signal to a process by setting up the signal frame
+/// Returns true if the signal was delivered (context modified)
+pub fn deliver_signal_to_user(pid: super::Pid) -> bool {
+    // Find the process
+    let result = crate::process::scheduler::with_process_mut(pid, |p| {
+        // Get pending signal info
+        let sig = p.signals.dequeue();
+        if sig == 0 {
+            return None;
+        }
+        
+        let action = p.signals.get_action(sig);
+        
+        match action {
+            SignalAction::Ignore => None,
+            SignalAction::Handler(handler_addr) => {
+                // Store signal info for the handler
+                crate::println!("[SIGNAL] Delivering signal {} to PID {}, handler at 0x{:x}", 
+                    sig, pid.0, handler_addr);
+
+                // Store in process state for scheduler to pick up
+                p.signals.pending_signal = sig;
+                p.signals.handler_addr = handler_addr;
+
+                Some(())
+            }
+
+            SignalAction::Default => {
+                // Default action is handled by deliver_signals()
+                None
+            }
+        }
+    });
+    
+    result.is_some()
 }

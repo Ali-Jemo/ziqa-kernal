@@ -136,14 +136,29 @@ pub fn dispatch_syscall(
 
         nr::MMAP => {
             // args: [addr_hint, length, prot, flags, fd, offset]
-            let length = ctx.args[1] as usize;
+            let addr_hint = ctx.args[0];
+            let length    = ctx.args[1] as usize;
+            let _prot     = ctx.args[2];
+            let flags     = ctx.args[3];
+
             if length == 0 {
                 return Err(crate::abi::AbiError::Other("mmap: zero length"));
             }
-            use crate::memory::{MemoryRegion, paging::{MemoryRegionFlags}};
+
+            use crate::memory::{MemoryRegion, paging::MemoryRegionFlags};
             use crate::memory::VirtAddr as KVirtAddr;
-            // Allocate a virtual region above 0x1000_0000 based on region count
-            let base = 0x1000_0000u64 + (ctx.process.region_count as u64) * 0x10_0000;
+
+            // MAP_FIXED (0x10): use addr_hint exactly; otherwise bump-allocate
+            const MAP_FIXED: u64 = 0x10;
+            let base = if flags & MAP_FIXED != 0 && addr_hint != 0 {
+                addr_hint
+            } else {
+                // Align bump to page boundary
+                let b = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
+                ctx.process.mmap_bump = b + length as u64;
+                b
+            };
+
             let region = MemoryRegion {
                 start: KVirtAddr::new(base),
                 size: length,
@@ -173,19 +188,6 @@ pub fn dispatch_syscall(
                 }
             }
             return Err(crate::abi::AbiError::Other("munmap: region not found"));
-        }
-
-        nr::WRITE => {
-            let fd    = ctx.args[0];
-            let _buf  = ctx.args[1] as *const u8;
-            let count = ctx.args[2];
-            // fd 1 = stdout, fd 2 = stderr → emit via serial
-            if fd == 1 || fd == 2 {
-                // In a real kernel we'd copy from user-space; here we just log the count
-                klog_syscall("write", count);
-                return Ok(count);
-            }
-            // Other fds: delegate to ABI plugin
         }
 
         _ => {}

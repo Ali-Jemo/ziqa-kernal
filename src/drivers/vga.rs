@@ -87,11 +87,24 @@ impl Writer {
 
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        for byte in s.bytes() {
-            match byte {
-                0x20..=0x7e | b'\n' => self.write_byte(byte),
-                _ => self.write_byte(0xfe),
-            }
+        for c in s.chars() {
+            let byte = match c {
+                '\n' => { self.newline(); continue; }
+                '\r' => continue,
+                // CP437 double-line box drawing
+                '═' => 0xCD, '║' => 0xBA,
+                '╔' => 0xC9, '╗' => 0xBB, '╚' => 0xC8, '╝' => 0xBC,
+                // CP437 block elements
+                '█' => 0xDB, '▀' => 0xDD, '▄' => 0xDC,
+                // CP437 shade
+                '░' => 0xB0, '▒' => 0xB1, '▓' => 0xB2,
+                // CP437 line drawing (single)
+                '┌' => 0xDA, '┐' => 0xBF, '└' => 0xC0, '┘' => 0xD9,
+                '─' => 0xC4, '│' => 0xB3,
+                _ if c.is_ascii() => c as u8,
+                _ => { self.write_byte(0xFE); continue; }
+            };
+            self.write_byte(byte);
         }
         Ok(())
     }
@@ -110,6 +123,16 @@ pub fn print(args: fmt::Arguments) {
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
         WRITER.lock().write_fmt(args).unwrap();
+    });
+}
+
+pub fn print_raw(bytes: &[u8]) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        let mut writer = WRITER.lock();
+        for &byte in bytes {
+            writer.write_byte(byte);
+        }
     });
 }
 

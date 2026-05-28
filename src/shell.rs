@@ -35,12 +35,16 @@ impl Shell {
                     "help"    => self.cmd_help(),
                     "uptime"  => self.cmd_uptime(),
                     "klog"    => self.cmd_klog(parts.get(1).copied().unwrap_or("info")),
-                    "spawn"   => self.cmd_spawn(),
+                    "spawn"   => self.cmd_spawn(parts.get(1).copied()),
+                    "spawnelf" => self.cmd_spawn_elf(parts.get(1).copied()),
+                    "exec"    => self.cmd_exec(parts.get(1).copied()),
                     "ps"      => self.cmd_ps(),
                     "kill"    => self.cmd_kill(parts.get(1).copied(), parts.get(2).copied()),
                     "sleep"   => self.cmd_sleep(parts.get(1).copied()),
                     "meminfo" => self.cmd_meminfo(),
                     "netstat" => self.cmd_netstat(),
+                    "doom"    => self.cmd_doom(parts.get(1).copied()),
+                    "tetris"  => self.cmd_tetris(),
                     "reboot"  => self.cmd_reboot(),
                     "clear"   => { for _ in 0..25 { println!(""); } },
                     "echo"    => println!("{}", parts.get(1).copied().unwrap_or("")),
@@ -53,8 +57,28 @@ impl Shell {
 
     fn read_line(&mut self) {
         use crate::drivers::keyboard::read_stdin;
-        let n = read_stdin(&mut self.input_buf);
-        self.cursor = n;
+        let mut idx = 0;
+        loop {
+            let mut byte = [0u8; 1];
+            if read_stdin(&mut byte) > 0 {
+                let b = byte[0];
+                if b == b'\n' || b == b'\r' {
+                    self.cursor = idx;
+                    break;
+                } else if b == 8 || b == 127 {
+                    if idx > 0 {
+                        idx -= 1;
+                    }
+                } else {
+                    if idx < self.input_buf.len() - 1 {
+                        self.input_buf[idx] = b;
+                        idx += 1;
+                    }
+                }
+            } else {
+                x86_64::instructions::hlt();
+            }
+        }
     }
 
     fn cmd_help(&self) {
@@ -62,13 +86,17 @@ impl Shell {
         println!("  help              - this message");
         println!("  uptime            - kernel uptime in ms");
         println!("  ps                - list processes");
-        println!("  spawn             - spawn a new process");
+        println!("  spawn [path]      - spawn process (skeleton, or from VFS path)");
+        println!("  spawnelf <path>   - spawn process from VFS ELF binary");
+        println!("  exec <pid>        - execute process entry point (runs in kernel)");
         println!("  kill <pid> [sig]  - send signal to process (default: SIGTERM=15)");
         println!("  sleep <ms>        - sleep current shell process N milliseconds");
         println!("  meminfo           - heap memory statistics");
         println!("  netstat           - network device statistics");
         println!("  klog [level]      - dump kernel log (debug/info/error)");
         println!("  reboot            - reboot the system");
+        println!("  doom [steps]      - run DOOM fire demo (default: 60 steps)");
+        println!("  tetris            - run graphical Tetris game on VGA console");
         println!("  echo <text>       - print text");
         println!("  clear             - clear screen");
     }
@@ -88,15 +116,62 @@ impl Shell {
         crate::klog::KLOG.lock().dump_level(level);
     }
 
-    fn cmd_spawn(&self) {
-        let pid = crate::process::scheduler::spawn(
-            AbiKind::LinuxElf,
-            VirtAddr::new(0x400000),
-            VirtAddr::new(0x7fff_ffff_000),
-        );
-        match pid {
-            Some(p) => println!("Spawned PID={}", p.0),
-            None    => println!("spawn: no free slots"),
+    fn cmd_spawn(&self, path: Option<&str>) {
+        if let Some(p) = path {
+            self.cmd_spawn_elf(Some(p))
+        } else {
+            let pid = crate::process::scheduler::spawn(
+                AbiKind::LinuxElf,
+                VirtAddr::new(0x400000),
+                VirtAddr::new(0x7fff_ffff_000),
+            );
+            match pid {
+                Some(p) => println!("Spawned PID={} (skeleton)", p.0),
+                None    => println!("spawn: no free slots"),
+            }
+        }
+    }
+
+    fn cmd_spawn_elf(&self, path: Option<&str>) {
+        let p = match path {
+            Some(s) => s,
+            None => { println!("Usage: spawnelf <path>"); return; }
+        };
+        let mut buf = [0u8; 65536];
+        match crate::fs::vfs::VFS.lock().read_raw(p, &mut buf, 0) {
+            Ok(n) if n > 0 => {
+                let data = &buf[..n];
+                match crate::process::scheduler::spawn_elf(data) {
+                    Some(pid) => println!("Spawned PID={} from '{}'", pid.0, p),
+                    None => println!("spawnelf: failed to spawn from '{}'", p),
+                }
+            }
+            _ => println!("spawnelf: file '{}' not found in VFS", p),
+        }
+    }
+
+    fn cmd_exec(&self, pid_str: Option<&str>) {
+        let pid_val = match pid_str.and_then(|s| s.parse::<u64>().ok()) {
+            Some(v) => v,
+            None => { println!("Usage: exec <pid>"); return; }
+        };
+        let pid = crate::process::Pid(pid_val);
+
+        let entry_vaddr = {
+            let mut sched = crate::process::scheduler::SCHEDULER.lock();
+            if !sched.set_current(pid) {
+                println!("exec: no process with PID {}", pid_val);
+                return;
+            }
+            let proc = sched.current_task().unwrap();
+            let entry = proc.entry_point.as_u64();
+            println!("[EXEC] Switching to PID {} entry=0x{:x}", pid_val, entry);
+            entry
+        };
+
+        unsafe {
+            let func: extern "C" fn() = core::mem::transmute(entry_vaddr);
+            func();
         }
     }
 
@@ -157,6 +232,15 @@ impl Shell {
         }
         // If that didn't work, triple-fault
         loop { x86_64::instructions::hlt(); }
+    }
+
+    fn cmd_doom(&self, steps_str: Option<&str>) {
+        let steps: usize = steps_str.and_then(|s| s.parse().ok()).unwrap_or(60);
+        crate::doom::run(steps);
+    }
+
+    fn cmd_tetris(&self) {
+        crate::tetris::run();
     }
 }
 

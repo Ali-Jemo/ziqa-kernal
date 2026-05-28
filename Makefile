@@ -7,6 +7,7 @@ SHELL := /bin/zsh
 # Build targets
 TARGET := x86_64-unknown-none
 BIN := target/$(TARGET)/debug/ziqa-kernel
+BOOT_IMAGE := target/$(TARGET)/debug/bootimage-ziqa-kernel.bin
 
 # Default build
 default: build
@@ -20,8 +21,8 @@ release:
 	cargo build --release --bin ziqa-kernel
 
 # Run on QEMU
-run: build
-	qemu-system-x86_64 -drive format=raw,file=$(BIN) -m 256M -display sdl
+run: boot
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -m 512M -serial stdio -display none
 
 # Clean build artifacts
 clean:
@@ -41,8 +42,7 @@ inc:
 
 # Boot image
 boot: build
-	bootimage create ./bootimage.toml 2>/dev/null || true
-	bootimage build ./bootimage.toml 2>/dev/null || true
+	cargo bootimage
 
 # Install sccache for faster rebuilds
 install-sccache:
@@ -56,3 +56,11 @@ fast:
 # Update dependencies
 update:
 	cargo update
+
+# Check Zig code compiles independently
+zig-check:
+	zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector -femit-bin=/dev/null 2>&1 || zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector
+
+# Run on QEMU with graphical display (for DOOM fire visual)
+run-gui: boot
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -m 512M -serial stdio -display gtk

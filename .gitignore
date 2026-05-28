@@ -1,0 +1,25 @@
+# Build artifacts
+/target
+/target-*
+/target-alt
+/target-verify
+/build
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Aider files
+.aider*
+
+# Debug logs
+*.log
+
+# Graphify output
+/graphify-out
+
+# Cargo lock (optional - uncomment if you don't want to track it)
+# Cargo.lock

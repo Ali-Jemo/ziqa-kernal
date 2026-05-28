@@ -4,6 +4,8 @@
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 use ziqa_kernel::println;
+use ziqa_kernel::drivers::vga;
+use ziqa_kernel::drivers::vga::Color;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::ebpf::{BpfInstruction, op as bpf_op, verifier::BpfVerifier, vm::BpfVm};
 use ziqa_kernel::io::uring::{IoUring, SqEntry, op as io_op};
@@ -20,39 +22,81 @@ use spin::Mutex;
 
 extern crate alloc;
 
+fn set_fg(c: Color) {
+    vga::WRITER.lock().set_color(c, Color::Black);
+}
+
+fn section(title: &str) {
+    set_fg(Color::LightCyan);
+    println!("");
+    println!("── {} ──", title);
+    set_fg(Color::White);
+}
+
+fn print_banner() {
+    vga::clear_screen();
+
+    set_fg(Color::LightCyan);
+    println!("╔══════════════════════════════════════════════════════════════════════════════╗");
+
+    set_fg(Color::White);
+    println!("║                                                                              ║");
+
+    set_fg(Color::LightGreen);
+    println!("║                         ░░  ZIQA KERNEL  ░░  v1.0                            ║");
+
+    set_fg(Color::Yellow);
+    println!("║                       ░░░░  From scratch, for learning  ░░░░                  ║");
+
+    set_fg(Color::White);
+    println!("║                                                                              ║");
+
+    set_fg(Color::LightCyan);
+    println!("║        ▓ 23 modules   ▓ 50+ syscalls   ▓ MLFQ sched   ▓ eBPF VM              ║");
+    println!("║        ▓ DRM/KMS      ▓ io_uring       ▓ IPC/SHM       ▓ Capability sec       ║");
+
+    set_fg(Color::White);
+    println!("║                                                                              ║");
+
+    set_fg(Color::LightCyan);
+    println!("╚══════════════════════════════════════════════════════════════════════════════╝");
+
+    set_fg(Color::White);
+    println!();
+}
+
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    // Raw serial write to confirm execution
+    unsafe {
+        let mut port = x86_64::instructions::port::Port::<u8>::new(0x3F8);
+        for &b in b"BOOTING..." { port.write(b); }
+    }
+
+    // Display banner first, then init below
+    print_banner();
+
+    set_fg(Color::LightGreen);
     ziqa_kernel::init(boot_info);
+    set_fg(Color::White);
 
-    // ── VGA banner ────────────────────────────────────────────────────────────
-    ziqa_kernel::drivers::vga::WRITER.lock().set_color(
-        ziqa_kernel::drivers::vga::Color::LightCyan,
-        ziqa_kernel::drivers::vga::Color::Black,
-    );
-
-    ziqa_kernel::drivers::vga::WRITER.lock().set_color(
-        ziqa_kernel::drivers::vga::Color::White,
-        ziqa_kernel::drivers::vga::Color::Black,
-    );
-
-    println!("[ZIQA] ZiqaKernel v1.0: fd table + pipe + exec + net Edition");
-
-    // ── klog: set level and log boot messages ─────────────────────────────────
     KLOG.lock().min_level = Level::Debug;
     ziqa_kernel::klog!(Level::Info, "ZiqaKernel v1.0 booting");
-    ziqa_kernel::klog!(Level::Info, "Hardware: GDT, IDT, PIC, Heap initialized");
 
-    // ── Run kernel self-tests ─────────────────────────────────────────────────
-    println!("\n━━━ Kernel Self-Tests ━━━");
-    ziqa_kernel::tests::run_all();
-    println!();
-
-    // ── Network Stack ─────────────────────────────────────────────────────────
+    set_fg(Color::LightGreen);
     ziqa_kernel::net::init();
+    set_fg(Color::White);
+
+    // ── Self-tests ──
+    section("Self-tests");
+    ziqa_kernel::tests::run_all();
+
+    // ── Services ──
+    section("Services");
     ziqa_kernel::klog!(Level::Info, "Network stack initialized");
 
-    // ── VFS & RamFS Setup ─────────────────────────────────────────────────────
+    // VFS & RamFS Setup
     {
         let mut vfs = VFS.lock();
         let demo_file = Arc::new(Mutex::new(RamFile::new()));
@@ -62,23 +106,31 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
             let _ = ziqa_kernel::fs::File::write(&mut *file, greeting, 0);
         }
         vfs.mount("/etc/motd", demo_file);
-        ziqa_kernel::klog!(Level::Info, "VFS: mounted RamFS at /etc/motd");
-    }
 
-    // ── Native Persistent Filesystem (ZiqaFS) ─────────────────────────────────
+        let test_elf = Arc::new(Mutex::new(RamFile::from_bytes(
+            include_bytes!("../assets/test_elf.bin")
+        )));
+        vfs.mount("/bin/test", test_elf);
+    }
+    println!(" ~ VFS .................................. /etc/motd, /bin/test mounted");
+    ziqa_kernel::klog!(Level::Info, "VFS: mounted RamFS at /etc/motd and /bin/test");
+
+    // ZiqaFS
     {
         let virtio_disk = Arc::new(VirtioBlock::new(0x10001000, 2048));
         let ziqafs = ZiqaFs::new(virtio_disk).expect("Failed to init ZiqaFS");
         let block_size = ziqafs.superblock.block_size;
         let total_blocks = ziqafs.superblock.total_blocks;
+        println!(" ~ ZiqaFS ............................. block_size={}, {} blocks",
+            block_size, total_blocks);
         ziqa_kernel::klog!(Level::Info, "ZiqaFS: block_size={} total_blocks={}",
             block_size, total_blocks);
-        println!("[ZiqaFS] block_size={} total_blocks={}",
-            block_size, total_blocks);
     }
+    set_fg(Color::White);
 
-    // ── MLFQ Scheduler + Process spawn ───────────────────────────────────────
-    println!("\n━━━ Process & Signal Demo ━━━");
+    // ── Verification ──
+    section("Verification");
+
     let pid = SCHEDULER.lock().spawn(
         AbiKind::LinuxElf,
         VirtAddr::new(0x400000),
@@ -86,40 +138,51 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     );
 
     if let Some(p) = pid {
-        println!("  [OK] Spawned process PID={}", p.0);
+        println!(" ~ Process .............................. PID {} spawned", p.0);
         ziqa_kernel::klog!(Level::Info, "Spawned PID={}", p.0);
 
-        // Grant File capability
         ziqa_kernel::process::scheduler::with_process_mut(p, |proc| {
             proc.capabilities.grant(ResourceKind::File, Permissions::full(), 0);
         });
 
-        // ── Signal demo ───────────────────────────────────────────────────────
         demo_signals(p);
-
-        // ── Syscall demo ──────────────────────────────────────────────────────
         demo_syscalls(p);
-
-        // ── eBPF & io_uring ───────────────────────────────────────────────────
         demo_advanced_subsystems(p);
-
-        // ── IPC & Shared Memory demo ──────────────────────────────────────────
         demo_ipc_shm(p);
-
-        // ── fork / waitpid demo ───────────────────────────────────────────────
         demo_fork_waitpid(p);
     }
 
-    // ── Timer / uptime ────────────────────────────────────────────────────────
-    println!("\n━━━ Timer / Uptime ━━━");
+    // ── Startup ──
+    section("Startup");
+
+    set_fg(Color::LightGreen);
     let uptime = ziqa_kernel::timer::uptime_ms();
-    println!("  Uptime: {} ms ({} ticks)", uptime, ziqa_kernel::timer::uptime_ticks());
+    let ticks = ziqa_kernel::timer::uptime_ticks();
+    println!(" ~ Timer ................................ {} ms ({} ticks)", uptime, ticks);
     ziqa_kernel::klog!(Level::Info, "Uptime at end of init: {} ms", uptime);
 
-    // ── klog dump ─────────────────────────────────────────────────────────────
-    println!("\n━━━ Kernel Log (last {} entries) ━━━", KLOG.lock().count());
-    KLOG.lock().dump_level(Level::Info);
+    // Auto-exec embedded test ELF
+    {
+        let binary = include_bytes!("../assets/test_elf.bin");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(binary) {
+            let entry = {
+                let mut sched = SCHEDULER.lock();
+                sched.set_current(pid);
+                sched.current_task().map(|p| p.entry_point.as_u64()).unwrap_or(0)
+            };
+            if entry != 0 {
+                println!(" ~ Test ELF ............................ PID {} at 0x{:x}", pid.0, entry);
+            }
+        }
+    }
+    set_fg(Color::White);
 
+    // Ready
+    println!("");
+    set_fg(Color::LightGreen);
+    println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");
+    set_fg(Color::White);
+    println!("");
 
     ziqa_kernel::shell::start();
 }
@@ -259,42 +322,46 @@ fn demo_fork_waitpid(parent: Pid) {
 
     let registry = ziqa_kernel::init_abi_registry();
 
-    ziqa_kernel::process::scheduler::with_process_mut(parent, |proc| {
-        use ziqa_kernel::abi::syscall::{SyscallContext, nr};
-
-        // fork()
-        let mut ctx = SyscallContext::new(nr::FORK, [0; 6], proc);
-        let child_pid = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx);
-        println!("  fork() -> child PID={:?}", child_pid);
-
-        // mmap(0, 4096, PROT_RW, MAP_ANON, -1, 0)
-        let mut ctx2 = SyscallContext::new(
-            nr::MMAP,
-            [0, 4096, 3, 0x22, u64::MAX, 0],
-            proc,
-        );
-        let addr = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx2);
-        println!("  mmap(4096) -> addr={:?}", addr);
-
-        // munmap the region we just mapped
-        if let Ok(a) = addr {
-            let mut ctx3 = SyscallContext::new(nr::MUNMAP, [a, 4096, 0, 0, 0, 0], proc);
-            let r = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx3);
-            println!("  munmap(0x{:x}) -> {:?}", a, r);
+    // Safely acquire a raw pointer to the parent process under a brief lock,
+    // then release the scheduler lock before executing syscalls that will lock it.
+    let parent_ptr = {
+        let mut sched = SCHEDULER.lock();
+        if let Some(p) = sched.get_process_mut(parent) {
+            p as *mut ziqa_kernel::process::Process
+        } else {
+            println!("  [FAIL] Parent process not found");
+            return;
         }
-    });
+    };
+    let proc = unsafe { &mut *parent_ptr };
+
+    use ziqa_kernel::abi::syscall::{SyscallContext, nr};
+
+    // fork()
+    let mut ctx = SyscallContext::new(nr::FORK, [0; 6], proc);
+    let child_pid = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx);
+    println!("  fork() -> child PID={:?}", child_pid);
+
+    // mmap(0, 4096, PROT_RW, MAP_ANON, -1, 0)
+    let mut ctx2 = SyscallContext::new(
+        nr::MMAP,
+        [0, 4096, 3, 0x22, u64::MAX, 0],
+        proc,
+    );
+    let addr = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx2);
+    println!("  mmap(4096) -> addr={:?}", addr);
+
+    // munmap the region we just mapped
+    if let Ok(a) = addr {
+        let mut ctx3 = SyscallContext::new(nr::MUNMAP, [a, 4096, 0, 0, 0, 0], proc);
+        let r = ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx3);
+        println!("  munmap(0x{:x}) -> {:?}", a, r);
+    }
 
     // Exit the child so waitpid can reap it
     if let Ok(child_pid_val) = {
-        let mut tmp = 0u64;
-        ziqa_kernel::process::scheduler::with_process_mut(parent, |proc| {
-            use ziqa_kernel::abi::syscall::{SyscallContext, nr};
-            let registry2 = ziqa_kernel::init_abi_registry();
-            let mut ctx = SyscallContext::new(nr::FORK, [0; 6], proc);
-            let r = ziqa_kernel::abi::syscall::dispatch_syscall(&registry2, &mut ctx);
-            if let Ok(v) = r { tmp = v; }
-        });
-        if tmp > 0 { Ok::<u64, ()>(tmp) } else { Err(()) }
+        let mut ctx_fork = SyscallContext::new(nr::FORK, [0; 6], proc);
+        ziqa_kernel::abi::syscall::dispatch_syscall(&registry, &mut ctx_fork)
     } {
         // Exit the child
         SCHEDULER.lock().exit_process(Pid(child_pid_val), 0);

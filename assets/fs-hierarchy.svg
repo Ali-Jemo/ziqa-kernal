@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 350" width="700" height="350">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="rootg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="ramg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="ziqag" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="procg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="devg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="700" height="350" fill="url(#bg)" rx="12"/>
+  <text x="350" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Filesystem Hierarchy</text>
+
+  <!-- Root (VFS) -->
+  <rect x="275" y="55" width="150" height="45" rx="22" fill="url(#rootg)" filter="url(#shadow)"/>
+  <text x="350" y="78" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Root (VFS)</text>
+  <text x="350" y="94" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="monospace">/</text>
+
+  <!-- Tree branches -->
+  <line x1="350" y1="100" x2="350" y2="125" stroke="#3b4261" stroke-width="2"/>
+  <line x1="120" y1="125" x2="580" y2="125" stroke="#3b4261" stroke-width="2"/>
+  <line x1="120" y1="125" x2="120" y2="145" stroke="#2ac3de" stroke-width="2"/>
+  <line x1="270" y1="125" x2="270" y2="145" stroke="#9ece6a" stroke-width="2"/>
+  <line x1="430" y1="125" x2="430" y2="145" stroke="#e0af68" stroke-width="2"/>
+  <line x1="580" y1="125" x2="580" y2="145" stroke="#bb9af7" stroke-width="2"/>
+
+  <!-- Leaf nodes -->
+  <g transform="translate(45, 150)">
+    <rect x="0" y="0" width="150" height="55" rx="8" fill="url(#devg)" filter="url(#shadow)"/>
+    <text x="75" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">/dev</text>
+    <text x="75" y="40" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Device files</text>
+    <text x="75" y="52" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="monospace">uart, fb, drm</text>
+  </g>
+
+  <g transform="translate(210, 150)">
+    <rect x="0" y="0" width="120" height="55" rx="8" fill="url(#ramg)" filter="url(#shadow)"/>
+    <text x="60" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">/ram</text>
+    <text x="60" y="40" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">In-memory FS</text>
+    <text x="60" y="52" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="monospace">RamFS</text>
+  </g>
+
+  <g transform="translate(370, 150)">
+    <rect x="0" y="0" width="120" height="55" rx="8" fill="url(#ziqag)" filter="url(#shadow)"/>
+    <text x="60" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">/ziqa</text>
+    <text x="60" y="40" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Persistent FS</text>
+    <text x="60" y="52" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="monospace">ZiqaFS</text>
+  </g>
+
+  <g transform="translate(530, 150)">
+    <rect x="0" y="0" width="120" height="55" rx="8" fill="url(#procg)" filter="url(#shadow)"/>
+    <text x="60" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">/proc</text>
+    <text x="60" y="40" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Process info</text>
+    <text x="60" y="52" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="monospace">planned</text>
+  </g>
+
+  <!-- Details panel -->
+  <g transform="translate(80, 235)">
+    <rect x="0" y="0" width="540" height="100" rx="6" fill="#24283b" stroke="#3b4261" stroke-width="1.5"/>
+    <text x="270" y="22" text-anchor="middle" fill="#c0caf5" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Mount Management</text>
+    <line x1="15" y1="32" x2="525" y2="32" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="20" y="52" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Mount entries stored in VFS. Each mount has a path prefix and backend.</text>
+    <text x="20" y="70" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Lookup walks the path, finds the longest matching prefix → dispatches to backend.</text>
+    <text x="20" y="88" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">All operations gated by CapabilitySpace: File resource kind.</text>
+  </g>
+</svg>

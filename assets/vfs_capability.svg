@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" width="800" height="550">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="vfsg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="fileg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="capg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="cacheg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="denyg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="800" height="550" fill="url(#bg)" rx="12"/>
+  <text x="400" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">VFS with Capability-Based Access Control</text>
+
+  <!-- Process -->
+  <rect x="50" y="60" width="160" height="60" rx="8" fill="url(#vfsg)" filter="url(#shadow)"/>
+  <text x="130" y="82" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace Process</text>
+  <text x="130" y="102" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="monospace">open("/write", O_RDWR)</text>
+
+  <line x1="210" y1="90" x2="290" y2="90" stroke="#565f89" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Syscall dispatch -->
+  <rect x="290" y="60" width="160" height="60" rx="8" fill="#24283b" stroke="#565f89" stroke-width="1.5"/>
+  <text x="370" y="82" text-anchor="middle" fill="#c0caf5" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">sys_open</text>
+  <text x="370" y="102" text-anchor="middle" fill="#565f89" font-size="10" font-family="monospace">proxy → ABI plugin</text>
+
+  <line x1="450" y1="90" x2="530" y2="90" stroke="#565f89" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Capability check -->
+  <rect x="530" y="50" width="200" height="70" rx="8" fill="url(#capg)" filter="url(#shadow)"/>
+  <text x="630" y="73" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Capability Check</text>
+  <text x="630" y="93" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="monospace">cap_space.check(File, path)</text>
+
+  <!-- Deny branch -->
+  <line x1="530" y1="100" x2="530" y2="150" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="440" y="150" width="180" height="40" rx="6" fill="url(#denyg)" filter="url(#shadow)"/>
+  <text x="530" y="175" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Deny → -EACCES</text>
+
+  <!-- Allow: VFS lookup -->
+  <line x1="730" y1="85" x2="730" y2="140" stroke="#9ece6a" stroke-width="2"/>
+  <line x1="730" y1="140" x2="370" y2="140" stroke="#9ece6a" stroke-width="2"/>
+
+  <rect x="250" y="140" width="240" height="45" rx="8" fill="url(#vfsg)" filter="url(#shadow)"/>
+  <text x="370" y="160" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">VFS::lookup(path)</text>
+  <text x="370" y="177" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">walk path components → find mountpoint</text>
+
+  <line x1="370" y1="185" x2="370" y2="220" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Filesystem backends -->
+  <g transform="translate(50, 225)">
+    <rect x="0" y="0" width="200" height="90" rx="8" fill="url(#fileg)" filter="url(#shadow)"/>
+    <text x="100" y="25" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">RamFS</text>
+    <text x="100" y="45" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">In-memory file</text>
+    <text x="100" y="62" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">Arc&lt;Mutex&lt;dyn File&gt;&gt;</text>
+  </g>
+
+  <g transform="translate(280, 225)">
+    <rect x="0" y="0" width="200" height="90" rx="8" fill="url(#fileg)" filter="url(#shadow)"/>
+    <text x="100" y="25" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ZiqaFS</text>
+    <text x="100" y="45" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Persistent FS</text>
+    <text x="100" y="62" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">VirtIO block device</text>
+  </g>
+
+  <g transform="translate(510, 225)">
+    <rect x="0" y="0" width="200" height="90" rx="8" fill="url(#fileg)" filter="url(#shadow)"/>
+    <text x="100" y="25" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ProcFS (planned)</text>
+    <text x="100" y="45" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Process info</text>
+    <text x="100" y="62" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">virtual filesystem</text>
+  </g>
+
+  <line x1="370" y1="220" x2="150" y2="225" stroke="#565f89" stroke-width="1.5"/>
+  <line x1="370" y1="220" x2="380" y2="225" stroke="#565f89" stroke-width="1.5"/>
+  <line x1="370" y1="220" x2="610" y2="225" stroke="#565f89" stroke-width="1.5"/>
+
+  <!-- Page cache -->
+  <rect x="50" y="340" width="660" height="55" rx="8" fill="url(#cacheg)" filter="url(#shadow)"/>
+  <text x="380" y="362" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Page Cache — LRU (64 entries × 4 KiB = 256 KiB)</text>
+  <text x="380" y="382" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">thread-safe spinlock · cache read ahead · eviction on full</text>
+
+  <line x1="150" y1="315" x2="200" y2="340" stroke="#565f89" stroke-width="1.5"/>
+  <line x1="380" y1="315" x2="380" y2="340" stroke="#565f89" stroke-width="1.5"/>
+  <line x1="610" y1="315" x2="560" y2="340" stroke="#565f89" stroke-width="1.5"/>
+
+  <!-- FD Table -->
+  <rect x="50" y="420" width="660" height="60" rx="8" fill="#24283b" stroke="#2ac3de" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="380" y="443" text-anchor="middle" fill="#2ac3de" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">FdTable — per-process file descriptor table (16 slots)</text>
+  <rect x="100" y="453" width="40" height="18" rx="3" fill="#7aa2f7"/>
+  <text x="120" y="466" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">0</text>
+  <rect x="145" y="453" width="40" height="18" rx="3" fill="#7aa2f7"/>
+  <text x="165" y="466" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">1</text>
+  <rect x="190" y="453" width="40" height="18" rx="3" fill="#7aa2f7"/>
+  <text x="210" y="466" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">2</text>
+  <rect x="235" y="453" width="40" height="18" rx="3" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="255" y="466" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">3</text>
+  <rect x="280" y="453" width="40" height="18" rx="3" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="300" y="466" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">4</text>
+  <rect x="325" y="453" width="40" height="18" rx="3" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="345" y="466" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">5</text>
+  <rect x="370" y="453" width="40" height="18" rx="3" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="390" y="466" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">6</text>
+  <rect x="415" y="453" width="40" height="18" rx="3" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="435" y="466" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">7</text>
+  <text x="470" y="466" fill="#565f89" font-size="9" font-family="monospace">... (slots 8–15 available)</text>
+
+  <!-- Capability note -->
+  <g transform="translate(50, 500)">
+    <rect x="0" y="0" width="660" height="35" rx="6" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="330" y="15" text-anchor="middle" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Every VFS operation goes through: Process → CapabilitySpace.check → VFS.lookup → Filesystem → Page Cache</text>
+    <text x="330" y="28" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">src/fs/vfs.rs  ·  src/capability/mod.rs  ·  src/fs/pagecache.rs</text>
+  </g>
+</svg>

@@ -1,0 +1,314 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 750" width="1000" height="750">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="schedg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="memg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="vfsg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="ebpfg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="drmg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <linearGradient id="iouringg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="ipcg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="hwg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b4261"/>
+      <stop offset="100%" stop-color="#2f354a"/>
+    </linearGradient>
+    <linearGradient id="pluging" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="shadow-lg">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="750" fill="url(#bg)" rx="12"/>
+
+  <!-- ===== TITLE ===== -->
+  <text x="500" y="30" text-anchor="middle" fill="#c0caf5" font-size="20" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ZiqaKernel — Master Architecture Dashboard</text>
+
+  <!-- ========================================= -->
+  <!-- TOP ROW: Userspace                        -->
+  <!-- ========================================= -->
+  <rect x="40" y="50" width="920" height="60" rx="8" fill="url(#userg)" filter="url(#shadow-lg)"/>
+  <rect x="40" y="50" width="100" height="60" rx="8" fill="#1a1b26" opacity="0.3"/>
+  <text x="90" y="80" text-anchor="middle" fill="#c0caf5" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+  <text x="90" y="96" text-anchor="middle" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">USER</text>
+
+  <g transform="translate(160, 62)">
+    <rect x="0" y="0" width="100" height="36" rx="4" fill="#1a1b26" opacity="0.2"/>
+    <text x="50" y="22" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">ELF binaries</text>
+  </g>
+  <g transform="translate(280, 62)">
+    <rect x="0" y="0" width="100" height="36" rx="4" fill="#1a1b26" opacity="0.2"/>
+    <text x="50" y="22" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">Shell</text>
+  </g>
+  <g transform="translate(400, 62)">
+    <rect x="0" y="0" width="100" height="36" rx="4" fill="#1a1b26" opacity="0.2"/>
+    <text x="50" y="22" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">Busybox</text>
+  </g>
+  <g transform="translate(520, 62)">
+    <rect x="0" y="0" width="100" height="36" rx="4" fill="#1a1b26" opacity="0.2"/>
+    <text x="50" y="22" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">Wayland</text>
+    <text x="50" y="32" text-anchor="middle" fill="#565f89" font-size="8" font-family="system-ui, -apple-system, sans-serif">(future)</text>
+  </g>
+  <g transform="translate(640, 62)">
+    <rect x="0" y="0" width="100" height="36" rx="4" fill="#1a1b26" opacity="0.2"/>
+    <text x="50" y="22" text-anchor="middle" fill="#c0caf5" font-size="11" font-family="system-ui, -apple-system, sans-serif">Doom</text>
+    <text x="50" y="32" text-anchor="middle" fill="#565f89" font-size="8" font-family="system-ui, -apple-system, sans-serif">(future)</text>
+  </g>
+
+  <!-- ========================================= -->
+  <!-- SECOND ROW: ABI Plugins                   -->
+  <!-- ========================================= -->
+  <line x1="500" y1="110" x2="500" y2="135" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="135" width="920" height="45" rx="8" fill="url(#pluging)" filter="url(#shadow)"/>
+  <rect x="40" y="135" width="100" height="45" rx="8" fill="#1a1b26" opacity="0.3"/>
+  <text x="90" y="160" text-anchor="middle" fill="#c0caf5" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI Plugin</text>
+  <text x="90" y="173" text-anchor="middle" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">INTERFACE</text>
+
+  <g transform="translate(180, 143)">
+    <rect x="0" y="0" width="100" height="28" rx="4" fill="#1a1b26" opacity="0.3"/>
+    <text x="50" y="19" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">Linux ELF Loader</text>
+  </g>
+  <g transform="translate(320, 143)">
+    <rect x="0" y="0" width="100" height="28" rx="4" fill="#1a1b26" opacity="0.3"/>
+    <text x="50" y="19" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">28 syscall handlers</text>
+  </g>
+  <g transform="translate(460, 143)">
+    <rect x="0" y="0" width="100" height="28" rx="4" fill="#1a1b26" opacity="0.3"/>
+    <text x="50" y="19" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">WASM stub</text>
+  </g>
+  <g transform="translate(600, 143)">
+    <rect x="0" y="0" width="100" height="28" rx="4" fill="#1a1b26" opacity="0.3"/>
+    <text x="50" y="19" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">AbiPlugin trait</text>
+  </g>
+  <g transform="translate(740, 143)">
+    <rect x="0" y="0" width="100" height="28" rx="4" fill="#1a1b26" opacity="0.3"/>
+    <text x="50" y="19" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">AbiRegistry</text>
+  </g>
+
+  <!-- ========================================= -->
+  <!-- THIRD ROW (CENTERPIECE): Kernel Subsystems -->
+  <!-- ========================================= -->
+  <line x1="500" y1="180" x2="500" y2="205" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="205" width="920" height="155" rx="8" fill="#24283b" stroke="#2ac3de" stroke-width="1.5" filter="url(#shadow-lg)"/>
+  <text x="500" y="228" text-anchor="middle" fill="#2ac3de" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Core Subsystems</text>
+
+  <!-- Row 1 of subsystems -->
+  <g transform="translate(60, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#schedg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">MLFQ Scheduler</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">4 queues · RR</text>
+  </g>
+  <g transform="translate(210, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#memg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Memory Mgr</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">paging · heap</text>
+  </g>
+  <g transform="translate(360, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#vfsg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">VFS Layer</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">RamFS · ZiqaFS</text>
+  </g>
+  <g transform="translate(510, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#ebpfg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">eBPF Engine</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">verifier · VM</text>
+  </g>
+  <g transform="translate(660, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#drmg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">DRM/KMS</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">framebuffers</text>
+  </g>
+  <g transform="translate(810, 245)">
+    <rect x="0" y="0" width="130" height="50" rx="6" fill="url(#iouringg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">io_uring</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">SQ · CQ rings</text>
+  </g>
+
+  <!-- Row 2 -->
+  <g transform="translate(60, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="url(#ipcg)" filter="url(#shadow)"/>
+    <text x="65" y="22" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">IPC</text>
+    <text x="65" y="38" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">channels · SHM</text>
+  </g>
+  <g transform="translate(210, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="#565f89"/>
+    <text x="65" y="22" text-anchor="middle" fill="#c0caf5" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Capabilities</text>
+    <text x="65" y="38" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">security</text>
+  </g>
+  <g transform="translate(360, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="#3b4261"/>
+    <text x="65" y="22" text-anchor="middle" fill="#c0caf5" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Page Cache</text>
+    <text x="65" y="38" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">64-entry LRU</text>
+  </g>
+  <g transform="translate(510, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="65" y="22" text-anchor="middle" fill="#565f89" font-size="12" font-family="system-ui, -apple-system, sans-serif">Signals</text>
+    <text x="65" y="38" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">mask · handler</text>
+  </g>
+  <g transform="translate(660, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="65" y="22" text-anchor="middle" fill="#565f89" font-size="12" font-family="system-ui, -apple-system, sans-serif">Network</text>
+    <text x="65" y="38" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">loopback · future</text>
+  </g>
+  <g transform="translate(810, 305)">
+    <rect x="0" y="0" width="130" height="45" rx="6" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="65" y="22" text-anchor="middle" fill="#565f89" font-size="12" font-family="system-ui, -apple-system, sans-serif">Timer</text>
+    <text x="65" y="38" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">sleep queue</text>
+  </g>
+
+  <!-- ========================================= -->
+  <!-- BOTTOM ROW: HAL / Hardware                -->
+  <!-- ========================================= -->
+  <line x1="500" y1="360" x2="500" y2="390" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="390" width="920" height="70" rx="8" fill="url(#hwg)" filter="url(#shadow-lg)"/>
+  <text x="500" y="412" text-anchor="middle" fill="#9ece6a" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">x86_64 HAL — Hardware Abstraction Layer</text>
+
+  <g transform="translate(60, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">GDT/TSS</text>
+  </g>
+  <g transform="translate(165, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">IDT/PIC</text>
+  </g>
+  <g transform="translate(270, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">Paging</text>
+  </g>
+  <g transform="translate(375, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">VirtIO</text>
+  </g>
+  <g transform="translate(480, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">UART</text>
+  </g>
+  <g transform="translate(585, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">PS/2 KBD</text>
+  </g>
+  <g transform="translate(690, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">Framebuffer</text>
+  </g>
+  <g transform="translate(795, 425)">
+    <rect x="0" y="0" width="90" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+    <text x="45" y="19" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">VGA text</text>
+  </g>
+
+  <!-- ========================================= -->
+  <!-- BOTTOM PANEL: Metrics                     -->
+  <!-- ========================================= -->
+  <rect x="40" y="485" width="920" height="100" rx="8" fill="#24283b" stroke="#3b4261" stroke-width="1" filter="url(#shadow)"/>
+  <text x="500" y="508" text-anchor="middle" fill="#c0caf5" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">System Metrics &amp; Build Information</text>
+
+  <!-- Metric boxes row 1 -->
+  <g transform="translate(60, 520)">
+    <rect x="0" y="0" width="140" height="28" rx="4" fill="#1a1b26" stroke="#f7768e" stroke-width="1"/>
+    <text x="70" y="19" text-anchor="middle" fill="#f7768e" font-size="10" font-family="monospace">LOC: ~8,000+ Rust</text>
+  </g>
+  <g transform="translate(215, 520)">
+    <rect x="0" y="0" width="140" height="28" rx="4" fill="#1a1b26" stroke="#e0af68" stroke-width="1"/>
+    <text x="70" y="19" text-anchor="middle" fill="#e0af68" font-size="10" font-family="monospace">Build: ~50-120s</text>
+  </g>
+  <g transform="translate(370, 520)">
+    <rect x="0" y="0" width="140" height="28" rx="4" fill="#1a1b26" stroke="#9ece6a" stroke-width="1"/>
+    <text x="70" y="19" text-anchor="middle" fill="#9ece6a" font-size="10" font-family="monospace">Incremental: ~2s</text>
+  </g>
+  <g transform="translate(525, 520)">
+    <rect x="0" y="0" width="140" height="28" rx="4" fill="#1a1b26" stroke="#7aa2f7" stroke-width="1"/>
+    <text x="70" y="19" text-anchor="middle" fill="#7aa2f7" font-size="10" font-family="monospace">Target: x86_64</text>
+  </g>
+  <g transform="translate(680, 520)">
+    <rect x="0" y="0" width="140" height="28" rx="4" fill="#1a1b26" stroke="#bb9af7" stroke-width="1"/>
+    <text x="70" y="19" text-anchor="middle" fill="#bb9af7" font-size="10" font-family="monospace">Linker: lld</text>
+  </g>
+
+  <!-- Metric boxes row 2 -->
+  <g transform="translate(60, 555)">
+    <rect x="0" y="0" width="140" height="22" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="70" y="15" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">Heap: 8 MiB linked_list</text>
+  </g>
+  <g transform="translate(215, 555)">
+    <rect x="0" y="0" width="140" height="22" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="70" y="15" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">Page cache: 256 KiB</text>
+  </g>
+  <g transform="translate(370, 555)">
+    <rect x="0" y="0" width="140" height="22" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="70" y="15" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">Panic: abort</text>
+  </g>
+  <g transform="translate(525, 555)">
+    <rect x="0" y="0" width="140" height="22" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="70" y="15" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">Boot: BIOS/UEFI</text>
+  </g>
+  <g transform="translate(680, 555)">
+    <rect x="0" y="0" width="140" height="22" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+    <text x="70" y="15" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">Codegen: 16 units</text>
+  </g>
+
+  <!-- ========================================= -->
+  <!-- BOTTOM STRIP: Architecture flow            -->
+  <!-- ========================================= -->
+  <rect x="40" y="610" width="920" height="60" rx="8" fill="#1a1b26" stroke="#2ac3de" stroke-width="1"/>
+  <g transform="translate(60, 618)">
+    <rect x="0" y="0" width="120" height="44" rx="4" fill="url(#userg)" opacity="0.8"/>
+    <text x="60" y="26" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+  </g>
+  <line x1="180" y1="640" x2="210" y2="640" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="210" y="618" width="120" height="44" rx="4" fill="url(#pluging)" opacity="0.8"/>
+  <text x="270" y="640" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI Plugins</text>
+  <line x1="330" y1="640" x2="360" y2="640" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="360" y="618" width="120" height="44" rx="4" fill="#24283b" stroke="#2ac3de" stroke-width="1.5"/>
+  <text x="420" y="640" text-anchor="middle" fill="#2ac3de" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Core</text>
+  <line x1="480" y1="640" x2="510" y2="640" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="510" y="618" width="120" height="44" rx="4" fill="url(#hwg)"/>
+  <text x="570" y="640" text-anchor="middle" fill="#9ece6a" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">x86_64 HAL</text>
+  <line x1="630" y1="640" x2="660" y2="640" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="660" y="618" width="140" height="44" rx="4" fill="#3b4261"/>
+  <text x="730" y="640" text-anchor="middle" fill="#c0caf5" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">QEMU / Bare Metal</text>
+  <!-- Arrows along bottom -->
+  <path d="M 730 662 L 730 680 Q 730 690 720 690 L 100 690 Q 80 690 80 680 L 80 662" stroke="#3b4261" stroke-width="1" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+
+  <!-- ========================================= -->
+  <!-- FOOTER                                    -->
+  <!-- ========================================= -->
+  <text x="500" y="720" text-anchor="middle" fill="#3b4261" font-size="10" font-family="system-ui, -apple-system, sans-serif">ZiqaKernel — from scratch, for learning · src/lib.rs · rustc nightly · #![no_std]</text>
+</svg>

@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" width="800" height="550">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="kernelg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="heapp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="stackg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="mmiog" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="800" height="550" fill="url(#bg)" rx="12"/>
+  <text x="400" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Virtual Address Space Layout</text>
+
+  <!-- Full address space bar -->
+  <rect x="100" y="55" width="600" height="30" rx="4" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
+  <text x="400" y="75" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">0x0000_0000_0000_0000 ───────────────────────────────────────── 0xFFFF_FFFF_FFFF_FFFF</text>
+
+  <!-- Detailed breakdown -->
+  <!-- Userspace -->
+  <g transform="translate(100, 110)">
+    <rect x="0" y="0" width="300" height="180" rx="6" fill="#24283b" stroke="#7aa2f7" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="300" height="28" rx="6" fill="url(#userg)"/>
+    <text x="150" y="19" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+
+    <!-- Stack -->
+    <rect x="10" y="35" width="280" height="28" rx="4" fill="url(#stackg)"/>
+    <text x="150" y="53" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">User Stack (grows down)</text>
+
+    <!-- Heap -->
+    <rect x="10" y="70" width="280" height="28" rx="4" fill="url(#heapp)"/>
+    <text x="150" y="88" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Heap / brk (program break)</text>
+
+    <!-- Data -->
+    <rect x="10" y="105" width="280" height="28" rx="4" fill="#565f89"/>
+    <text x="150" y="123" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">Data / BSS</text>
+
+    <!-- Text -->
+    <rect x="10" y="140" width="280" height="28" rx="4" fill="#3b4261"/>
+    <text x="150" y="158" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">Text / Code</text>
+
+    <text x="150" y="175" text-anchor="middle" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">⬆ low addresses</text>
+  </g>
+
+  <!-- Kernel space -->
+  <g transform="translate(400, 110)">
+    <rect x="0" y="0" width="300" height="180" rx="6" fill="#24283b" stroke="#f7768e" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="300" height="28" rx="6" fill="url(#kernelg)"/>
+    <text x="150" y="19" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Space</text>
+
+    <!-- Physical memory map -->
+    <rect x="10" y="35" width="280" height="28" rx="4" fill="url(#mmiog)"/>
+    <text x="150" y="53" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Physical Memory Mapping (boot_info)</text>
+
+    <!-- Kernel heap -->
+    <rect x="10" y="70" width="280" height="28" rx="4" fill="url(#heapp)"/>
+    <text x="150" y="88" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Kernel Heap (8 MiB)</text>
+
+    <!-- Page tables -->
+    <rect x="10" y="105" width="280" height="28" rx="4" fill="#565f89"/>
+    <text x="150" y="123" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">Page Tables (PML4 → PDPT → PD → PT)</text>
+
+    <!-- Kernel text -->
+    <rect x="10" y="140" width="280" height="28" rx="4" fill="#3b4261"/>
+    <text x="150" y="158" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="system-ui, -apple-system, sans-serif">Kernel Code + IDT + GDT</text>
+
+    <text x="150" y="175" text-anchor="middle" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">⬇ high addresses</text>
+  </g>
+
+  <!-- MMU / Paging details -->
+  <g transform="translate(100, 310)">
+    <rect x="0" y="0" width="600" height="100" rx="6" fill="#24283b" stroke="#2ac3de" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="300" y="22" text-anchor="middle" fill="#2ac3de" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">4-Level Paging (x86_64)</text>
+
+    <!-- Page walk -->
+    <g transform="translate(20, 35)">
+      <rect x="0" y="0" width="90" height="30" rx="4" fill="#7aa2f7"/>
+      <text x="45" y="19" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="monospace">CR3 → PML4</text>
+      <line x1="90" y1="15" x2="110" y2="15" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    </g>
+    <g transform="translate(130, 35)">
+      <rect x="0" y="0" width="90" height="30" rx="4" fill="#bb9af7"/>
+      <text x="45" y="19" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="monospace">PDPT</text>
+      <line x1="90" y1="15" x2="110" y2="15" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    </g>
+    <g transform="translate(240, 35)">
+      <rect x="0" y="0" width="90" height="30" rx="4" fill="#9ece6a"/>
+      <text x="45" y="19" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="monospace">Page Dir</text>
+      <line x1="90" y1="15" x2="110" y2="15" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    </g>
+    <g transform="translate(350, 35)">
+      <rect x="0" y="0" width="90" height="30" rx="4" fill="#e0af68"/>
+      <text x="45" y="19" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="monospace">Page Table</text>
+      <line x1="90" y1="15" x2="110" y2="15" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    </g>
+    <g transform="translate(460, 35)">
+      <rect x="0" y="0" width="90" height="30" rx="4" fill="#f7768e"/>
+      <text x="45" y="19" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="monospace">4KiB Frame</text>
+    </g>
+
+    <text x="300" y="90" text-anchor="middle" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">Each level: 512 entries × 8 bytes = 4 KiB per table</text>
+  </g>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+
+  <!-- Legend -->
+  <g transform="translate(105, 430)">
+    <rect x="0" y="0" width="12" height="12" rx="2" fill="#7aa2f7"/>
+    <text x="18" y="10" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">User</text>
+    <rect x="70" y="0" width="12" height="12" rx="2" fill="#f7768e"/>
+    <text x="88" y="10" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Kernel</text>
+    <rect x="150" y="0" width="12" height="12" rx="2" fill="#e0af68"/>
+    <text x="168" y="10" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Heap</text>
+    <rect x="220" y="0" width="12" height="12" rx="2" fill="#9ece6a"/>
+    <text x="238" y="10" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Stack</text>
+    <rect x="290" y="0" width="12" height="12" rx="2" fill="#bb9af7"/>
+    <text x="308" y="10" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">MMIO</text>
+  </g>
+</svg>

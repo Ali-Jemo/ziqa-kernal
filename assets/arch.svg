@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 350" width="800" height="350">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="coreg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="pluging" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="hwg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="800" height="350" fill="url(#bg)" rx="12"/>
+  <text x="400" y="35" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">System Architecture</text>
+
+  <!-- Layer 1: Userspace -->
+  <rect x="50" y="65" width="700" height="40" rx="6" fill="url(#userg)" filter="url(#shadow)"/>
+  <text x="400" y="90" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+
+  <line x1="400" y1="105" x2="400" y2="125" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 2: Syscall Interface -->
+  <rect x="200" y="125" width="400" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="400" y="144" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">int 0x80 — Syscall Gate</text>
+
+  <line x1="400" y1="153" x2="400" y2="173" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 3: Kernel Core -->
+  <rect x="50" y="173" width="700" height="45" rx="6" fill="url(#coreg)" filter="url(#shadow)"/>
+  <text x="400" y="195" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Core</text>
+  <text x="400" y="210" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">MLFQ Scheduler · Memory Manager · VFS · eBPF Engine · IPC · DRM/KMS · io_uring</text>
+
+  <line x1="400" y1="218" x2="400" y2="238" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 4: ABI Plugins -->
+  <rect x="50" y="238" width="700" height="40" rx="6" fill="url(#pluging)" filter="url(#shadow)"/>
+  <text x="400" y="258" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI Plugin Layer</text>
+  <g transform="translate(280, 264)">
+    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
+    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">Linux ELF</text>
+  </g>
+  <g transform="translate(360, 264)">
+    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
+    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">WASM</text>
+  </g>
+  <g transform="translate(440, 264)">
+    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
+    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">ZiqaNative</text>
+  </g>
+
+  <line x1="400" y1="278" x2="400" y2="298" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Layer 5: Hardware -->
+  <rect x="50" y="298" width="700" height="35" rx="6" fill="url(#hwg)" filter="url(#shadow)"/>
+  <text x="400" y="320" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">x86_64 Hardware — QEMU / Bare Metal</text>
+</svg>

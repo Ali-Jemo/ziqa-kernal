@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#1f2335"/>
+      <stop offset="60%" stop-color="#16161e"/>
+      <stop offset="100%" stop-color="#0e0e14"/>
+    </radialGradient>
+    <linearGradient id="hex-outer" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="25%" stop-color="#bb9af7"/>
+      <stop offset="50%" stop-color="#2ac3de"/>
+      <stop offset="75%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#e0af68"/>
+    </linearGradient>
+    <linearGradient id="hex-mid" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1a1b26" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#7aa2f7" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#2ac3de" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="z-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c0caf5"/>
+      <stop offset="40%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#2ac3de"/>
+    </linearGradient>
+    <linearGradient id="z-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#2ac3de"/>
+    </linearGradient>
+    <linearGradient id="accent-line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7aa2f7" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#7aa2f7" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#bb9af7" stop-opacity="0.8"/>
+      <stop offset="80%" stop-color="#2ac3de" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#2ac3de" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow-strong">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-med">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-subtle">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="drop-shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <clipPath id="hex-clip">
+      <polygon points="150,30 262,90 262,210 150,270 38,210 38,90"/>
+    </clipPath>
+  </defs>
+
+  <rect width="300" height="300" fill="url(#bg)" rx="28"/>
+
+  <!-- Outer glow aura -->
+  <polygon points="150,20 270,85 270,215 150,280 30,215 30,85"
+    fill="none" stroke="url(#hex-outer)" stroke-width="1.5" opacity="0.12" filter="url(#glow-strong)"/>
+
+  <!-- Outer ring -->
+  <polygon points="150,30 262,90 262,210 150,270 38,210 38,90"
+    fill="none" stroke="url(#hex-outer)" stroke-width="2.5" filter="url(#drop-shadow)"/>
+
+  <!-- Background grid inside hex -->
+  <g clip-path="url(#hex-clip)" opacity="0.1">
+    <pattern id="hex-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+      <path d="M 8 0 L 0 0 0 8" fill="none" stroke="#7aa2f7" stroke-width="0.4"/>
+    </pattern>
+    <rect x="0" y="0" width="300" height="300" fill="url(#hex-grid)"/>
+  </g>
+
+  <!-- Circuit traces -->
+  <g stroke="#3b4261" stroke-width="1.2" fill="none" opacity="0.6">
+    <path d="M150 45 L150 75"/>
+    <path d="M235 100 L215 115"/>
+    <path d="M65 100 L85 115"/>
+    <path d="M150 255 L150 225"/>
+    <path d="M235 200 L215 185"/>
+    <path d="M65 200 L85 185"/>
+    <path d="M248 115 L268 115 L268 85"/>
+    <path d="M52 115 L32 115 L32 85"/>
+    <path d="M248 185 L268 185 L268 215"/>
+    <path d="M52 185 L32 185 L32 215"/>
+    <circle cx="268" cy="85" r="2.5" fill="#f7768e" opacity="0.8"/>
+    <circle cx="32" cy="85" r="2.5" fill="#9ece6a" opacity="0.8"/>
+    <circle cx="268" cy="215" r="2.5" fill="#e0af68" opacity="0.8"/>
+    <circle cx="32" cy="215" r="2.5" fill="#bb9af7" opacity="0.8"/>
+  </g>
+
+  <!-- Node dots -->
+  <circle cx="215" cy="115" r="3" fill="#7aa2f7" opacity="0.9" filter="url(#glow-subtle)"/>
+  <circle cx="85" cy="115" r="3" fill="#2ac3de" opacity="0.9" filter="url(#glow-subtle)"/>
+  <circle cx="215" cy="185" r="3" fill="#bb9af7" opacity="0.9" filter="url(#glow-subtle)"/>
+  <circle cx="85" cy="185" r="3" fill="#9ece6a" opacity="0.9" filter="url(#glow-subtle)"/>
+
+  <!-- Middle hex ring (semi-transparent gradient fill) -->
+  <polygon points="150,60 238,96 238,204 150,240 62,204 62,96"
+    fill="url(#hex-mid)" stroke="url(#hex-outer)" stroke-width="1.5" opacity="0.7"/>
+
+  <!-- Inner hex solid -->
+  <polygon points="150,82 209,111.5 209,188.5 150,218 91,188.5 91,111.5"
+    fill="#1a1b26" stroke="url(#hex-outer)" stroke-width="1.2" filter="url(#drop-shadow)"/>
+
+  <!-- Inner glow ring -->
+  <polygon points="150,87 206,114.5 206,185.5 150,213 94,185.5 94,114.5"
+    fill="none" stroke="#2ac3de" stroke-width="1" opacity="0.35" filter="url(#glow-med)"/>
+
+  <!-- Z letter shadow -->
+  <text x="149" y="169" text-anchor="middle" dominant-baseline="middle"
+    font-size="88" font-weight="900" font-family="system-ui, -apple-system, sans-serif"
+    fill="#000" opacity="0.3">Z</text>
+
+  <!-- Z letter main -->
+  <text x="150" y="168" text-anchor="middle" dominant-baseline="middle"
+    fill="url(#z-fill)" stroke="url(#z-stroke)" stroke-width="0.5"
+    font-size="88" font-weight="900" font-family="system-ui, -apple-system, sans-serif"
+    filter="url(#glow-subtle)">Z</text>
+
+  <!-- Vertex dots on outer ring -->
+  <circle cx="150" cy="30" r="4" fill="#7aa2f7" filter="url(#glow-med)"/>
+  <circle cx="262" cy="90" r="4" fill="#bb9af7" filter="url(#glow-med)"/>
+  <circle cx="262" cy="210" r="4" fill="#2ac3de" filter="url(#glow-med)"/>
+  <circle cx="150" cy="270" r="4" fill="#f7768e" filter="url(#glow-med)"/>
+  <circle cx="38" cy="210" r="4" fill="#e0af68" filter="url(#glow-med)"/>
+  <circle cx="38" cy="90" r="4" fill="#9ece6a" filter="url(#glow-med)"/>
+
+  <!-- Accent line under logo -->
+  <rect x="40" y="283" width="220" height="1.5" rx="1" fill="url(#accent-line)"/>
+
+  <!-- KERNEL label -->
+  <text x="150" y="295" text-anchor="middle" fill="#565f89" font-size="8"
+    font-family="system-ui, -apple-system, sans-serif" letter-spacing="5">KERNEL</text>
+</svg>

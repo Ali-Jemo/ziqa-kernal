@@ -173,14 +173,20 @@ impl Scheduler {
         let idx = self.current;
         if let Some(proc) = &mut self.tasks[idx] {
             if !proc.signals.has_pending() { return; }
+            
+            // Check for signals that should be delivered to userspace
             let signum = proc.signals.dequeue();
             if signum == 0 { return; }
+            
             let action = proc.signals.get_action(signum);
+            
             match action {
                 SignalAction::Ignore => {}
                 SignalAction::Handler(addr) => {
-                    // In a real kernel we'd push a signal frame onto the user stack.
-                    // Here we just log it.
+                    // Store signal info for context switch
+                    proc.signals.pending_signal = signum;
+                    proc.signals.handler_addr = addr;
+                    
                     crate::println!("[SIGNAL] PID {} handler at 0x{:x} for sig {}", proc.pid.0, addr, signum);
                 }
                 SignalAction::Default => {
@@ -306,12 +312,32 @@ impl Scheduler {
         self.tasks[self.current].as_ref()
     }
 
+    pub fn current_task_mut(&mut self) -> Option<&mut Process> {
+        self.tasks[self.current].as_mut()
+    }
+
+    pub fn set_current(&mut self, pid: Pid) -> bool {
+        for (i, slot) in self.tasks.iter().enumerate() {
+            if let Some(proc) = slot {
+                if proc.pid == pid {
+                    self.current = i;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn total_ticks(&self) -> u64 {
         self.ticks
     }
 
     pub fn get_process(&self, pid: Pid) -> Option<&Process> {
         self.tasks.iter().filter_map(|t| t.as_ref()).find(|p| p.pid == pid)
+    }
+
+    pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
+        self.tasks.iter_mut().filter_map(|t| t.as_mut()).find(|p| p.pid == pid)
     }
 }
 
@@ -322,26 +348,34 @@ pub fn tick() {
 }
 
 pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> {
-    SCHEDULER.lock().spawn(abi, entry, stack)
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.lock().spawn(abi, entry, stack)
+    })
 }
 
 pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R>
 where
     F: FnOnce(&Process) -> R,
 {
-    SCHEDULER.lock().get_process(pid).map(f)
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.lock().get_process(pid).map(f)
+    })
 }
 
 pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R>
 where
     F: FnOnce(&mut Process) -> R,
 {
-    SCHEDULER.lock().tasks.iter_mut().filter_map(|t| t.as_mut()).find(|p| p.pid == pid).map(f)
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.lock().tasks.iter_mut().filter_map(|t| t.as_mut()).find(|p| p.pid == pid).map(f)
+    })
 }
 
 /// Called from the timer subsystem to wake sleeping processes
 pub fn wake_sleeping(woken_mask: u64) {
-    SCHEDULER.lock().wake_sleeping_mask(woken_mask);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.lock().wake_sleeping_mask(woken_mask);
+    })
 }
 
 pub fn init() {
@@ -357,5 +391,39 @@ impl Scheduler {
                 crate::println!("{:4} | {:7?} | {:8} | {:6}", proc.pid.0, proc.state, proc.priority, proc.parent);
             }
         }
+    }
+}
+
+pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
+    let pid = x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        if sched.count >= MAX_TASKS {
+            return None;
+        }
+        Some(sched.table.alloc_pid())
+    })?;
+
+    // Use safe address 16MB
+    let entry = VirtAddr::new(0x1000000);
+    let stack = VirtAddr::new(0x7FFF_FFFF_000);
+    let mut proc = Process::new(pid, AbiKind::LinuxElf, entry, stack);
+    proc.binary_data = binary.to_vec();
+
+    match crate::abi::linux::elf_loader::load_elf(binary, &mut proc) {
+        Ok(()) => {
+            proc.make_ready();
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                let mut sched = SCHEDULER.lock();
+                for slot in sched.tasks.iter_mut() {
+                    if slot.is_none() {
+                        *slot = Some(proc);
+                        sched.count += 1;
+                        return Some(pid);
+                    }
+                }
+                None
+            })
+        }
+        Err(_) => None,
     }
 }

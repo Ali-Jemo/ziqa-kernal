@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 650" width="850" height="650">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="kernelg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="heapp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="stackg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="mmiog" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="codedg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="850" height="650" fill="url(#bg)" rx="12"/>
+  <text x="425" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Detailed Memory Layout</text>
+
+  <!-- Main memory bar -->
+  <g transform="translate(75, 60)">
+    <!-- Address labels -->
+    <text x="-60" y="25" fill="#565f89" font-size="10" font-family="monospace" text-anchor="end">0xFFFF_FFFF_FFFF_FFFF</text>
+    <text x="-60" y="380" fill="#565f89" font-size="10" font-family="monospace" text-anchor="end">0x0000_0000_0000_0000</text>
+
+    <!-- Full bar outline -->
+    <rect x="0" y="0" width="700" height="400" rx="6" fill="none" stroke="#3b4261" stroke-width="1.5"/>
+
+    <!-- Kernel space (top half) -->
+    <rect x="0" y="0" width="700" height="60" rx="0" fill="url(#kernelg)" opacity="0.3"/>
+    <rect x="0" y="0" width="700" height="22" rx="0" fill="url(#kernelg)"/>
+    <text x="350" y="15" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Space (higher half)</text>
+
+    <!-- Physical memory mapping -->
+    <rect x="20" y="28" width="660" height="14" rx="3" fill="url(#mmiog)"/>
+    <text x="350" y="39" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">Physical Memory Mapping (boot_info → map_physical_memory)</text>
+
+    <!-- Kernel heap -->
+    <rect x="20" y="48" width="160" height="12" rx="3" fill="url(#heapp)"/>
+    <text x="100" y="58" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="system-ui, -apple-system, sans-serif">Heap 8MiB</text>
+
+    <!-- Gap -->
+    <rect x="0" y="60" width="700" height="30" rx="0" fill="#1a1b26"/>
+    <text x="350" y="79" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">unmapped guard region</text>
+
+    <!-- Kernel code -->
+    <rect x="20" y="90" width="300" height="20" rx="3" fill="url(#codedg)"/>
+    <text x="170" y="104" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">Kernel Text (code + IDT + GDT)</text>
+
+    <!-- Page tables -->
+    <rect x="340" y="90" width="340" height="20" rx="3" fill="#565f89"/>
+    <text x="510" y="104" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">Page Tables (PML4 → PDPT → PD → PT)</text>
+
+    <!-- Gap -->
+    <rect x="0" y="110" width="700" height="40" rx="0" fill="#1a1b26"/>
+    <text x="350" y="133" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">unmapped</text>
+
+    <!-- Kernel data / BSS -->
+    <rect x="20" y="150" width="300" height="20" rx="3" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
+    <text x="170" y="164" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">Kernel Data + BSS</text>
+
+    <!-- Gap -->
+    <rect x="0" y="170" width="700" height="30" rx="0" fill="#1a1b26"/>
+    <text x="350" y="190" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">unmapped</text>
+
+    <!-- Kernel boundary marker -->
+    <line x1="0" y1="200" x2="700" y2="200" stroke="#f7768e" stroke-width="2" stroke-dasharray="8 4"/>
+    <rect x="300" y="193" width="100" height="14" rx="3" fill="#f7768e"/>
+    <text x="350" y="204" text-anchor="middle" fill="#1a1b26" font-size="9" font-weight="bold" font-family="monospace">0xFFFF_8000_0000_0000</text>
+
+    <!-- User space (bottom half) -->
+    <rect x="0" y="200" width="700" height="200" rx="0" fill="url(#userg)" opacity="0.15"/>
+    <rect x="0" y="200" width="700" height="22" rx="0" fill="url(#userg)" opacity="0.5"/>
+    <text x="350" y="215" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace (lower half)</text>
+
+    <!-- User stack -->
+    <rect x="20" y="228" width="660" height="18" rx="3" fill="url(#stackg)"/>
+    <text x="350" y="241" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">User Stack (grows downward, typically 128 KB - 8 MB)</text>
+
+    <!-- Gap -->
+    <rect x="0" y="246" width="700" height="20" rx="0" fill="#1a1b26"/>
+
+    <!-- Heap / brk -->
+    <rect x="20" y="266" width="660" height="18" rx="3" fill="url(#heapp)"/>
+    <text x="350" y="279" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">Heap / Program Break (brk) — grows upward via sbrk/brk</text>
+
+    <!-- Gap -->
+    <rect x="0" y="284" width="700" height="15" rx="0" fill="#1a1b26"/>
+
+    <!-- Data / BSS -->
+    <rect x="20" y="299" width="660" height="18" rx="3" fill="#565f89"/>
+    <text x="350" y="312" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="system-ui, -apple-system, sans-serif">Data Segment (initialized) + BSS (zero-initialized)</text>
+
+    <!-- Gap -->
+    <rect x="0" y="317" width="700" height="15" rx="0" fill="#1a1b26"/>
+
+    <!-- Text / code -->
+    <rect x="20" y="332" width="660" height="18" rx="3" fill="url(#codedg)"/>
+    <text x="350" y="345" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">Text Segment (executable code, read-only)</text>
+
+    <!-- Gap -->
+    <rect x="0" y="350" width="700" height="15" rx="0" fill="#1a1b26"/>
+
+    <!-- Null page -->
+    <rect x="20" y="365" width="660" height="18" rx="3" fill="#f7768e" opacity="0.3" stroke="#f7768e" stroke-width="1"/>
+    <text x="350" y="378" text-anchor="middle" fill="#f7768e" font-size="9" font-family="system-ui, -apple-system, sans-serif">Null page (unmapped — trap NULL pointer access)</text>
+  </g>
+
+  <!-- Region detail panel -->
+  <g transform="translate(75, 480)">
+    <rect x="0" y="0" width="700" height="150" rx="6" fill="#24283b" stroke="#3b4261" stroke-width="1.5"/>
+    <text x="350" y="22" text-anchor="middle" fill="#c0caf5" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Page Table Entry (PTE) Format — x86_64</text>
+
+    <!-- PTE bit layout -->
+    <g transform="translate(20, 35)">
+      <!-- 64 bits row -->
+      <rect x="0" y="0" width="12" height="22" rx="2" fill="#f7768e" opacity="0.6"/>
+      <text x="6" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">P</text>
+      <rect x="14" y="0" width="12" height="22" rx="2" fill="#e0af68" opacity="0.6"/>
+      <text x="20" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">W</text>
+      <rect x="28" y="0" width="12" height="22" rx="2" fill="#9ece6a" opacity="0.6"/>
+      <text x="34" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">U</text>
+      <rect x="42" y="0" width="12" height="22" rx="2" fill="#bb9af7" opacity="0.6"/>
+      <text x="48" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">W</text>
+      <rect x="56" y="0" width="12" height="22" rx="2" fill="#2ac3de" opacity="0.6"/>
+      <text x="62" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">C</text>
+      <rect x="70" y="0" width="12" height="22" rx="2" fill="#c0caf5" opacity="0.6"/>
+      <text x="76" y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-family="monospace">A</text>
+      <rect x="84" y="0" width="12" height="22" rx="2" fill="#565f89" opacity="0.6"/>
+      <text x="90" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">D</text>
+      <rect x="98" y="0" width="12" height="22" rx="2" fill="#f7768e" opacity="0.6"/>
+      <text x="104" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">A</text>
+
+      <!-- Physical address (bits 12-51) -->
+      <rect x="112" y="0" width="200" height="22" rx="2" fill="#7aa2f7" opacity="0.4"/>
+      <text x="212" y="15" text-anchor="middle" fill="#7aa2f7" font-size="8" font-family="monospace">Physical Page Address (bits 12–51)</text>
+
+      <!-- Available + NX -->
+      <rect x="314" y="0" width="50" height="22" rx="2" fill="#565f89" opacity="0.6"/>
+      <text x="339" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">avail</text>
+      <rect x="366" y="0" width="12" height="22" rx="2" fill="#f7768e" opacity="0.6"/>
+      <text x="372" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-family="monospace">X</text>
+
+      <!-- Full width marker -->
+      <text x="400" y="35" fill="#565f89" font-size="8" font-family="monospace">← 64 bits →</text>
+    </g>
+
+    <g transform="translate(20, 85)">
+      <text x="0" y="0" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">P=Present  W=Writable  U=User  W=WriteThrough  C=CacheDisable  A=Accessed  D=Dirty  X=NoExecute</text>
+      <text x="0" y="20" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">Each process has its own PML4 table. Context switch = CR3 reload → TLB flush via invlpg.</text>
+    </g>
+  </g>
+</svg>

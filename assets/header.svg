@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 200" width="1100" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#15161e"/>
+      <stop offset="100%" stop-color="#0d0e14"/>
+    </linearGradient>
+    <linearGradient id="glow-text" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="25%" stop-color="#bb9af7"/>
+      <stop offset="55%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#9ece6a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="30%" stop-color="#bb9af7"/>
+      <stop offset="70%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#9ece6a"/>
+    </linearGradient>
+    <linearGradient id="hex-outer" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7" stop-opacity="0.9"/>
+      <stop offset="50%" stop-color="#bb9af7" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#2ac3de" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="hex-inner" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#7aa2f7" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="badge-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1f2335"/>
+      <stop offset="100%" stop-color="#1a1b26"/>
+    </linearGradient>
+    <linearGradient id="pipeline-glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1f2335" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#1f2335" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1f2335" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow-strong">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-soft">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow-md">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <path d="M 16 0 L 0 0 0 16" fill="none" stroke="#1a1c2e" stroke-width="0.4"/>
+    </pattern>
+  </defs>
+
+  <rect width="1100" height="200" fill="url(#bg)" rx="16"/>
+  <rect width="1100" height="200" fill="url(#grid)" rx="16"/>
+
+  <!-- Left accent border -->
+  <rect x="0" y="0" width="4" height="200" fill="url(#accent)" rx="2"/>
+
+  <!-- === Hexagon Logo === -->
+  <g transform="translate(65, 100)">
+    <polygon points="0,-48 41.6,-24 41.6,24 0,48 -41.6,24 -41.6,-24"
+      fill="none" stroke="url(#hex-outer)" stroke-width="2.5" filter="url(#glow-strong)" opacity="0.5"/>
+    <polygon points="0,-38 32.9,-19 32.9,19 0,38 -32.9,19 -32.9,-19"
+      fill="url(#hex-inner)" stroke="url(#hex-outer)" stroke-width="1.2"/>
+    <polygon points="0,-26 22.5,-13 22.5,13 0,26 -22.5,13 -22.5,-13"
+      fill="none" stroke="#2ac3de" stroke-width="0.8" opacity="0.4"/>
+    <text x="0" y="11" text-anchor="middle" fill="url(#glow-text)" font-size="32" font-weight="900"
+      font-family="system-ui, -apple-system, sans-serif" filter="url(#glow-soft)">Z</text>
+  </g>
+
+  <!-- Circuit traces from hex -->
+  <g stroke="#3b4261" stroke-width="1" fill="none" opacity="0.7">
+    <path d="M106.6 100 L135 100 L135 65 L150 65"/>
+    <path d="M106.6 100 L135 100 L135 135 L150 135"/>
+    <circle cx="135" cy="65" r="3" fill="#7aa2f7" opacity="0.9" filter="url(#glow-soft)"/>
+    <circle cx="135" cy="135" r="3" fill="#2ac3de" opacity="0.9" filter="url(#glow-soft)"/>
+  </g>
+
+  <!-- === Title === -->
+  <text x="185" y="80" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="900"
+    fill="url(#glow-text)" filter="url(#glow-soft)" letter-spacing="0.5">ZiqaKernel</text>
+
+  <!-- Subtitle -->
+  <text x="185" y="108" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="#565f89" letter-spacing="5">
+    FROM-SCRATCH x86_64 HOBBY KERNEL
+  </text>
+
+  <!-- Accent divider bar -->
+  <rect x="185" y="120" width="350" height="2" rx="1" fill="url(#accent)" opacity="0.5"/>
+  <circle cx="185" cy="121" r="4" fill="#7aa2f7" filter="url(#glow-soft)"/>
+  <circle cx="535" cy="121" r="4" fill="#9ece6a" filter="url(#glow-soft)"/>
+
+  <!-- Tagline -->
+  <text x="185" y="146" font-family="system-ui, -apple-system, sans-serif" font-size="10.5" fill="#3b4261">
+    Rust · MLFQ Scheduler · eBPF · DRM/KMS · io_uring · Network Stack · Zig FFI · Capability Security · Linux ELF
+  </text>
+
+  <!-- === Badges === -->
+  <g transform="translate(660, 38)" filter="url(#shadow-md)">
+    <g transform="translate(0, 0)">
+      <rect x="0" y="0" width="82" height="24" rx="5" fill="url(#badge-bg)" stroke="#7aa2f7" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#7aa2f7"/>
+      <text x="20" y="16" fill="#7aa2f7" font-size="9.5" font-weight="bold" font-family="monospace">#![no_std]</text>
+    </g>
+    <g transform="translate(90, 0)">
+      <rect x="0" y="0" width="74" height="24" rx="5" fill="url(#badge-bg)" stroke="#9ece6a" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#9ece6a"/>
+      <text x="20" y="16" fill="#9ece6a" font-size="9.5" font-weight="bold" font-family="monospace">nightly</text>
+    </g>
+    <g transform="translate(172, 0)">
+      <rect x="0" y="0" width="74" height="24" rx="5" fill="url(#badge-bg)" stroke="#e0af68" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#e0af68"/>
+      <text x="20" y="16" fill="#e0af68" font-size="9.5" font-weight="bold" font-family="monospace">x86_64</text>
+    </g>
+    <g transform="translate(254, 0)">
+      <rect x="0" y="0" width="80" height="24" rx="5" fill="url(#badge-bg)" stroke="#f7768e" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#f7768e"/>
+      <text x="20" y="16" fill="#f7768e" font-size="9.5" font-weight="bold" font-family="monospace">MIT license</text>
+    </g>
+
+    <g transform="translate(0, 32)">
+      <rect x="0" y="0" width="82" height="24" rx="5" fill="url(#badge-bg)" stroke="#bb9af7" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#bb9af7"/>
+      <text x="20" y="16" fill="#bb9af7" font-size="9.5" font-weight="bold" font-family="monospace">UEFI/BIOS</text>
+    </g>
+    <g transform="translate(90, 32)">
+      <rect x="0" y="0" width="74" height="24" rx="5" fill="url(#badge-bg)" stroke="#2ac3de" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#2ac3de"/>
+      <text x="20" y="16" fill="#2ac3de" font-size="9.5" font-weight="bold" font-family="monospace">QEMU</text>
+    </g>
+    <g transform="translate(172, 32)">
+      <rect x="0" y="0" width="74" height="24" rx="5" fill="url(#badge-bg)" stroke="#9ece6a" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#9ece6a"/>
+      <text x="20" y="16" fill="#9ece6a" font-size="9.5" font-weight="bold" font-family="monospace">v0.1.0</text>
+    </g>
+    <g transform="translate(254, 32)">
+      <rect x="0" y="0" width="80" height="24" rx="5" fill="url(#badge-bg)" stroke="#bb9af7" stroke-width="1"/>
+      <circle cx="11" cy="12" r="3.5" fill="#bb9af7"/>
+      <text x="20" y="16" fill="#bb9af7" font-size="9.5" font-weight="bold" font-family="monospace">active dev</text>
+    </g>
+  </g>
+
+  <!-- === Architecture Pipeline === -->
+  <g transform="translate(660, 98)">
+    <rect x="0" y="0" width="390" height="76" rx="7" fill="#13141f" stroke="#1f2335" stroke-width="1"/>
+
+    <!-- Background gradient sweep -->
+    <rect x="0" y="0" width="390" height="76" rx="7" fill="url(#pipeline-glow)"/>
+
+    <!-- Stage connectors -->
+    <path d="M 83 38 L 92 38" stroke="#565f89" stroke-width="1.2" opacity="0.6"/>
+    <path d="M 163 38 L 172 38" stroke="#565f89" stroke-width="1.2" opacity="0.6"/>
+    <path d="M 243 38 L 252 38" stroke="#565f89" stroke-width="1.2" opacity="0.6"/>
+    <path d="M 323 38 L 332 38" stroke="#565f89" stroke-width="1.2" opacity="0.6"/>
+
+    <g transform="translate(12, 13)">
+      <rect x="0" y="0" width="71" height="50" rx="5" fill="url(#hex-inner)" stroke="#7aa2f7" stroke-width="1"/>
+      <text x="35.5" y="22" text-anchor="middle" fill="#7aa2f7" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+      <text x="35.5" y="38" text-anchor="middle" fill="#4f5370" font-size="8" font-family="monospace">apps</text>
+    </g>
+
+    <g transform="translate(92, 13)">
+      <rect x="0" y="0" width="71" height="50" rx="5" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+      <text x="35.5" y="22" text-anchor="middle" fill="#bb9af7" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI</text>
+      <text x="35.5" y="38" text-anchor="middle" fill="#4f5370" font-size="8" font-family="monospace">plugins</text>
+    </g>
+
+    <g transform="translate(172, 13)">
+      <rect x="0" y="0" width="71" height="50" rx="5" fill="#1f2335" stroke="#f7768e" stroke-width="1"/>
+      <text x="35.5" y="22" text-anchor="middle" fill="#f7768e" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel</text>
+      <text x="35.5" y="38" text-anchor="middle" fill="#4f5370" font-size="8" font-family="monospace">core</text>
+    </g>
+
+    <g transform="translate(252, 13)">
+      <rect x="0" y="0" width="71" height="50" rx="5" fill="#1f2335" stroke="#9ece6a" stroke-width="1"/>
+      <text x="35.5" y="22" text-anchor="middle" fill="#9ece6a" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Drivers</text>
+      <text x="35.5" y="38" text-anchor="middle" fill="#4f5370" font-size="8" font-family="monospace">HAL</text>
+    </g>
+
+    <g transform="translate(332, 13)">
+      <rect x="0" y="0" width="46" height="50" rx="5" fill="#1f2335" stroke="#3b4261" stroke-width="1"/>
+      <text x="23" y="22" text-anchor="middle" fill="#3b4261" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">HW</text>
+      <text x="23" y="38" text-anchor="middle" fill="#3b4261" font-size="8" font-family="monospace">QEMU</text>
+    </g>
+  </g>
+
+  <!-- Arrow marker def -->
+  <defs>
+    <marker id="arrow-sm" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+</svg>

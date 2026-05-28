@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 680" width="1000" height="680">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+
+    <!-- User column -->
+    <linearGradient id="user-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="user-box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#24283b"/>
+      <stop offset="100%" stop-color="#1f2336"/>
+    </linearGradient>
+
+    <!-- Kernel column -->
+    <linearGradient id="kernel-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="kernel-box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a1f2e"/>
+      <stop offset="100%" stop-color="#241b28"/>
+    </linearGradient>
+
+    <!-- ABI column -->
+    <linearGradient id="abi-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="abi-box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#25203a"/>
+      <stop offset="100%" stop-color="#201c33"/>
+    </linearGradient>
+
+    <!-- Decision -->
+    <linearGradient id="diamond-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="return-path" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="shadow-lg">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="glow-box">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#7aa2f7"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f7768e"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#9ece6a"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#bb9af7"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="680" fill="url(#bg)" rx="14"/>
+
+  <!-- === TITLE === -->
+  <text x="500" y="38" text-anchor="middle" fill="#c0caf5" font-size="20" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Syscall Dispatch Flow</text>
+
+  <!-- === COLUMN HEADERS === -->
+  <!-- User Process -->
+  <rect x="40" y="55" width="240" height="36" rx="8" fill="url(#user-bg)" filter="url(#shadow)"/>
+  <text x="160" y="78" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">User Process</text>
+
+  <!-- Divider 1 -->
+  <line x1="295" y1="50" x2="295" y2="640" stroke="#3b4261" stroke-width="1.5" stroke-dasharray="6 4"/>
+
+  <!-- Kernel -->
+  <rect x="305" y="55" width="390" height="36" rx="8" fill="url(#kernel-bg)" filter="url(#shadow)"/>
+  <text x="500" y="78" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel</text>
+
+  <!-- Divider 2 -->
+  <line x1="710" y1="50" x2="710" y2="640" stroke="#3b4261" stroke-width="1.5" stroke-dasharray="6 4"/>
+
+  <!-- ABI Plugin -->
+  <rect x="720" y="55" width="240" height="36" rx="8" fill="url(#abi-bg)" filter="url(#shadow)"/>
+  <text x="840" y="78" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI Plugin</text>
+
+  <!-- ============================================ -->
+  <!-- STEP 1: User issues int 0x80                 -->
+  <!-- ============================================ -->
+  <rect x="50" y="115" width="220" height="65" rx="8" fill="url(#user-box)" stroke="#7aa2f7" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="160" y="138" text-anchor="middle" fill="#7aa2f7" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">mov rax, SYS_GETPID</text>
+  <text x="160" y="157" text-anchor="middle" fill="#f7768e" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">int 0x80</text>
+  <text x="160" y="173" text-anchor="middle" fill="#565f89" font-size="10" font-family="monospace">; rbx, rdi, rsi = args</text>
+
+  <!-- Arrow: user → kernel -->
+  <path d="M 270 147 L 302 147" stroke="#7aa2f7" stroke-width="2.5" marker-end="url(#arrow-blue)" filter="url(#glow-box)"/>
+  <text x="286" y="140" text-anchor="middle" fill="#565f89" font-size="8" font-family="system-ui, -apple-system, sans-serif">CPU</text>
+
+  <!-- ============================================ -->
+  <!-- STEP 2: syscall_handler()                    -->
+  <!-- ============================================ -->
+  <rect x="335" y="115" width="330" height="55" rx="8" fill="url(#kernel-box)" stroke="#f7768e" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="500" y="138" text-anchor="middle" fill="#f7768e" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">syscall_handler()</text>
+  <text x="500" y="156" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">interrupt gate · reads rax, rbx, rdi, rsi from CPU state</text>
+
+  <!-- Internal arrow -->
+  <path d="M 500 170 L 500 190" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- ============================================ -->
+  <!-- STEP 3: dispatch_syscall()                   -->
+  <!-- ============================================ -->
+  <rect x="335" y="190" width="330" height="55" rx="8" fill="url(#kernel-box)" stroke="#e0af68" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="500" y="213" text-anchor="middle" fill="#e0af68" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">dispatch_syscall()</text>
+  <text x="500" y="231" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">registry · ctx · match syscall number</text>
+
+  <!-- Internal arrow -->
+  <path d="M 500 245 L 500 270" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ============================================ -->
+  <!-- STEP 4: Decision (match ctx.num)             -->
+  <!-- ============================================ -->
+  <!-- Large match container -->
+  <rect x="335" y="270" width="330" height="170" rx="10" fill="#1a1b26" stroke="#2ac3de" stroke-width="1.5" filter="url(#shadow-lg)"/>
+  <text x="500" y="295" text-anchor="middle" fill="#2ac3de" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">match ctx.num</text>
+
+  <!-- Core branch -->
+  <rect x="355" y="310" width="140" height="50" rx="6" fill="#24283b" stroke="#9ece6a" stroke-width="1.5"/>
+  <text x="425" y="332" text-anchor="middle" fill="#9ece6a" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Core?</text>
+  <text x="425" y="350" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">GETPID / EXIT /</text>
+  <text x="425" y="358" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">FORK / MMAP</text>
+
+  <!-- Arrow: Core → return direct -->
+  <path d="M 495 335 L 670 335 L 670 400 L 840 400" stroke="#9ece6a" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arrow-green)" fill="none"/>
+  <text x="590" y="328" text-anchor="middle" fill="#9ece6a" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">→ return direct</text>
+
+  <!-- ABI branch -->
+  <rect x="505" y="310" width="140" height="50" rx="6" fill="#24283b" stroke="#bb9af7" stroke-width="1.5"/>
+  <text x="575" y="332" text-anchor="middle" fill="#bb9af7" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI?</text>
+  <text x="575" y="350" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">write / read /</text>
+  <text x="575" y="358" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">open / brk</text>
+
+  <!-- Arrow into the match diamond (center) -->
+  <path d="M 500 270 L 500 307" stroke="#2ac3de" stroke-width="1.5" fill="none"/>
+
+  <!-- Visual connector between Core and ABI boxes -->
+  <path d="M 495 335 L 502 335" stroke="#2ac3de" stroke-width="1"/>
+
+  <!-- Arrow: ABI → plugin.handle_syscall() -->
+  <path d="M 645 335 L 720 335" stroke="#bb9af7" stroke-width="2.5" marker-end="url(#arrow-purple)" fill="none"/>
+  <text x="682" y="328" text-anchor="middle" fill="#bb9af7" font-size="9" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">→ plugin</text>
+
+  <!-- ============================================ -->
+  <!-- STEP 5: plugin.handle_syscall() (ABI side)   -->
+  <!-- ============================================ -->
+  <rect x="730" y="310" width="220" height="60" rx="8" fill="url(#abi-box)" stroke="#bb9af7" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="840" y="333" text-anchor="middle" fill="#bb9af7" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">plugin.handle_syscall()</text>
+  <text x="840" y="352" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">LinuxAbiPlugin | WasmAbiPlugin</text>
+  <text x="840" y="365" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">AbiPlugin trait dispatch</text>
+
+  <!-- Internal arrow (ABI plugin processing) -->
+  <path d="M 840 370 L 840 395" stroke="#bb9af7" stroke-width="2" marker-end="url(#arrow-purple)"/>
+
+  <!-- ============================================ -->
+  <!-- STEP 6: Return path                         -->
+  <!-- ============================================ -->
+  <!-- Result from ABI plugin -->
+  <rect x="730" y="395" width="220" height="45" rx="8" fill="url(#abi-box)" stroke="#9ece6a" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="840" y="418" text-anchor="middle" fill="#9ece6a" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Result</text>
+  <text x="840" y="433" text-anchor="middle" fill="#565f89" font-size="10" font-family="monospace">Ok(u64) | Err(AbiError)</text>
+
+  <!-- Return arrow (ABI → Kernel) -->
+  <path d="M 730 417 L 670 417" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow-green)" fill="none"/>
+
+  <!-- Kernel: RAX = result -->
+  <rect x="380" y="470" width="240" height="55" rx="8" fill="url(#kernel-box)" stroke="#9ece6a" stroke-width="2" filter="url(#shadow-lg)"/>
+  <text x="500" y="494" text-anchor="middle" fill="#9ece6a" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">RAX = result</text>
+  <text x="500" y="512" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">syscall return value in RAX</text>
+
+  <!-- Merge arrows into RAX box -->
+  <path d="M 500 440 L 500 467" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ============================================ -->
+  <!-- STEP 7: Return to user                      -->
+  <!-- ============================================ -->
+  <path d="M 500 525 L 500 555" stroke="#9ece6a" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <!-- Long horizontal return from ABI to user -->
+  <path d="M 840 440 L 840 490 L 550 490 L 550 555 L 500 555" stroke="#9ece6a" stroke-width="2" fill="none" stroke-dasharray="5 3" opacity="0.5"/>
+
+  <rect x="50" y="555" width="220" height="60" rx="8" fill="url(#user-box)" stroke="#9ece6a" stroke-width="2" filter="url(#shadow-lg)"/>
+  <text x="160" y="580" text-anchor="middle" fill="#9ece6a" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">iretq</text>
+  <text x="160" y="599" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">return to userspace</text>
+
+  <path d="M 270 585 L 298 585" stroke="#9ece6a" stroke-width="2.5" marker-end="url(#arrow-green)" filter="url(#glow-box)"/>
+
+  <!-- ============================================ -->
+  <!-- LEGEND / FOOTER                             -->
+  <!-- ============================================ -->
+  <rect x="40" y="635" width="920" height="30" rx="6" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
+  <text x="500" y="655" text-anchor="middle" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">
+    Core syscalls handled directly by kernel (no ABI context switch). ABI syscalls dispatched via registered
+    <tspan fill="#bb9af7"> AbiPlugin </tspan>
+    trait implementation.
+  </text>
+
+  <!-- Color legend dots -->
+  <circle cx="60" cy="648" r="4" fill="#7aa2f7"/>
+  <circle cx="170" cy="648" r="4" fill="#f7768e"/>
+  <circle cx="280" cy="648" r="4" fill="#bb9af7"/>
+  <circle cx="390" cy="648" r="4" fill="#9ece6a"/>
+  <circle cx="500" cy="648" r="4" fill="#e0af68"/>
+</svg>

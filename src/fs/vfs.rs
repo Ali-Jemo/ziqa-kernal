@@ -47,6 +47,16 @@ impl Vfs {
         }
     }
 
+    /// Read from a file without capability checks (kernel-internal use).
+    pub fn read_raw(&self, path: &str, buf: &mut [u8], offset: usize) -> Result<usize, AbiError> {
+        if let Some(file_mutex) = self.files.get(path) {
+            let file = file_mutex.lock();
+            file.read(buf, offset)
+        } else {
+            Err(AbiError::Other("File not found"))
+        }
+    }
+
     /// Write to a file, checking for a valid Write-enabled File capability
     pub fn write(&self, process: &Process, path: &str, buf: &[u8], offset: usize) -> Result<usize, AbiError> {
         // 1. Check for write permission
