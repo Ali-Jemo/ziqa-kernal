@@ -4,12 +4,23 @@ use alloc::vec::Vec;
 use crate::{print, println};
 use crate::klog::Level;
 use crate::process::AbiKind;
+use crate::fs::vfs::VFS;
 use x86_64::VirtAddr;
+
+const COMMANDS: &[&str] = &[
+    "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
+    "sleep", "meminfo", "netstat", "klog", "doom", "tetris",
+    "reboot", "echo", "clear",
+];
+
+const MAX_HISTORY: usize = 50;
 
 pub struct Shell {
     prompt: &'static str,
     input_buf: [u8; 256],
     cursor: usize,
+    history: Vec<[u8; 256]>,
+    history_pos: isize,
 }
 
 impl Shell {
@@ -18,6 +29,8 @@ impl Shell {
             prompt: "> ",
             input_buf: [0; 256],
             cursor: 0,
+            history: Vec::new(),
+            history_pos: -1,
         }
     }
 
@@ -27,9 +40,11 @@ impl Shell {
             print!("{}", self.prompt);
             self.read_line();
 
-            let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
-            let trimmed = input.trim();
-            if !trimmed.is_empty() {
+            let has_input = self.input_buf[..self.cursor].iter().any(|&b| b != b' ' && b != b'\t' && b != b'\r' && b != b'\n');
+            if has_input {
+                self.push_history();
+                let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
+                let trimmed = input.trim();
                 let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
                 match parts[0] {
                     "help"    => self.cmd_help(),
@@ -46,33 +61,130 @@ impl Shell {
                     "doom"    => self.cmd_doom(parts.get(1).copied()),
                     "tetris"  => self.cmd_tetris(),
                     "reboot"  => self.cmd_reboot(),
+                    "edit"    => self.cmd_edit(parts.get(1).copied()),
+                    "ls"      => self.cmd_ls(),
                     "clear"   => { for _ in 0..25 { println!(""); } },
                     "echo"    => println!("{}", parts.get(1).copied().unwrap_or("")),
                     _         => println!("Unknown command: {}. Type 'help'.", parts[0]),
                 }
             }
+            self.history_pos = -1;
             self.cursor = 0;
+        }
+    }
+
+    fn push_history(&mut self) {
+        let last = self.history.last().map(|e| *e == self.input_buf).unwrap_or(false);
+        if !last {
+            if self.history.len() >= MAX_HISTORY {
+                self.history.remove(0);
+            }
+            let mut entry = [0u8; 256];
+            entry[..self.cursor].copy_from_slice(&self.input_buf[..self.cursor]);
+            self.history.push(entry);
+        }
+    }
+
+    fn refresh_line(&self, idx: usize) {
+        print!("\r");
+        for _ in 0..79 {
+            print!(" ");
+        }
+        print!("\r");
+        print!("{}", self.prompt);
+        if let Ok(s) = core::str::from_utf8(&self.input_buf[..idx]) {
+            print!("{}", s);
+        }
+    }
+
+    fn load_history(&mut self, idx: &mut usize) {
+        let entry = &self.history[self.history_pos as usize];
+        let len = entry.iter().position(|&b| b == 0).unwrap_or(256);
+        self.input_buf[..len].copy_from_slice(&entry[..len]);
+        *idx = len;
+        self.refresh_line(*idx);
+    }
+
+    fn autocomplete(&mut self, idx: &mut usize) {
+        let input = core::str::from_utf8(&self.input_buf[..*idx]).unwrap_or("");
+        let last_space = input.rfind(' ').map(|i| i + 1).unwrap_or(0);
+        let prefix = &input[last_space..];
+
+        let matches: Vec<&&str> = COMMANDS.iter().filter(|c| c.starts_with(prefix)).collect();
+
+        match matches.len() {
+            0 => {}
+            1 => {
+                let cmd = matches[0].as_bytes();
+                let new_end = last_space + cmd.len();
+                self.input_buf[last_space..new_end].copy_from_slice(cmd);
+                for i in new_end..*idx {
+                    self.input_buf[i] = 0;
+                }
+                *idx = new_end;
+                self.refresh_line(*idx);
+            }
+            _ => {
+                println!("");
+                for m in matches {
+                    print!("{}  ", m);
+                }
+                println!("");
+                self.refresh_line(*idx);
+            }
         }
     }
 
     fn read_line(&mut self) {
         use crate::drivers::keyboard::read_stdin;
         let mut idx = 0;
+        self.input_buf = [0; 256];
         loop {
             let mut byte = [0u8; 1];
             if read_stdin(&mut byte) > 0 {
                 let b = byte[0];
-                if b == b'\n' || b == b'\r' {
-                    self.cursor = idx;
-                    break;
-                } else if b == 8 || b == 127 {
-                    if idx > 0 {
-                        idx -= 1;
+                match b {
+                    0x80 => {
+                        if !self.history.is_empty() {
+                            if self.history_pos < 0 {
+                                self.history_pos = self.history.len() as isize - 1;
+                            } else if self.history_pos > 0 {
+                                self.history_pos -= 1;
+                            }
+                            self.load_history(&mut idx);
+                        }
                     }
-                } else {
-                    if idx < self.input_buf.len() - 1 {
-                        self.input_buf[idx] = b;
-                        idx += 1;
+                    0x81 => {
+                        if self.history_pos >= 0 {
+                            self.history_pos += 1;
+                            if self.history_pos as usize >= self.history.len() {
+                                self.history_pos = -1;
+                                self.input_buf = [0; 256];
+                                idx = 0;
+                                self.refresh_line(idx);
+                            } else {
+                                self.load_history(&mut idx);
+                            }
+                        }
+                    }
+                    0x09 => {
+                        self.autocomplete(&mut idx);
+                    }
+                    b'\n' | b'\r' => {
+                        self.cursor = idx;
+                        println!("");
+                        break;
+                    }
+                    8 | 127 => {
+                        if idx > 0 {
+                            idx -= 1;
+                        }
+                    }
+                    _ => {
+                        if idx < self.input_buf.len() - 1 {
+                            self.input_buf[idx] = b;
+                            idx += 1;
+                        }
                     }
                 }
             } else {
@@ -184,7 +296,7 @@ impl Shell {
             Some(v) => v,
             None => { println!("Usage: kill <pid> [signal]"); return; }
         };
-        let signum: u8 = sig_str.and_then(|s| s.parse().ok()).unwrap_or(15); // SIGTERM
+        let signum: u8 = sig_str.and_then(|s| s.parse().ok()).unwrap_or(15);
         let ok = crate::process::scheduler::SCHEDULER.lock()
             .send_signal(crate::process::Pid(pid_val), signum);
         if ok {
@@ -199,7 +311,6 @@ impl Shell {
             Some(v) => v,
             None => { println!("Usage: sleep <milliseconds>"); return; }
         };
-        // Use the shell's own PID (0 = kernel/shell context)
         let shell_pid = crate::process::Pid(0);
         crate::timer::sleep_ms(shell_pid, ms);
         println!("Slept {}ms", ms);
@@ -224,13 +335,11 @@ impl Shell {
 
     fn cmd_reboot(&self) {
         println!("Rebooting...");
-        // ACPI/PS2 keyboard controller reboot (port 0x64, command 0xFE)
         unsafe {
             use x86_64::instructions::port::Port;
             let mut port: Port<u8> = Port::new(0x64);
             port.write(0xFE);
         }
-        // If that didn't work, triple-fault
         loop { x86_64::instructions::hlt(); }
     }
 

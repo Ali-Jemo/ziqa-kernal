@@ -4,7 +4,7 @@
 /// sys_read(stdin) drains decoded characters from this buffer.
 
 use spin::Mutex;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
+use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1, KeyCode};
 use lazy_static::lazy_static;
 
 const BUF_CAP: usize = 256;
@@ -27,7 +27,6 @@ impl RingBuf {
             self.tail = (self.tail + 1) % BUF_CAP;
             self.count += 1;
         }
-        // Drop oldest if full (overwrite)
     }
 
     fn pop(&mut self) -> Option<u8> {
@@ -42,6 +41,8 @@ impl RingBuf {
 }
 
 static INPUT_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
+static EDITOR_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
+static ECHO_ENABLED: Mutex<bool> = Mutex::new(true);
 
 lazy_static! {
     static ref KB: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
@@ -59,14 +60,31 @@ pub fn push_scancode(scancode: u8) {
         if let Some(key) = kb.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(c) => {
-                    // Echo to serial
-                    crate::print!("{}", c);
-                    // Store in ring buffer (UTF-8, only ASCII range for now)
+                    if *ECHO_ENABLED.lock() {
+                        crate::print!("{}", c);
+                    }
                     if c.is_ascii() {
-                        INPUT_BUF.lock().push(c as u8);
+                        let b = c as u8;
+                        INPUT_BUF.lock().push(b);
+                        EDITOR_BUF.lock().push(b);
                     }
                 }
-                DecodedKey::RawKey(_) => {}
+                DecodedKey::RawKey(k) => {
+                    let code = match k {
+                        KeyCode::ArrowUp    => 0x80,
+                        KeyCode::ArrowDown  => 0x81,
+                        KeyCode::ArrowLeft  => 0x82,
+                        KeyCode::ArrowRight => 0x83,
+                        KeyCode::Home       => 0x84,
+                        KeyCode::End        => 0x85,
+                        KeyCode::PageUp     => 0x86,
+                        KeyCode::PageDown   => 0x87,
+                        KeyCode::Delete     => 0x88,
+                        _ => return,
+                    };
+                    INPUT_BUF.lock().push(code);
+                    EDITOR_BUF.lock().push(code);
+                }
             }
         }
     }
@@ -94,8 +112,33 @@ pub fn clear_stdin() {
     ring.count = 0;
 }
 
-
 /// Returns true if there is pending keyboard input.
 pub fn has_input() -> bool {
     !INPUT_BUF.lock().is_empty()
+}
+
+/// Read a byte from the editor input buffer
+pub fn read_editor_byte(buf: &mut [u8]) -> usize {
+    let mut ring = EDITOR_BUF.lock();
+    let mut n = 0;
+    while n < buf.len() {
+        match ring.pop() {
+            Some(b) => { buf[n] = b; n += 1; }
+            None => break,
+        }
+    }
+    n
+}
+
+/// Clear all pending editor input
+pub fn clear_editor_buf() {
+    let mut ring = EDITOR_BUF.lock();
+    ring.head = 0;
+    ring.tail = 0;
+    ring.count = 0;
+}
+
+/// Enable or disable character echo (used by editor)
+pub fn set_echo(enabled: bool) {
+    *ECHO_ENABLED.lock() = enabled;
 }
