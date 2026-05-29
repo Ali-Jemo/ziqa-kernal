@@ -82,7 +82,9 @@ const BOOT_STAGES: [BootStage; 3] = [
 fn wait_ms(ms: u64) {
     let start = crate::timer::uptime_ms();
     while crate::timer::uptime_ms() - start < ms {
-        core::hint::spin_loop();
+        // Enable interrupts so the timer ISR can fire and advance the tick counter,
+        // then immediately halt until the next interrupt before re-checking.
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 }
 

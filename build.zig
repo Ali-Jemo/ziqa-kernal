@@ -23,4 +23,17 @@ pub fn build(b: *std.Build) void {
     libblitter.root_module.pic = true;
 
     b.installArtifact(libblitter);
+
+    // Kernel Ops Static Library
+    const libkernelops = b.addLibrary(.{
+        .name = "kernelops",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zig/kernel_ops.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    libkernelops.root_module.pic = true;
+    b.installArtifact(libkernelops);
 }

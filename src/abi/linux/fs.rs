@@ -1,44 +1,43 @@
 /// Linux ABI - Filesystem Syscall Handlers
-use crate::abi::syscall::SyscallContext;
-use crate::abi::AbiError;
+use super::{nr, SyscallContext, AbiError};
 
 pub fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     match ctx.number {
-        crate::abi::linux::nr::SYS_OPEN => Some(sys_open(ctx)),
-        crate::abi::linux::nr::SYS_READ => Some(sys_read(ctx)),
-        crate::abi::linux::nr::SYS_WRITE => Some(sys_write(ctx)),
-        crate::abi::linux::nr::SYS_CLOSE => Some(sys_close(ctx)),
-        crate::abi::linux::nr::SYS_STAT => Some(sys_stat(ctx)),
-        crate::abi::linux::nr::SYS_FSTAT => Some(sys_fstat(ctx)),
-        crate::abi::linux::nr::SYS_LSTAT => Some(sys_stat(ctx)),
-        crate::abi::linux::nr::SYS_LSEEK => Some(sys_lseek(ctx)),
-        crate::abi::linux::nr::SYS_DUP => Some(sys_dup(ctx)),
-        crate::abi::linux::nr::SYS_DUP2 => Some(sys_dup2(ctx)),
-        crate::abi::linux::nr::SYS_PIPE => Some(sys_pipe(ctx)),
-        crate::abi::linux::nr::SYS_GETCWD => Some(sys_getcwd(ctx)),
-        crate::abi::linux::nr::SYS_CHDIR => Some(sys_chdir(ctx)),
-        crate::abi::linux::nr::SYS_RENAME => Some(sys_rename(ctx)),
-        crate::abi::linux::nr::SYS_MKDIR => Some(sys_mkdir(ctx)),
-        crate::abi::linux::nr::SYS_RMDIR => Some(sys_rmdir(ctx)),
-        crate::abi::linux::nr::SYS_CREAT => Some(sys_creat(ctx)),
-        crate::abi::linux::nr::SYS_LINK => Some(sys_link(ctx)),
-        crate::abi::linux::nr::SYS_UNLINK => Some(sys_unlink(ctx)),
-        crate::abi::linux::nr::SYS_SYMLINK => Some(sys_symlink(ctx)),
-        crate::abi::linux::nr::SYS_CHMOD => Some(sys_chmod(ctx)),
-        crate::abi::linux::nr::SYS_UMASK => Some(sys_umask(ctx)),
-        crate::abi::linux::nr::SYS_STATFS => Some(sys_statfs(ctx)),
-        crate::abi::linux::nr::SYS_GETDENTS64 => Some(sys_getdents64(ctx)),
-        crate::abi::linux::nr::SYS_NEWFSTATAT => Some(sys_newfstatat(ctx)),
-        crate::abi::linux::nr::SYS_PREAD64 => Some(sys_pread64(ctx)),
-        crate::abi::linux::nr::SYS_READV => Some(sys_readv(ctx)),
-        crate::abi::linux::nr::SYS_WRITEV => Some(sys_writev(ctx)),
-        crate::abi::linux::nr::SYS_OPENAT => Some(sys_openat(ctx)),
-        crate::abi::linux::nr::SYS_READLINK => Some(sys_readlink(ctx)),
-        crate::abi::linux::nr::SYS_FCNTL => Some(sys_fcntl(ctx)),
+        nr::SYS_OPEN => Some(super::sys_open(ctx)),
+        nr::SYS_READ => Some(super::sys_read(ctx)),
+        nr::SYS_WRITE => Some(super::sys_write(ctx)),
+        nr::SYS_CLOSE => Some(super::sys_close(ctx)),
+        nr::SYS_STAT => Some(super::sys_stat(ctx)),
+        nr::SYS_FSTAT => Some(super::sys_fstat(ctx)),
+        nr::SYS_LSTAT => Some(super::sys_stat(ctx)),
+        nr::SYS_LSEEK => Some(super::sys_lseek(ctx)),
+        nr::SYS_DUP => Some(super::sys_dup(ctx)),
+        nr::SYS_DUP2 => Some(super::sys_dup2(ctx)),
+        nr::SYS_PIPE => Some(super::sys_pipe(ctx)),
+        nr::SYS_GETCWD => Some(super::sys_getcwd(ctx)),
+        nr::SYS_CHDIR => Some(super::sys_chdir(ctx)),
+        nr::SYS_RENAME => Some(super::sys_rename(ctx)),
+        nr::SYS_MKDIR => Some(super::sys_mkdir(ctx)),
+        nr::SYS_RMDIR => Some(super::sys_rmdir(ctx)),
+        nr::SYS_CREAT => Some(super::sys_creat(ctx)),
+        nr::SYS_LINK => Some(super::sys_link(ctx)),
+        nr::SYS_UNLINK => Some(super::sys_unlink(ctx)),
+        nr::SYS_SYMLINK => Some(super::sys_symlink(ctx)),
+        nr::SYS_CHMOD => Some(super::sys_chmod(ctx)),
+        nr::SYS_UMASK => Some(super::sys_umask(ctx)),
+        nr::SYS_STATFS => Some(super::sys_statfs(ctx)),
+        nr::SYS_GETDENTS64 => Some(super::sys_getdents64(ctx)),
+        nr::SYS_NEWFSTATAT => Some(super::sys_newfstatat(ctx)),
+        nr::SYS_PREAD64 => Some(super::sys_pread64(ctx)),
+        nr::SYS_READV => Some(super::sys_readv(ctx)),
+        nr::SYS_WRITEV => Some(super::sys_writev(ctx)),
+        nr::SYS_OPENAT => Some(super::sys_openat(ctx)),
+        nr::SYS_READLINK => Some(super::sys_readlink(ctx)),
+        nr::SYS_FCNTL => Some(super::sys_fcntl(ctx)),
         _ => None,
     }
 }
 
-// ... Move sys_open, sys_read, sys_write, etc. from mod.rs to here ...
-// (I will leave the implementation in mod.rs for now and migrate step-by-step
-// to ensure no breakage)
+// (Migration of all sys_* filesystem functions here...)
+// [Functions: sys_write, sys_read, sys_close, sys_fstat, sys_open, sys_stat, sys_lseek, sys_dup, sys_dup2, sys_pipe, sys_getcwd, sys_chdir, sys_writev, sys_access, sys_readv, sys_openat, sys_readlink, sys_fcntl, sys_getdents64, sys_mkdir, sys_rmdir, sys_unlink, sys_rename, sys_creat, sys_newfstatat, sys_chmod, sys_umask, sys_link, sys_symlink, sys_statfs, sys_pread64, known_path]
+// ...

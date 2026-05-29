@@ -104,6 +104,8 @@ pub fn lookup_in_dir(
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
+        // ARCH: [dir→block] CS-19 lookup_in_dir reads each directory data block to scan
+        //       entries. Physical block resolved via inode_get_block; no fixed block address.
         read_block(device, phys, &mut buf)?;
         if let Some(id) = find_entry(&buf, BLOCK_SIZE as u32, name) {
             return Ok(Some(id));
@@ -127,6 +129,8 @@ pub fn dir_add_entry(
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
+        // ARCH: [dir→block] CS-20 dir_add_entry reads each existing directory block to find
+        //       a free slot. Falls through to block allocation only when all blocks are full.
         read_block(device, phys, &mut buf)?;
         if write_entry_raw(&mut buf, new_id, name).is_ok() {
             return write_block(device, phys, &buf);

@@ -41,8 +41,10 @@ pub fn read_file(
             break;
         }
         let mut block_buf = [0u8; BLOCK_SIZE];
+        // ARCH: [file→block] CS-11 read_file reads a data block resolved via inode_get_block.
+        //       Copies the relevant slice into the caller's buffer; no block number is hardcoded.
         read_block(device, phys, &mut block_buf)?;
-        let chunk = (BLOCK_SIZE - block_off).min(to_read - done);
+        let chunk = (to_read - done).min(BLOCK_SIZE - block_off);
         buf[done..done + chunk].copy_from_slice(&block_buf[block_off..block_off + chunk]);
         done += chunk;
     }
@@ -67,6 +69,8 @@ pub fn write_file(
         let phys = inode_alloc_block(device, sb, &mut inode, logical)?;
         let mut block_buf = [0u8; BLOCK_SIZE];
         if block_off > 0 || done + BLOCK_SIZE > buf.len() {
+            // ARCH: [file→block] CS-12 write_file reads the existing data block before a
+            //       partial-block write (read-modify-write to preserve unwritten bytes).
             read_block(device, phys, &mut block_buf)?;
         }
         let chunk = (BLOCK_SIZE - block_off).min(buf.len() - done);
@@ -104,6 +108,8 @@ pub fn truncate(
                 let idx = (logical - 10) as usize;
                 if idx < BLOCK_SIZE / 4 && inode.indirect != 0 {
                     let mut buf = [0u8; BLOCK_SIZE];
+                    // ARCH: [file→block] CS-13 truncate reads the indirect pointer block to
+                    //       zero out the freed slot. Read-modify-write; preserves other pointers.
                     read_block(device, inode.indirect, &mut buf)?;
                     let ptrs: &mut [u32] = unsafe {
                         core::slice::from_raw_parts_mut(
@@ -122,6 +128,8 @@ pub fn truncate(
         let phys = inode_get_block(device, &inode, last_logical)?;
         if phys != 0 {
             let mut block_buf = [0u8; BLOCK_SIZE];
+            // ARCH: [file→block] CS-14 truncate reads the last data block to zero the tail
+            //       bytes beyond new_size. Ensures no stale data is visible after shrink.
             read_block(device, phys, &mut block_buf)?;
             let tail_start = new_size % BLOCK_SIZE;
             block_buf[tail_start..].fill(0);
@@ -196,6 +204,8 @@ pub fn unlink(
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
+        // ARCH: [file→block] CS-15 unlink scans parent directory blocks to locate the target
+        //       entry. Reads each data block of the directory inode in logical order.
         read_block(device, phys, &mut buf)?;
         if let Some(id) = super::dir::find_entry(&buf, BLOCK_SIZE as u32, name) {
             target_id = Some(id);
@@ -208,6 +218,8 @@ pub fn unlink(
     target_inode.nlink = target_inode.nlink.saturating_sub(1);
     target_inode.ctime = crate::timer::TIMER.lock().uptime_secs() as u32;
     let mut buf = [0u8; BLOCK_SIZE];
+    // ARCH: [file→block] CS-16 unlink re-reads the found directory block to remove the entry.
+    //       Separate read from CS-15 because found_phys may differ from the last scanned block.
     read_block(device, found_phys, &mut buf)?;
     super::dir::remove_entry_raw(&mut buf, BLOCK_SIZE as u32, target_id);
     write_block(device, found_phys, &buf)?;
@@ -242,6 +254,8 @@ pub fn rename(
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
+        // ARCH: [file→block] CS-17 rename scans source-parent directory blocks to find and
+        //       remove the old entry before inserting it under the new name/parent.
         read_block(device, phys, &mut buf)?;
         if super::dir::remove_entry_raw(&mut buf, BLOCK_SIZE as u32, target_id) {
             write_block(device, phys, &buf)?;
@@ -346,6 +360,8 @@ pub fn copy_file(
             continue;
         }
         let mut block_buf = [0u8; BLOCK_SIZE];
+        // ARCH: [file→block] CS-18 copy_file reads each source data block and writes it to
+        //       the new inode via write_file. Block-by-block copy; no shared buffer aliasing.
         read_block(device, src_phys, &mut block_buf)?;
         let write_len =
             if logical as usize == total_logical.saturating_sub(1) && size % BLOCK_SIZE != 0 {

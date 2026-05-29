@@ -4,10 +4,10 @@ use super::block::read_block;
 use super::inode::{inode_get_block, read_inode};
 use super::types::*;
 use crate::drivers::block::BlockDevice;
+use crate::zig_kernel_ops;
 
 pub fn fsck(device: &dyn BlockDevice, sb: &Superblock) -> FsckResult {
     let mut errors = 0u32;
-    let mut leaked_blocks = 0u32;
     let mut leaked_inodes = 0u32;
 
     if sb.magic != MAGIC {
@@ -15,6 +15,8 @@ pub fn fsck(device: &dyn BlockDevice, sb: &Superblock) -> FsckResult {
     }
 
     let mut bitmap = [0u8; BLOCK_SIZE];
+    // ARCH: [fsck→block] CS-24 fsck reads BITMAP_BLOCK to compare allocated bits against
+    //       blocks reachable from live inodes. Detects leaked blocks; read-only, no writes.
     if read_block(device, BITMAP_BLOCK, &mut bitmap).is_err() {
         return FsckResult { ok: false, errors: 1, leaked_blocks: 0, leaked_inodes: 0 };
     }
@@ -49,15 +51,11 @@ pub fn fsck(device: &dyn BlockDevice, sb: &Superblock) -> FsckResult {
         }
     }
 
-    for b in sb.first_data_block..sb.total_blocks {
-        let byte = b as usize / 8;
-        let bit = 1u8 << (b as usize % 8);
-        let in_bitmap = bitmap[byte] & bit != 0;
-        let in_reachable = reachable[byte] & bit != 0;
-        if in_bitmap && !in_reachable {
-            leaked_blocks += 1;
-            errors += 1;
-        }
+    let leaked_blocks = zig_kernel_ops::bitmap_count_leaked(
+        &bitmap, &reachable, sb.first_data_block, sb.total_blocks,
+    );
+    if leaked_blocks > 0 {
+        errors += leaked_blocks;
     }
 
     let expected_free = INODE_COUNT - 1 - live_inodes;

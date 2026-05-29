@@ -3,6 +3,7 @@
 use super::types::*;
 use crate::abi::AbiError;
 use crate::drivers::block::BlockDevice;
+use crate::zig_kernel_ops;
 
 pub fn read_blocks(
     device: &dyn BlockDevice,
@@ -63,8 +64,8 @@ pub fn test_bitmap_bit(buf: &[u8; BLOCK_SIZE], block: usize) -> bool {
 pub fn alloc_data_block(device: &dyn BlockDevice, sb: &mut Superblock) -> Result<u32, AbiError> {
     let mut bitmap = [0u8; BLOCK_SIZE];
     read_block(device, BITMAP_BLOCK, &mut bitmap)?;
-    for b in sb.first_data_block..sb.total_blocks {
-        if !test_bitmap_bit(&bitmap, b as usize) {
+    if let Some(b) = zig_kernel_ops::bitmap_find_clear(&bitmap, sb.first_data_block) {
+        if b < sb.total_blocks {
             set_bitmap_bit(&mut bitmap, b as usize);
             write_block(device, BITMAP_BLOCK, &bitmap)?;
             let zero = [0u8; BLOCK_SIZE];

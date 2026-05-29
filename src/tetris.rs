@@ -401,6 +401,11 @@ pub fn run() {
     let mut pending_lines: u32 = 0;
     let mut pending_score_inc: u32 = 0;
 
+    // ── Fireworks state ──
+    let mut fw_particles: Vec<u8> = alloc::vec::Vec::new();
+    let mut fw_count: u32 = 0;
+    let mut fw_color: u32 = 0;
+
     let mut v_fb = vec![0u32; 2000];
     let fb_ptr = v_fb.as_mut_ptr() as *mut u8;
     let pitch = 320u32;
@@ -429,6 +434,7 @@ pub fn run() {
                     next_piece = next_piece_idx();
                     is_game_over = false;
                     line_flash = 0;
+                    fw_count = 0;
                 }
             } else if line_flash == 0 {
                 match key {
@@ -475,6 +481,20 @@ pub fn run() {
                     score += pending_score_inc;
                     level = 1 + lines_cleared / 10;
                     tick_interval = (500 - (level as i64 * 35).min(400) as u64) as u64;
+
+                    // Trigger fireworks!
+                    let burst_colors = [0xFF4444, 0x44FF44, 0x4444FF, 0xFFFF44, 0xFF44FF, 0x44FFFF];
+                    fw_color = burst_colors[(now as usize) % burst_colors.len()];
+                    let burst_count = (pending_lines as u32) * 30;
+                    fw_particles = alloc::vec::Vec::with_capacity((burst_count as usize) * 8);
+                    fw_particles.resize((burst_count as usize) * 8, 0);
+                    fw_count = crate::zig_ffi::fireworks_burst(
+                        fb_ptr, pitch, 80, 25,
+                        40, 1 + (pending_lines * 2).min(18),
+                        fw_color, burst_count, 6, now as u32,
+                        &mut fw_particles,
+                    );
+
                     pending_lines = 0;
                     pending_score_inc = 0;
                 }
@@ -554,12 +574,20 @@ pub fn run() {
             find_ghost_y(&board, current_piece, current_rotation, current_x, current_y)
         } else { 0 };
 
+        // ── Fireworks update ───────────────────────────────────────────────
+        if fw_count > 0 {
+            fw_count = crate::zig_ffi::fireworks_update(
+                fb_ptr, pitch, 80, 25, &mut fw_particles, fw_count, fw_color, 2,
+            );
+        }
+
         // ── Render ─────────────────────────────────────────────────────────
         render_screen(
             fb_ptr, pitch, &mut v_fb, &board,
             score, level, lines_cleared, next_piece,
             current_piece, current_rotation, current_x, current_y,
             is_game_over, ghost_y, line_flash, &line_flash_rows,
+            now as u32,
         );
 
         present_to_vga(&v_fb);

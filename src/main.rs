@@ -5,7 +5,6 @@ use alloc::sync::Arc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use spin::Mutex;
-use ziqa_kernel::capability::{Permissions, ResourceKind};
 use ziqa_kernel::drivers::ata::AtaBlock;
 use ziqa_kernel::drivers::vga;
 use ziqa_kernel::drivers::vga::Color;
@@ -13,7 +12,6 @@ use ziqa_kernel::fs::ramfs::RamFile;
 use ziqa_kernel::fs::vfs::VFS;
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
-use ziqa_kernel::process::{scheduler::SCHEDULER, AbiKind};
 use ziqa_kernel::println;
 
 extern crate alloc;
@@ -102,7 +100,7 @@ fn init_services() {
     // ZiqaFS
     {
         let ata_disk = Arc::new(AtaBlock::new().expect("Failed to initialize AtaBlock"));
-        let ziqafs = ZiqaFs::mount(ata_disk.clone())
+        let _ziqafs = ZiqaFs::mount(ata_disk.clone())
             .unwrap_or_else(|_| ZiqaFs::format(ata_disk.clone()).expect("Failed to format ZiqaFS"));
         println!(" ~ ZiqaFS ............................. mounted");
     }

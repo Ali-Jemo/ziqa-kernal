@@ -5,10 +5,25 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::collections::BTreeMap;
 use crate::{print, println};
-use crate::process::AbiKind;
+use crate::process::{AbiKind, Pid, ProcessState, signal};
 use crate::fs::vfs::VFS;
 use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
 use x86_64::VirtAddr;
+
+/// Represents a background job
+#[derive(Debug)]
+pub struct Job {
+    pub pid: Pid,
+    pub command: String,
+    pub state: JobState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum JobState {
+    Running,
+    Stopped,
+    Done,
+}
 
 const COMMANDS: &[&str] = &[
     "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
@@ -43,6 +58,9 @@ pub struct Shell {
     last_exit_status: i32,
     aliases: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
+    /// Job control
+    jobs: Vec<Job>,
+    fg_job: Option<usize>, // index in jobs vector of foreground job
 }
 
 impl Shell {
@@ -59,9 +77,13 @@ impl Shell {
             last_exit_status: 0,
             aliases: BTreeMap::new(),
             env: BTreeMap::new(),
+            jobs: Vec::new(),
+            fg_job: None,
         }
     }
-}
+
+    fn set_exit_status(&mut self, status: i32) {
+        self.last_exit_status = status;
     }
 
     fn cwd_str(&self) -> &str {
@@ -157,14 +179,35 @@ impl Shell {
                 let arg1 = parts.get(1).copied().map(String::from);
                 let arg2 = parts.get(2).copied().map(String::from);
                 match cmd.as_str() {
-                    "help"    => self.cmd_help(),
-                    "uptime"  => self.cmd_uptime(),
-                    "klog"    => self.cmd_klog(arg1.as_deref().unwrap_or("info")),
-                    "spawn"   => self.cmd_spawn(arg1.as_deref()),
-                    "spawnelf" => self.cmd_spawn_elf(arg1.as_deref()),
-                    "exec"    => self.cmd_exec(arg1.as_deref()),
-                    "ps"      => self.cmd_ps(),
-                    "kill"    => self.cmd_kill(arg1.as_deref(), arg2.as_deref()),
+                     "help"    => {
+                         self.cmd_help();
+                         self.set_exit_status(0);
+                     },
+                     "uptime"  => {
+                         self.cmd_uptime();
+                         self.set_exit_status(0);
+                     },
+                     "klog"    => {
+                         self.cmd_klog(arg1.as_deref().unwrap_or("info"));
+                         self.set_exit_status(0);
+                     },
+                     "spawn"   => {
+                         self.cmd_spawn(arg1.as_deref());
+                         self.set_exit_status(0);
+                     },
+                     "spawnelf" => {
+                         self.cmd_spawn_elf(arg1.as_deref());
+                         self.set_exit_status(0);
+                     },
+                     "exec"    => {
+                         self.cmd_exec(arg1.as_deref());
+                         self.set_exit_status(0);
+                     },
+                     "ps"      => {
+                         self.cmd_ps();
+                         self.set_exit_status(0);
+                     },
+                     "kill"    => self.cmd_kill(arg1.as_deref(), arg2.as_deref()),
                     "sleep"   => self.cmd_sleep(arg1.as_deref()),
                     "meminfo" => self.cmd_meminfo(),
                     "diskinfo" => self.cmd_diskinfo(),
@@ -187,28 +230,52 @@ impl Shell {
                     "touch"   => self.cmd_touch(arg1.as_deref()),
                     "stat"    => self.cmd_stat(arg1.as_deref()),
                     "du"      => self.cmd_du(arg1.as_deref()),
-                    "clear"   => self.cmd_clear(),
+                     "clear"   => {
+                         self.cmd_clear();
+                         self.set_exit_status(0);
+                     },
                     "echo"    => println!("{}", trimmed.trim_start_matches("echo").trim_start()),
                     "ping"     => self.cmd_ping(trimmed.trim_start_matches("ping").trim_start()),
                     "wget"     => self.cmd_wget(trimmed.trim_start_matches("wget").trim_start()),
-                    "ifconfig" => self.cmd_ifconfig(),
-                    "history"  => self.cmd_history(),
+                     "ifconfig" => {
+                         self.cmd_ifconfig();
+                         self.set_exit_status(0);
+                     },
+                     "history"  => {
+                         self.cmd_history();
+                         self.set_exit_status(0);
+                     },
+                     "jobs"     => {
+                         self.cmd_jobs();
+                         self.set_exit_status(0);
+                     },
+                     "bg"       => {
+                         self.cmd_bg(arg1.as_deref());
+                         self.set_exit_status(0);
+                     },
+                     "fg"       => {
+                         self.cmd_fg(arg1.as_deref());
+                         self.set_exit_status(0);
+                     },
                     "alias"    => self.cmd_alias(arg1.as_deref(), arg2.as_deref()),
                     "export"   => self.cmd_export(arg1.as_deref()),
-                    _         => {
-                        let suggestion = self.find_similar_command(&cmd);
-                        if let Some(s) = suggestion {
-                            println!("Unknown command: {}. Did you mean '{}'?", cmd, s);
-                        } else {
-                            println!("Unknown command: {}. Type 'help'.", cmd);
-                        }
-                    }
+                     _         => {
+                         let suggestion = self.find_similar_command(&cmd);
+                         if let Some(s) = suggestion {
+                             println!("Unknown command: {}. Did you mean '{}'?", cmd, s);
+                         } else {
+                             println!("Unknown command: {}. Type 'help'.", cmd);
+                         }
+                         self.set_exit_status(1);
+                     }
                 }
-                self.update_status_bar();
-            }
-            self.history_pos = -1;
-            self.cursor = 0;
-        }
+                 self.update_status_bar();
+                 // Add visual separator after command output
+                 println!("\x1b[2m──────────────────────────────────────────────────────────────────────\x1b[0m");
+             }
+             self.history_pos = -1;
+             self.cursor = 0;
+         }
     }
 
     fn push_history(&mut self) {
@@ -293,7 +360,7 @@ impl Shell {
             *idx = new_end;
             self.refresh_line(*idx);
         } else {
-            let common = longest_common_prefix(&candidates);
+            let common = Self::longest_common_prefix(&candidates);
             if common.len() > prefix.len() {
                 let bytes = common.as_bytes();
                 let new_end = last_space + common.len();
@@ -359,7 +426,7 @@ impl Shell {
         let mut best: Option<&'static str> = None;
         let mut best_dist = 4;
         for &c in COMMANDS {
-            let d = levenshtein_distance(cmd, c);
+            let d = Self::levenshtein_distance(cmd, c);
             if d < best_dist {
                 best_dist = d;
                 best = Some(c);
@@ -371,11 +438,14 @@ impl Shell {
     fn update_status_bar(&self) {
         let ms = crate::timer::uptime_ms();
         let secs = ms / 1000;
+        let hours = secs / 3600;
+        let minutes = (secs % 3600) / 60;
+        let seconds = secs % 60;
         let mem_usage = crate::memory::heapstats::get_stats().current_usage_bytes() / 1024;
         let pcount = crate::process::scheduler::list_pids().len();
         crate::drivers::vga::set_status_text(
-            &alloc::format!(" \x1b[30;47m ZIQA v0.1 | Uptime: {}s | Mem: {}K | Procs: {} | Press PgUp/PgDn for scrollback \x1b[0m",
-                secs, mem_usage, pcount)
+            &alloc::format!(" \x1b[30;47m \x1b[36mZIQA\x1b[0m v0.1 | \x1b[33m{:02}:{:02}:{:02}\x1b[0m | \x1b[32mMem: {}K\x1b[0m | \x1b[35mProcs: {}\x1b[0m | \x1b[33mPress PgUp/PgDn for scrollback\x1b[0m ",
+                hours, minutes, seconds, mem_usage, pcount)
         );
     }
 
@@ -1666,7 +1736,6 @@ impl Shell {
             println!("du: ZiqaFS not mounted");
         }
     }
-}
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {
     let a = a.as_bytes();
@@ -1711,6 +1780,8 @@ fn longest_common_prefix(strings: &[String]) -> String {
         }
     }
     strings[0][..len].to_string()
+}
+
 }
 
 pub fn start() -> ! {

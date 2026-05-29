@@ -19,6 +19,26 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     arch::x86_64::interrupts::init_pics();
     arch::x86_64::switch::init_syscalls();
 
+    // Enable SMEP/SMAP/UMIP if the CPU supports them (CR4 bits 20/21/11).
+    // Must run after GDT/IDT are loaded so a #PF from a bad kernel pointer
+    // is handled rather than triple-faulting.
+    let cpu_features = arch::x86_64::cpu_features::init();
+    // Verify the bits actually stuck in CR4 (paranoid check).
+    if let Err(missing) = arch::x86_64::cpu_features::verify(cpu_features) {
+        crate::klog!(
+            crate::klog::Level::Warn,
+            "CPU features: CR4 write did not stick for bits 0x{:02x}",
+            missing.0,
+        );
+    }
+    crate::klog!(
+        crate::klog::Level::Info,
+        "CPU features: SMEP={} SMAP={} UMIP={}",
+        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::SMEP),
+        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::SMAP),
+        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::UMIP),
+    );
+
     // Memory and heap init.
     use memory::frame_allocator::BootInfoFrameAllocator;
     use x86_64::VirtAddr;

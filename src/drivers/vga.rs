@@ -1,8 +1,10 @@
 use core::fmt;
 use lazy_static::lazy_static;
+use alloc::vec::Vec;
 use spin::Mutex;
 use volatile::Volatile;
 
+const SCROLLBACK_CAP: usize = 1024;
 const HEIGHT: usize = 25;
 const WIDTH: usize = 80;
 
@@ -55,13 +57,25 @@ pub struct Writer {
     color: ColorCode,
     buffer: &'static mut Buffer,
     skipping_ansi: bool,
+    skipping_ansi_bracket: bool,
+    scrollback: Vec<[ScreenChar; WIDTH]>,
+    scroll_offset: usize,
+    status_text: [u8; WIDTH],
 }
 
 impl Writer {
     pub fn write_byte(&mut self, byte: u8) {
         if self.skipping_ansi {
-            if byte >= 0x40 && byte <= 0x7E {
+            // ANSI escape sequences usually start with ESC [
+            // If we just got ESC (0x1b), wait for '[' (0x5b)
+            if self.skipping_ansi_bracket && (byte >= 0x40 && byte <= 0x7E) {
                 // End of ANSI sequence
+                self.skipping_ansi = false;
+                self.skipping_ansi_bracket = false;
+            } else if self.skipping_ansi && !self.skipping_ansi_bracket && byte == 0x5b {
+                self.skipping_ansi_bracket = true;
+            } else if !self.skipping_ansi_bracket && (byte >= 0x40 && byte <= 0x7E) {
+                // Simple ESC sequence
                 self.skipping_ansi = false;
             }
             return;
@@ -69,6 +83,7 @@ impl Writer {
 
         if byte == 0x1b {
             self.skipping_ansi = true;
+            self.skipping_ansi_bracket = false;
             return;
         }
 
@@ -95,6 +110,16 @@ impl Writer {
     }
 
     fn newline(&mut self) {
+        if self.scroll_offset == 0 {
+            let mut line = [ScreenChar { ascii: b' ', color: ColorCode(0x07) }; WIDTH];
+            for c in 0..WIDTH {
+                line[c] = self.buffer.chars[0][c].read();
+            }
+            if self.scrollback.len() >= SCROLLBACK_CAP {
+                self.scrollback.remove(0);
+            }
+            self.scrollback.push(line);
+        }
         for row in 1..HEIGHT {
             for col in 0..WIDTH {
                 let character = self.buffer.chars[row][col].read();
@@ -188,6 +213,92 @@ impl Writer {
     pub fn set_color(&mut self, fg: Color, bg: Color) {
         self.color = ColorCode::new(fg, bg);
     }
+
+    pub fn scroll_up(&mut self) {
+        if self.scroll_offset < self.scrollback.len() {
+            self.scroll_offset += 1;
+            self.redraw_from_scrollback();
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+            if self.scroll_offset == 0 {
+                self.restore_terminal();
+            } else {
+                self.redraw_from_scrollback();
+            }
+        }
+    }
+
+    pub fn is_scrolled(&self) -> bool {
+        self.scroll_offset > 0
+    }
+
+    fn redraw_from_scrollback(&mut self) {
+        let total = self.scrollback.len();
+        let offset = self.scroll_offset.min(total);
+        for r in 0..HEIGHT {
+            let sb_idx = if offset >= HEIGHT - r {
+                offset - (HEIGHT - r)
+            } else {
+                0
+            };
+            if sb_idx > 0 && sb_idx <= total {
+                let line = self.scrollback[total - sb_idx];
+                for c in 0..WIDTH {
+                    self.buffer.chars[r][c].write(line[c]);
+                }
+            } else if sb_idx == 0 && r < offset {
+                for c in 0..WIDTH {
+                    let ch = if c == 0 { b'~' } else { b' ' };
+                    self.buffer.chars[r][c].write(ScreenChar { ascii: ch, color: ColorCode(0x08) });
+                }
+            } else {
+                self.clear_row(r);
+            }
+        }
+        let indicator = alloc::format!(" [SCROLLBACK {:>4}/{}] ", offset, total);
+        let bytes = indicator.as_bytes();
+        for c in 0..WIDTH {
+            let ch = if c < bytes.len() { bytes[c] } else { b' ' };
+            self.buffer.chars[HEIGHT - 1][c].write(ScreenChar { ascii: ch, color: ColorCode(0x1F) });
+        }
+        set_cursor_pos(HEIGHT - 1, 0);
+    }
+
+    pub fn restore_terminal(&mut self) {
+        self.scroll_offset = 0;
+        self.draw_status_bar();
+        set_cursor_pos(HEIGHT - 1, self.col);
+    }
+
+    pub fn set_status_text(&mut self, text: &str) {
+        let bytes = text.as_bytes();
+        let n = bytes.len().min(WIDTH);
+        self.status_text[..n].copy_from_slice(&bytes[..n]);
+        if n < WIDTH {
+            self.status_text[n] = 0;
+        }
+        if self.scroll_offset == 0 {
+            self.draw_status_bar();
+        }
+    }
+
+    fn draw_status_bar(&mut self) {
+        let blank = ScreenChar { ascii: b' ', color: ColorCode(0x70) };
+        for c in 0..WIDTH {
+            self.buffer.chars[HEIGHT - 1][c].write(blank);
+        }
+        let mut len = 0;
+        while len < WIDTH && len < self.status_text.len() && self.status_text[len] != 0 {
+            let ch = self.status_text[len];
+            self.buffer.chars[HEIGHT - 1][len].write(ScreenChar { ascii: ch, color: ColorCode(0x70) });
+            len += 1;
+        }
+        set_cursor_pos(HEIGHT - 1, self.col);
+    }
 }
 
 impl fmt::Write for Writer {
@@ -198,23 +309,23 @@ impl fmt::Write for Writer {
                     self.newline();
                     continue;
                 }
-                '\r' => continue,
-                // CP437 double-line box drawing
+                '\r' => {
+                    self.col = 0;
+                    set_cursor_pos(HEIGHT - 1, self.col);
+                    continue;
+                }
                 '═' => 0xCD,
                 '║' => 0xBA,
                 '╔' => 0xC9,
                 '╗' => 0xBB,
                 '╚' => 0xC8,
                 '╝' => 0xBC,
-                // CP437 block elements
                 '█' => 0xDB,
                 '▀' => 0xDD,
                 '▄' => 0xDC,
-                // CP437 shade
                 '░' => 0xB0,
                 '▒' => 0xB1,
                 '▓' => 0xB2,
-                // CP437 line drawing (single)
                 '┌' => 0xDA,
                 '┐' => 0xBF,
                 '└' => 0xC0,
@@ -244,6 +355,10 @@ lazy_static! {
             color: ColorCode::new(Color::Yellow, Color::Black),
             buffer: unsafe { &mut *((offset + 0xb8000) as *mut Buffer) },
             skipping_ansi: false,
+            skipping_ansi_bracket: false,
+            scrollback: Vec::new(),
+            scroll_offset: 0,
+            status_text: [0; WIDTH],
         })
     };
 }
@@ -293,5 +408,47 @@ pub fn clear_screen() {
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
         WRITER.lock().clear_screen();
+    });
+}
+
+pub fn scroll_up() {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().scroll_up();
+    });
+}
+
+pub fn scroll_down() {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().scroll_down();
+    });
+}
+
+pub fn restore_terminal() {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().restore_terminal();
+    });
+}
+
+pub fn is_scrolled() -> bool {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().is_scrolled()
+    })
+}
+
+pub fn set_status_text(text: &str) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().set_status_text(text);
+    });
+}
+
+pub fn set_writer_color(fg: Color, bg: Color) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().set_color(fg, bg);
     });
 }

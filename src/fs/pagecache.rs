@@ -5,6 +5,7 @@
 extern crate alloc;
 
 use crate::abi::AbiError;
+use crate::zig_kernel_ops;
 use spin::Mutex;
 
 const PAGE_SIZE: usize = 4096;
@@ -64,7 +65,7 @@ impl PageCache {
         for entry in self.entries.iter_mut() {
             if let Some(e) = entry {
                 if e.key == key {
-                    e.data[..data.len()].copy_from_slice(data);
+                    zig_kernel_ops::block_copy(&mut e.data[..data.len()], data);
                     e.size = data.len();
                     e.access_count = self.access_epoch;
                     e.dirty = true;
@@ -98,7 +99,7 @@ impl PageCache {
                 access_count: self.access_epoch,
                 dirty: true,
             };
-            new_entry.data[..data.len()].copy_from_slice(data);
+            zig_kernel_ops::block_copy(&mut new_entry.data[..data.len()], data);
             self.entries[idx] = Some(new_entry);
             Ok(())
         } else {

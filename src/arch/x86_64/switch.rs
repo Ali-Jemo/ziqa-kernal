@@ -49,77 +49,154 @@ global_asm!(
         pop rdx
         pop rcx
         pop rax
+
+        # Sanitize rflags: clear IOPL/TF/RF/NT/VM/AC/DF, set IF
+        # Bits cleared: TF(8), DF(10), IOPL(12-13), NT(14), RF(16), VM(17), AC(18)
+        # Mask: ~0x77500 = 0xFFF88AFF, OR: IF(9) = 0x200
+        # Use 32-bit ops (ecx) for simpler immediate encoding
+        mov ecx, [rsp + 16]         # load saved rflags (lower 32 bits)
+        and ecx, 0xFFF88AFF         # clear dangerous bits
+        or  ecx, 0x200              # ensure IF is set
+        mov [rsp + 16], rcx         # write back sanitized rflags
+
+        # Paranoid: clear XMM registers to prevent leakage of kernel data
+        pxor xmm0, xmm0
+        pxor xmm1, xmm1
+        pxor xmm2, xmm2
+        pxor xmm3, xmm3
+        pxor xmm4, xmm4
+        pxor xmm5, xmm5
+        pxor xmm6, xmm6
+        pxor xmm7, xmm7
+        pxor xmm8, xmm8
+        pxor xmm9, xmm9
+        pxor xmm10, xmm10
+        pxor xmm11, xmm11
+        pxor xmm12, xmm12
+        pxor xmm13, xmm13
+        pxor xmm14, xmm14
+        pxor xmm15, xmm15
+
         iretq
 
     .global jump_to_user
     jump_to_user:
-        # RDI points to the TrapFrame
+        # RDI points to the TrapFrame (rip, cs, rflags, rsp, ss)
         mov rsp, rdi
+
+        # Sanitize rflags: clear IOPL/TF/RF/NT/VM/AC/DF, set IF
+        # Use 32-bit ops (ecx) for simpler immediate encoding
+        mov ecx, [rsp + 16]         # load saved rflags (lower 32 bits)
+        and ecx, 0xFFF88AFF         # clear dangerous bits
+        or  ecx, 0x200              # ensure IF is set
+        mov [rsp + 16], rcx         # write back sanitized rflags
+
+        # Paranoid: clear general purpose registers (not in TrapFrame)
+        xor rax, rax
+        xor rbx, rbx
+        xor rcx, rcx
+        xor rdx, rdx
+        xor rsi, rsi
+        xor rbp, rbp
+        xor r8, r8
+        xor r9, r9
+        xor r10, r10
+        xor r11, r11
+        xor r12, r12
+        xor r13, r13
+        xor r14, r14
+        xor r15, r15
+        xor rdi, rdi
+
         iretq
 
     .global syscall_entry
     syscall_entry:
-        # 1. Swap RSP with KERNEL_STACK
-        xchg rsp, [rip + KERNEL_STACK]
+        # 1. Save user RSP, load kernel stack (KERNEL_STACK is preserved)
+        mov [rip + KERNEL_STACK_SAVE], rsp
+        mov rsp, [rip + KERNEL_STACK]
 
         # 2. Push fake interrupt frame
         push 0x1B                   # ss (User DS)
-        push qword ptr [rip + KERNEL_STACK] # rsp (User RSP)
+        push [rip + KERNEL_STACK_SAVE]  # rsp (User RSP)
         push r11                    # rflags (User RFLAGS)
         push 0x23                   # cs (User CS)
         push rcx                    # rip (User RIP)
 
-        # 3. Push general purpose registers in reverse order of CpuState
-        push rax
-        push rcx
-        push rdx
-        push rbx
-        push rbp
-        push rsi
-        push rdi
-        push r8
-        push r9
-        push r10
-        push r11
-        push r12
-        push r13
-        push r14
+        # 3. Push general purpose registers in CpuState order (r15 lowest addr)
         push r15
+        push r14
+        push r13
+        push r12
+        push r11
+        push r10
+        push r9
+        push r8
+        push rdi
+        push rsi
+        push rbp
+        push rbx
+        push rdx
+        push rcx
+        push rax
 
-        # 4. Call Rust handler
+        # 4. Call Rust handler (RDI = &mut CpuState matching struct layout)
         mov rdi, rsp
         call rust_syscall_handler
 
-        # 5. Restore registers
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop r11
-        pop r10
-        pop r9
-        pop r8
-        pop rdi
-        pop rsi
-        pop rbp
-        pop rbx
-        pop rdx
-        pop rcx
+        # 5. Restore registers (reverse of push: rax first, r15 last)
         pop rax
+        pop rcx
+        pop rdx
+        pop rbx
+        pop rbp
+        pop rsi
+        pop rdi
+        pop r8
+        pop r9
+        pop r10
+        pop r11
+        pop r12
+        pop r13
+        pop r14
+        pop r15
 
-        # 6. Restore user RIP and RFLAGS
-        mov rcx, [rsp]
-        mov r11, [rsp + 16]
+        # 6. Sanitize rflags in fake frame before restoring
+        # Clear: IOPL(12-13), TF(8), DF(10), NT(14), RF(16), VM(17), AC(18)
+        # Mask: ~0x77500 = 0xFFF88AFF | Set: IF(9) = 0x200
+        # Use 32-bit ops (ecx) for simpler immediate encoding
+        mov ecx, [rsp + 16]         # load rflags from fake frame (lower 32 bits)
+        and ecx, 0xFFF88AFF         # clear dangerous bits
+        or  ecx, 0x200              # ensure IF is set
+        mov [rsp + 16], rcx         # store sanitized rflags
 
-        # 7. Restore user RSP to KERNEL_STACK
-        mov rdi, [rsp + 24]
-        mov [rip + KERNEL_STACK], rdi
+        # 7. Restore user RIP and RFLAGS from fake frame
+        mov rcx, [rsp]      # rip (overwrites scratch rcx)
+        mov r11, [rsp + 16] # rflags (now sanitized)
 
-        # 8. Clean up fake interrupt frame
-        add rsp, 40
+        # 7. Restore user RSP (switches back to user stack)
+        mov rsp, [rsp + 24] # user RSP
 
-        # 9. Swap back to user stack
-        mov rsp, [rip + KERNEL_STACK]
+        # Paranoid: clear XMM registers before returning to user space
+        pxor xmm0, xmm0
+        pxor xmm1, xmm1
+        pxor xmm2, xmm2
+        pxor xmm3, xmm3
+        pxor xmm4, xmm4
+        pxor xmm5, xmm5
+        pxor xmm6, xmm6
+        pxor xmm7, xmm7
+        pxor xmm8, xmm8
+        pxor xmm9, xmm9
+        pxor xmm10, xmm10
+        pxor xmm11, xmm11
+        pxor xmm12, xmm12
+        pxor xmm13, xmm13
+        pxor xmm14, xmm14
+        pxor xmm15, xmm15
+
+        # KERNEL_STACK still holds the kernel stack top (preserved through
+        # step 1 — never overwritten). Return to Ring 3 via sysretq.
         sysretq
     "#
 );
@@ -149,6 +226,9 @@ pub struct TrapFrame {
 
 #[no_mangle]
 pub static mut KERNEL_STACK: u64 = 0;
+
+#[no_mangle]
+pub static mut KERNEL_STACK_SAVE: u64 = 0;
 
 pub fn set_kernel_stack(stack: u64) {
     unsafe {
@@ -225,6 +305,11 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
                 current_proc.cpu_state.rax = -(errno_val as i64) as u64;
             }
         }
+        // Sanitize rflags before returning to Ring 3:
+        // clear IOPL(12-13), TF(8), DF(10), NT(14), RF(16), VM(17), AC(18)
+        // set IF(9) so the user process can receive interrupts
+        current_proc.cpu_state.rflags &= 0xFFF88AFF;
+        current_proc.cpu_state.rflags |= 0x200;
         *frame = current_proc.cpu_state;
     }
 }

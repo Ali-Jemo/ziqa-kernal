@@ -153,11 +153,17 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
         let phdr = parse_phdr(binary, ph_off)?;
 
         if phdr.p_type == PT_LOAD {
+            // Strict address validation: Entire segment must reside in user-space
+            let end_vaddr = phdr.p_vaddr + phdr.p_memsz;
+            if end_vaddr > 0x0000_7FFF_FFFF_FFFF {
+                return Err(AbiError::Other("ELF segment overlaps kernel space"));
+            }
+
             let flags = crate::memory::paging::MemoryRegionFlags {
                 readable: (phdr.p_flags & PF_R) != 0,
                 writable: (phdr.p_flags & PF_W) != 0,
                 executable: (phdr.p_flags & PF_X) != 0,
-                user_accessible: true,
+                user_accessible: true, // Segment maps into user process, so user accessible.
                 copy_on_write: false,
             };
             let region = MemoryRegion {

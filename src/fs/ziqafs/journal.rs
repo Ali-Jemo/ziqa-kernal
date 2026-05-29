@@ -4,11 +4,14 @@ use super::block::{read_block, write_block};
 use super::types::*;
 use crate::abi::AbiError;
 use crate::drivers::block::BlockDevice;
+use crate::zig_kernel_ops;
 
 pub fn journal_read(
     device: &dyn BlockDevice,
 ) -> Result<([u8; BLOCK_SIZE], JournalHeader), AbiError> {
     let mut buf = [0u8; BLOCK_SIZE];
+    // ARCH: [journal→block] CS-21 journal_read reads the fixed JOURNAL_BLOCK (block 4).
+    //       All journal operations start here; the header and entry ring are in this block.
     read_block(device, JOURNAL_BLOCK, &mut buf)?;
     let hdr: JournalHeader =
         unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const JournalHeader) };
@@ -35,6 +38,9 @@ pub fn journal_commit(
     };
     let n = data.len().min(56);
     entry.data[..n].copy_from_slice(&data[..n]);
+    // Stamp CRC-32 of the entry payload into the last 4 bytes of the data field.
+    let checksum = zig_kernel_ops::crc32(&entry.data[..52]);
+    entry.data[52..56].copy_from_slice(&checksum.to_le_bytes());
     unsafe {
         core::ptr::copy_nonoverlapping(
             &entry as *const JournalEntry as *const u8,
@@ -73,6 +79,8 @@ pub fn journal_replay(device: &dyn BlockDevice) -> u32 {
             if inode_id < INODE_COUNT {
                 if let Ok(mut ib) = {
                     let mut b = [0u8; BLOCK_SIZE];
+                    // ARCH: [journal→block] CS-22 journal_replay reads INODE_TABLE_BLOCK to
+                    //       re-apply a WriteInode entry. Crash-recovery path; only runs on mount.
                     read_block(device, INODE_TABLE_BLOCK, &mut b).map(|_| b)
                 } {
                     let o = inode_id as usize * 72;
@@ -84,6 +92,8 @@ pub fn journal_replay(device: &dyn BlockDevice) -> u32 {
         } else if entry.op == JournalOp::WriteBitmap as u8 {
             if let Ok(mut bm) = {
                 let mut b = [0u8; BLOCK_SIZE];
+                // ARCH: [journal→block] CS-23 journal_replay reads BITMAP_BLOCK to re-apply a
+                //       WriteBitmap entry. Restores a single bitmap byte from the journal record.
                 read_block(device, BITMAP_BLOCK, &mut b).map(|_| b)
             } {
                 bm[entry.block as usize] = entry.data[0];

@@ -917,11 +917,17 @@ fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     // If act_ptr is null this is a query-only call (just returns oldact).
     if !act_ptr.is_null() {
-        // Safety: act_ptr comes from userspace; we validate it is non-null.
-        // A proper implementation would use copy_from_user with page-table checks.
-        let (sa_handler, _sa_flags) = unsafe {
-            (*act_ptr, *act_ptr.add(1))
-        };
+        // Read two u64 words (sa_handler, sa_flags) from user space via
+        // validated copy_from_user (page-table check + STAC/CLAC bracket).
+        let mut words = [0u64; 2];
+        let src = act_ptr as u64;
+        if crate::memory::copy_from_user(
+            unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, 16) },
+            src,
+        ).is_err() {
+            return Ok((-14_i64) as u64); // -EFAULT
+        }
+        let (sa_handler, _sa_flags) = (words[0], words[1]);
 
         let action = match sa_handler {
             0 => SignalAction::Default,

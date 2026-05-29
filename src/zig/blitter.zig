@@ -375,6 +375,7 @@ export fn zig_trail_blur(
     ghost: [*]u8,
     decay: u32,
 ) void {
+    _ = pitch;
     const pixel_count = @as(usize, w) * @as(usize, h);
     var i: usize = 0;
     while (i < pixel_count) : (i += 1) {
@@ -406,6 +407,7 @@ export fn zig_save_ghost(
     h: u32,
     ghost: [*]u8,
 ) void {
+    _ = pitch;
     const bytes = @as(usize, w) * @as(usize, h) * 4;
     var i: usize = 0;
     while (i < bytes) : (i += 1) {
@@ -468,7 +470,7 @@ export fn zig_vignette(
         while (x < w) : (x += 1) {
             const dx = @as(i32, @intCast(x)) - @as(i32, @intCast(cx));
             const dy = @as(i32, @intCast(y)) - @as(i32, @intCast(cy));
-            const dist: u32 = @intCast(@min(@sqrt(@as(f32, @floatFromInt(dx * dx + dy * dy))), @as(f32, @floatFromInt(max_dist))));
+            const dist: u32 = @intFromFloat(@min(@sqrt(@as(f32, @floatFromInt(dx * dx + dy * dy))), @as(f32, @floatFromInt(max_dist))));
             if (dist <= rad) continue;
 
             const factor = (dist - rad) * strength / (max_dist - rad + 1);
@@ -501,8 +503,8 @@ export fn zig_draw_line(
     var sy: i32 = @intCast(y0);
     const ex: i32 = @intCast(x1);
     const ey: i32 = @intCast(y1);
-    const dx = @abs(ex - sx);
-    const dy = -@abs(ey - sy);
+    const dx = @as(i32, @intCast(@abs(ex - sx)));
+    const dy = -@as(i32, @intCast(@abs(ey - sy)));
     const step_x: i32 = if (sx < ex) 1 else -1;
     const step_y: i32 = if (sy < ey) 1 else -1;
     var err = dx + dy;
@@ -544,12 +546,17 @@ export fn zig_fireworks_burst(
     particle_buf: [*]u8,
     buf_size: usize,
 ) u32 {
+    _ = fb;
+    _ = pitch;
+    _ = fb_w;
+    _ = fb_h;
+    _ = color;
     const max_p = buf_size / 4;
     const actual = @min(count, @as(u32, @intCast(max_p)));
     var i: u32 = 0;
     while (i < actual) : (i += 1) {
         const seed = hash32(i *% 374761393 +% tick *% 668265263);
-        const angle = (seed & 0xFFFF) * 360.0 / 65536.0;
+        const angle = @as(f32, @floatFromInt(seed & 0xFFFF)) * 360.0 / 65536.0;
         const vel = @as(f32, @floatFromInt((seed >> 16) & 0xFF)) * @as(f32, @floatFromInt(speed)) / 128.0;
         const vx: i16 = @intFromFloat(@cos(angle) * vel);
         const vy: i16 = @intFromFloat(@sin(angle) * vel);

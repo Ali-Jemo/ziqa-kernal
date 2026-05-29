@@ -20,9 +20,8 @@ pub struct Packet {
 
 impl Packet {
     pub fn new(src: &[u8]) -> Self {
-        let len = src.len().min(MTU);
         let mut data = [0u8; MTU];
-        data[..len].copy_from_slice(&src[..len]);
+        let len = crate::zig_kernel_ops::packet_copy(&mut data, src);
         Self { data, len }
     }
 }
@@ -86,7 +85,6 @@ pub struct NetDevice {
     pub name: &'static str,
     pub mac: [u8; 6],
     pub is_loopback: bool,
-    tx_queue: PacketQueue,
     rx_queue: PacketQueue,
     pub tx_packets: u64,
     pub rx_packets: u64,
@@ -100,7 +98,6 @@ impl NetDevice {
             name: "lo",
             mac: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             is_loopback: true,
-            tx_queue: PacketQueue::new(),
             rx_queue: PacketQueue::new(),
             tx_packets: 0,
             rx_packets: 0,
@@ -114,7 +111,6 @@ impl NetDevice {
             name,
             mac,
             is_loopback: false,
-            tx_queue: PacketQueue::new(),
             rx_queue: PacketQueue::new(),
             tx_packets: 0,
             rx_packets: 0,
@@ -159,8 +155,6 @@ impl NetDevice {
                     let _ = net.transmit(data);
                 }
             }
-            let pkt = Packet::new(data);
-            self.tx_queue.push(pkt)?;
         }
         Ok(())
     }
@@ -180,8 +174,8 @@ impl NetDevice {
 
 /// Global network device registry
 pub struct NetStack {
-    devices: [Option<NetDevice>; MAX_DEVICES],
-    count: usize,
+    pub devices: [Option<NetDevice>; MAX_DEVICES],
+    pub count: usize,
 }
 
 impl NetStack {
@@ -243,4 +237,16 @@ pub fn init() {
     NET.lock().add_device(NetDevice::loopback());
     crate::println!("[NET] Network stack initialized (lo registered)");
     stack::init();
+}
+
+/// RFC 1071 Internet checksum for raw IP/UDP/TCP/ICMP headers.
+///
+/// Usage:
+/// ```
+/// let cksum = net::inet_checksum(&ip_header_bytes);
+/// // store cksum (big-endian) into the header checksum field
+/// ```
+#[inline]
+pub fn inet_checksum(data: &[u8]) -> u16 {
+    crate::zig_kernel_ops::inet_checksum(data)
 }

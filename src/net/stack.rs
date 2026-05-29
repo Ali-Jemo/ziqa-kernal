@@ -48,10 +48,10 @@ impl TcpIpStack {
         Instant::from_millis(ms as i64)
     }
 
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
         let timestamp = Self::now();
         self.iface
-            .poll(timestamp, &mut self.device, &mut self.sockets);
+            .poll(timestamp, &mut self.device, &mut self.sockets)
     }
 
     pub fn ip_addr(&self) -> Ipv4Address {
@@ -73,4 +73,13 @@ pub fn init() {
     let stack = TcpIpStack::new();
     *TCPIP.lock() = Some(stack);
     crate::println!("[TCP/IP] Stack initialized (IP: 10.0.2.15, GW: 10.0.2.2)");
+}
+
+/// Poll the network stack (safe to call from shell loop, no scheduler lock needed)
+pub fn poll_network() {
+    if let Some(mut stack) = TCPIP.try_lock() {
+        if let Some(s) = stack.as_mut() {
+            s.poll();
+        }
+    }
 }

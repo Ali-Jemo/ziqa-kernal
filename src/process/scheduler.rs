@@ -284,7 +284,10 @@ impl Scheduler {
         }
     }
 
-    /// MLFQ Scheduling logic
+    /// MLFQ bookkeeping — called from the timer ISR.
+    /// Must NOT context-switch: the scheduler lock is held and switching to a
+    /// user process before releasing it would deadlock when the new process
+    /// page-faults or makes a syscall (both of which try to re-acquire the lock).
     pub fn tick(&mut self) {
         self.ticks += 1;
 
@@ -298,34 +301,6 @@ impl Scheduler {
         // Periodic priority boost (anti-starvation)
         if self.ticks % BOOST_INTERVAL == 0 {
             self.boost_priorities();
-        }
-
-        // Decrease current task's time slice
-        if self.timeslice_remaining > 0 {
-            self.timeslice_remaining -= 1;
-        }
-
-        // Check if current task exhausted its quantum
-        if self.timeslice_remaining == 0 {
-            if let Some(proc) = &mut self.tasks[self.current] {
-                if proc.state == ProcessState::Running {
-                    // Demote CPU-bound process
-                    if proc.priority < PRIORITY_LEVELS - 1 {
-                        proc.priority += 1;
-                    }
-                    proc.state = ProcessState::Ready;
-                }
-            }
-            self.schedule_next();
-        } else {
-            // Check if current task is still runnable
-            if let Some(proc) = &self.tasks[self.current] {
-                if proc.state != ProcessState::Running {
-                    self.schedule_next();
-                }
-            } else {
-                self.schedule_next();
-            }
         }
     }
 
@@ -379,13 +354,12 @@ impl Scheduler {
                 unsafe {
                     let new_proc = &mut *new_ptr.unwrap();
 
-                    // Set TSS stack and KERNEL_STACK for user space transitions
-                    if new_proc.kernel_stack_top != 0 {
-                        crate::arch::x86_64::gdt::set_tss_stack(VirtAddr::new(new_proc.kernel_stack_top));
-                        crate::arch::x86_64::switch::set_kernel_stack(new_proc.kernel_stack_top);
-                    }
+                    // Set TSS.RSP0 and KERNEL_STACK for Ring 3↔Ring 0 transitions.
+                    // All processes now have a dedicated kernel stack.
+                    crate::arch::x86_64::update_trap_stacks(new_proc.kernel_stack_top);
 
                     if let Some(old) = old_ptr.map(|p| &mut *p) {
+
                         if old.state == ProcessState::Running {
                             old.state = ProcessState::Ready;
                         }
@@ -451,7 +425,15 @@ impl Scheduler {
 
     pub fn init_boot_process(&mut self) {
         let pid = self.table.alloc_pid();
-        let proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
+        let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
+        // Give the boot process a dedicated kernel stack so TSS.RSP0 always
+        // points to a valid stack when switching back from a Ring 3 process.
+        let kstack = alloc::vec![0u8; 8192];
+        let top = kstack.as_ptr() as u64 + 8192;
+        proc.kernel_stack = Some(kstack);
+        proc.kernel_stack_top = top;
+        // kernel_stack_ptr is set during the first context switch away
+        // (switch_context saves the current bootloader stack there)
         // The boot process starts as running (it is the current kernel thread)
         self.tasks[0] = Some(proc);
         self.tasks[0].as_mut().unwrap().state = ProcessState::Running;
@@ -466,6 +448,13 @@ impl Scheduler {
             }
         }
         self.schedule_next();
+    }
+
+    pub fn poll_network(&mut self) {
+        let mut stack = crate::net::stack::TCPIP.lock();
+        if let Some(s) = stack.as_mut() {
+            s.poll();
+        }
     }
 }
 

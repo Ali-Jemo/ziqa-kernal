@@ -129,15 +129,16 @@ fn stamp_ziqa_logo(buf: &mut [u8], w: u32, h: u32, tick: usize) {
 }
 
 fn lerp_color(a: u32, b: u32, t: u32) -> u32 {
-    let ar = (a >> 16) & 0xFF;
-    let ag = (a >> 8) & 0xFF;
-    let ab = a & 0xFF;
-    let br = (b >> 16) & 0xFF;
-    let bg = (b >> 8) & 0xFF;
-    let bb = b & 0xFF;
-    let r = ar + ((br - ar) * t / 255);
-    let g = ag + ((bg - ag) * t / 255);
-    let b2 = ab + ((bb - ab) * t / 255);
+    let ar = ((a >> 16) & 0xFF) as i32;
+    let ag = ((a >> 8) & 0xFF) as i32;
+    let ab = (a & 0xFF) as i32;
+    let br = ((b >> 16) & 0xFF) as i32;
+    let bg = ((b >> 8) & 0xFF) as i32;
+    let bb = (b & 0xFF) as i32;
+    let t = t as i32;
+    let r = (ar + (br - ar) * t / 255) as u32;
+    let g = (ag + (bg - ag) * t / 255) as u32;
+    let b2 = (ab + (bb - ab) * t / 255) as u32;
     (r << 16) | (g << 8) | b2
 }
 
@@ -223,7 +224,7 @@ pub fn run_serial(steps: usize) {
             tornado_timer = tornado_timer.wrapping_add(1);
             // Spiral convection: suck fire upward at center, rotate around
             // This affects both the fire_buf directly and the wind
-            let t_angle = (tornado_timer as f64 * 0.15) as usize;
+            let t_angle = (tornado_timer as usize).wrapping_mul(3) / 20;
             let t_wind = (t_angle % 5) as i32 - 2; // oscillate -2..2
             extra_wind += t_wind;
 
@@ -235,7 +236,7 @@ pub fn run_serial(steps: usize) {
                     let idx = fy * FIRE_W as usize + fx;
                     if idx < fire_buf.len() {
                         // Boost heat in the tornado column
-                        let boost = ((fy as f64 / FIRE_H as f64) * 10.0) as u8;
+                        let boost = (fy * 10 / FIRE_H as usize) as u8;
                         fire_buf[idx] = fire_buf[idx].saturating_add(boost).min(36);
                     }
                 }

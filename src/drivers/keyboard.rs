@@ -92,7 +92,7 @@ pub fn push_scancode(scancode: u8) {
                         _ => return,
                     };
                     // Pass navigation keys to shell for input handling
-                    if code >= 0x80 && code <= 0x83 {
+                    if code >= 0x80 && code <= 0x83 || code == 0x86 || code == 0x87 {
                         INPUT_BUF.lock().push(code);
                     }
                     EDITOR_BUF.lock().push(code);
@@ -105,6 +105,20 @@ pub fn push_scancode(scancode: u8) {
 /// Read up to `buf.len()` bytes from the keyboard buffer.
 /// Returns number of bytes read (0 = no input available).
 pub fn read_stdin(buf: &mut [u8]) -> usize {
+    // Poll serial port (COM1) for any incoming bytes
+    unsafe {
+        use x86_64::instructions::port::Port;
+        let mut lsr: Port<u8> = Port::new(0x3FD); // Line Status Register
+        let mut rbr: Port<u8> = Port::new(0x3F8); // Receiver Buffer
+        while lsr.read() & 1 != 0 {
+            let byte = rbr.read();
+            if byte == b'\r' {
+                INPUT_BUF.lock().push(b'\n');
+            } else {
+                INPUT_BUF.lock().push(byte);
+            }
+        }
+    }
     let mut ring = INPUT_BUF.lock();
     let mut n = 0;
     while n < buf.len() {

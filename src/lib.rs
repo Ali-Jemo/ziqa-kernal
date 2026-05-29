@@ -24,6 +24,7 @@ pub mod tests;
 pub mod tetris;
 pub mod timer;
 pub mod zig_ffi;
+pub mod zig_kernel_ops;
 
 pub use init::{init, init_abi_registry};
 

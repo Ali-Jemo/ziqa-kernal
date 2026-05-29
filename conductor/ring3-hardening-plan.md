@@ -19,6 +19,6 @@ User-mode processes can potentially exploit the TSS if it is not correctly manag
 *   **Task 3**: Audit `crate::arch::x86_64::switch::set_kernel_stack(new_proc.kernel_stack_top)` in `src/process/scheduler.rs`. [DONE]
     *   **Hardening**: Implemented `update_trap_stacks` in `src/arch/x86_64/mod.rs` to atomically update `TSS.RSP0` and the `KERNEL_STACK` global within an interrupt-disabled block. This eliminates race conditions during context switches.
 
-## 3. Privilege Escalation Mitigation
-*   **Task 1**: Enforce `rflags` sanitization.
-    *   In `jump_to_user_stub`, ensure the `rflags` pushed to the stack (for `iretq`) has the `IOPL` set to 0 and `IF` (Interrupt Flag) set according to policy (usually enabled, but need to ensure it's not set maliciously by the user).
+## 3. Privilege Escalation Mitigation [COMPLETED]
+*   **Task 1**: Enforce `rflags` sanitization. [DONE]
+    *   **Hardening**: Applied mask `0xFFF88AFF` across all kernel→user transitions (`jump_to_user_stub` iretq, `jump_to_user` iretq, `syscall_entry` sysretq, `rust_syscall_handler` Rust layer) — clears IOPL(12-13), TF(8), DF(10), NT(14), RF(16), VM(17), AC(18) and enforces IF(9). SFMASK MSR (`0xC0000084 = 0x25700`) provides hardware-level defense-in-depth on syscall entry. Paranoid XMM0–XMM15 zeroing on all return paths prevents kernel FP data leakage.

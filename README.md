@@ -143,7 +143,7 @@ Following a comprehensive forensic audit, the project status has been updated to
 | :--- | :--- | :--- |
 | **Boot & HAL** | **Functional** | Reliable BIOS/UEFI boot. **Three-stage VGA boot pipeline with CP437-safe animation.** |
 | **Scheduler** | **Functional** | Robust MLFQ scheduling with priority boosting, signal delivery, and context switching. |
-| **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. |
+| **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. **SMEP (CR4.20), SMAP (CR4.21), UMIP (CR4.11)** enabled after CPUID detection with CR4 write-back verification. `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets. |
 | **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. |
 | **Memory** | **Hardening** | `copy_from_user` with page-table validation, demand paging placeholders, heap profiler. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
@@ -391,7 +391,7 @@ make zig-check   # Verify Zig blitter compiles independently
 5.  **Wayland Compositor Support**: 🔴 Not started — Leverage DRM/KMS driver for minimal bare-metal compositor.
 
 ### Long Term (P2)
-1.  **SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.
+1.  ~~**SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.~~ ✅ **COMPLETED (May 2026)** — SMEP (CR4.20), SMAP (CR4.21), and UMIP (CR4.11) enabled after CPUID detection; `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets; CR4 write-back verification; `rt_sigaction` hardened.
 2.  **Performance Tooling Decoupling**: Separate benchmarking subsystem from pagecache internals.
 3.  **ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.
 4.  **Multi-architecture Support**: Explore aarch64 or RISC-V as additional targets.
@@ -473,4 +473,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands | Ring 3 hardening: ✅ complete</sup>
+<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete</sup>

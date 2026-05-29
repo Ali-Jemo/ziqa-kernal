@@ -18,9 +18,11 @@ fn main() {
     // Tell cargo where to find the static library
     println!("cargo:rustc-link-search=native=zig-out/lib");
     println!("cargo:rustc-link-lib=static=blitter");
+    println!("cargo:rustc-link-lib=static=kernelops");
 
     // Re-run if any zig source changes
     println!("cargo:rerun-if-changed=src/zig/blitter.zig");
+    println!("cargo:rerun-if-changed=src/zig/kernel_ops.zig");
     println!("cargo:rerun-if-changed=build.zig");
     println!("cargo:rerun-if-changed=build.rs");
 }
