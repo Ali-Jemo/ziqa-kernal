@@ -1,8 +1,13 @@
 /// ELF64 Loader for ZiqaKernel
-/// Parses ELF64 binaries and maps their LOAD segments into a Process.
+///
+/// Public surface: `load_elf(binary, process) -> Result<(), AbiError>`
+///
+/// Internal structure:
+///   - `ElfBytes`  — bounds-checked cursor over the raw binary slice
+///   - `parse_header` / `parse_phdr` — pure parsers, no I/O or logging
+///   - `load_elf`  — the only function that logs; calls parsers then maps segments
 use crate::abi::AbiError;
 use crate::memory::{MemoryRegion, VirtAddr};
-use crate::println;
 use crate::process::Process;
 
 // ELF64 constants
@@ -18,179 +23,149 @@ const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
 
-#[repr(C, packed)]
+// ── Cursor ────────────────────────────────────────────────────────────────────
+
+/// Bounds-checked read cursor over a byte slice.
+struct ElfBytes<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> ElfBytes<'a> {
+    fn new(data: &'a [u8]) -> Self { Self { data } }
+
+    fn u16_at(&self, o: usize) -> Result<u16, AbiError> {
+        self.data.get(o..o + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .ok_or(AbiError::ParseError)
+    }
+    fn u32_at(&self, o: usize) -> Result<u32, AbiError> {
+        self.data.get(o..o + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .ok_or(AbiError::ParseError)
+    }
+    fn u64_at(&self, o: usize) -> Result<u64, AbiError> {
+        self.data.get(o..o + 8)
+            .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+            .ok_or(AbiError::ParseError)
+    }
+    fn len(&self) -> usize { self.data.len() }
+}
+
+// ── On-disk types ─────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy)]
 struct Elf64Header {
-    e_ident: [u8; 16],
-    e_type: u16,
-    e_machine: u16,
-    e_version: u32,
-    e_entry: u64,
-    e_phoff: u64,
-    e_shoff: u64,
-    e_flags: u32,
-    e_ehsize: u16,
+    e_type:      u16,
+    e_entry:     u64,
+    e_phoff:     u64,
     e_phentsize: u16,
-    e_phnum: u16,
-    e_shentsize: u16,
-    e_shnum: u16,
-    e_shstrndx: u16,
+    e_phnum:     u16,
 }
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct Elf64Phdr {
-    p_type: u32,
-    p_flags: u32,
+    p_type:   u32,
+    p_flags:  u32,
     p_offset: u64,
-    p_vaddr: u64,
-    p_paddr: u64,
+    p_vaddr:  u64,
     p_filesz: u64,
-    p_memsz: u64,
-    p_align: u64,
+    p_memsz:  u64,
 }
 
-fn read_u16(d: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([d[o], d[o + 1]])
-}
-fn read_u32(d: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
-}
-fn read_u64(d: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes([
-        d[o],
-        d[o + 1],
-        d[o + 2],
-        d[o + 3],
-        d[o + 4],
-        d[o + 5],
-        d[o + 6],
-        d[o + 7],
-    ])
-}
+// ── Pure parsers (no logging) ─────────────────────────────────────────────────
 
-fn parse_header(data: &[u8]) -> Result<Elf64Header, AbiError> {
-    if data.len() < 64 {
-        return Err(AbiError::ParseError);
-    }
-    if data[0..4] != ELF_MAGIC {
-        return Err(AbiError::UnknownFormat);
-    }
-    if data[4] != ELFCLASS64 {
-        return Err(AbiError::Other("Not 64-bit ELF"));
-    }
-    if data[5] != ELFDATA2LSB {
-        return Err(AbiError::Other("Not little-endian ELF"));
-    }
-    let e_type = read_u16(data, 16);
-    let e_machine = read_u16(data, 18);
-    if e_type != ET_EXEC && e_type != ET_DYN {
-        return Err(AbiError::Other("Not executable ELF"));
-    }
-    if e_machine != EM_X86_64 {
-        return Err(AbiError::Other("Not x86_64 ELF"));
-    }
-    let mut e_ident = [0u8; 16];
-    e_ident.copy_from_slice(&data[0..16]);
+fn parse_header(b: &ElfBytes) -> Result<Elf64Header, AbiError> {
+    if b.len() < 64 { return Err(AbiError::ParseError); }
+    if b.data[0..4] != ELF_MAGIC { return Err(AbiError::UnknownFormat); }
+    if b.data[4] != ELFCLASS64  { return Err(AbiError::Other("Not 64-bit ELF")); }
+    if b.data[5] != ELFDATA2LSB { return Err(AbiError::Other("Not little-endian ELF")); }
+    let e_type    = b.u16_at(16)?;
+    let e_machine = b.u16_at(18)?;
+    if e_type != ET_EXEC && e_type != ET_DYN { return Err(AbiError::Other("Not executable ELF")); }
+    if e_machine != EM_X86_64               { return Err(AbiError::Other("Not x86_64 ELF")); }
     Ok(Elf64Header {
-        e_ident,
         e_type,
-        e_machine,
-        e_version: read_u32(data, 20),
-        e_entry: read_u64(data, 24),
-        e_phoff: read_u64(data, 32),
-        e_shoff: read_u64(data, 40),
-        e_flags: read_u32(data, 48),
-        e_ehsize: read_u16(data, 52),
-        e_phentsize: read_u16(data, 54),
-        e_phnum: read_u16(data, 56),
-        e_shentsize: read_u16(data, 58),
-        e_shnum: read_u16(data, 60),
-        e_shstrndx: read_u16(data, 62),
+        e_entry:     b.u64_at(24)?,
+        e_phoff:     b.u64_at(32)?,
+        e_phentsize: b.u16_at(54)?,
+        e_phnum:     b.u16_at(56)?,
     })
 }
 
-fn parse_phdr(data: &[u8], offset: usize) -> Result<Elf64Phdr, AbiError> {
-    if data.len() < offset + 56 {
-        return Err(AbiError::ParseError);
-    }
+fn parse_phdr(b: &ElfBytes, offset: usize) -> Result<Elf64Phdr, AbiError> {
+    if b.len() < offset + 56 { return Err(AbiError::ParseError); }
     Ok(Elf64Phdr {
-        p_type: read_u32(data, offset),
-        p_flags: read_u32(data, offset + 4),
-        p_offset: read_u64(data, offset + 8),
-        p_vaddr: read_u64(data, offset + 16),
-        p_paddr: read_u64(data, offset + 24),
-        p_filesz: read_u64(data, offset + 32),
-        p_memsz: read_u64(data, offset + 40),
-        p_align: read_u64(data, offset + 48),
+        p_type:   b.u32_at(offset)?,
+        p_flags:  b.u32_at(offset + 4)?,
+        p_offset: b.u64_at(offset + 8)?,
+        p_vaddr:  b.u64_at(offset + 16)?,
+        p_filesz: b.u64_at(offset + 32)?,
+        p_memsz:  b.u64_at(offset + 40)?,
     })
 }
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /// Load an ELF64 binary into a process.
+///
+/// Logging is confined to this function; the parsers above are pure.
 pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
-    let header = parse_header(binary)?;
+    let b = ElfBytes::new(binary);
+    let hdr = parse_header(&b)?;
 
-    let entry = header.e_entry;
-    let phnum = header.e_phnum;
-    let etype = header.e_type;
-    let phoff = header.e_phoff;
-    let phentsize = header.e_phentsize;
-
-    println!(
+    crate::println!(
         "[ELF] entry=0x{:x} phdrs={} type={}",
-        entry,
-        phnum,
-        if etype == ET_EXEC { "EXEC" } else { "DYN" }
+        hdr.e_entry, hdr.e_phnum,
+        if hdr.e_type == ET_EXEC { "EXEC" } else { "DYN" }
     );
 
-    process.entry_point = VirtAddr::new(entry);
-    process.cpu_state.rip = entry;
+    process.entry_point = VirtAddr::new(hdr.e_entry);
+    process.cpu_state.rip = hdr.e_entry;
 
     let mut load_count = 0u32;
     let mut max_vaddr: u64 = 0;
-    for i in 0..phnum as usize {
-        let ph_off = phoff as usize + i * phentsize as usize;
-        let phdr = parse_phdr(binary, ph_off)?;
+    let mut has_interp = false;
 
-        if phdr.p_type == PT_LOAD {
-            // Strict address validation: Entire segment must reside in user-space
-            let end_vaddr = phdr.p_vaddr + phdr.p_memsz;
-            if end_vaddr > 0x0000_7FFF_FFFF_FFFF {
-                return Err(AbiError::Other("ELF segment overlaps kernel space"));
-            }
+    for i in 0..hdr.e_phnum as usize {
+        let ph_off = hdr.e_phoff as usize + i * hdr.e_phentsize as usize;
+        let phdr = parse_phdr(&b, ph_off)?;
 
-            let flags = crate::memory::paging::MemoryRegionFlags {
-                readable: (phdr.p_flags & PF_R) != 0,
-                writable: (phdr.p_flags & PF_W) != 0,
-                executable: (phdr.p_flags & PF_X) != 0,
-                user_accessible: true, // Segment maps into user process, so user accessible.
-                copy_on_write: false,
-            };
-            let region = MemoryRegion {
-                start: VirtAddr::new(phdr.p_vaddr),
-                size: phdr.p_memsz as usize,
-                flags,
-                is_file_backed: false,
-                file_offset: phdr.p_offset,
-            };
-            if !process.add_region(region) {
-                return Err(AbiError::Other("Too many memory regions"));
+        match phdr.p_type {
+            PT_LOAD => {
+                let end_vaddr = phdr.p_vaddr + phdr.p_memsz;
+                if end_vaddr > 0x0000_7FFF_FFFF_FFFF {
+                    return Err(AbiError::Other("ELF segment overlaps kernel space"));
+                }
+                let flags = crate::memory::paging::MemoryRegionFlags {
+                    readable:       (phdr.p_flags & PF_R) != 0,
+                    writable:       (phdr.p_flags & PF_W) != 0,
+                    executable:     (phdr.p_flags & PF_X) != 0,
+                    user_accessible: true,
+                    copy_on_write:  false,
+                };
+                let region = MemoryRegion {
+                    start: VirtAddr::new(phdr.p_vaddr),
+                    size: phdr.p_memsz as usize,
+                    flags,
+                    is_file_backed: false,
+                    file_offset: phdr.p_offset,
+                };
+                if !process.add_region(region) {
+                    return Err(AbiError::Other("Too many memory regions"));
+                }
+                if end_vaddr > max_vaddr { max_vaddr = end_vaddr; }
+                load_count += 1;
             }
-            let end = phdr.p_vaddr + phdr.p_memsz;
-            if end > max_vaddr {
-                max_vaddr = end;
-            }
-            load_count += 1;
-        } else if phdr.p_type == PT_INTERP {
-            println!("[ELF] WARNING: dynamic linker required (not supported)");
+            PT_INTERP => { has_interp = true; }
+            _ => {}
         }
     }
 
-    // Align brk to next page boundary
+    if has_interp {
+        crate::println!("[ELF] WARNING: dynamic linker required (not supported)");
+    }
+
     process.brk = (max_vaddr + 0xFFF) & !0xFFF;
-    println!(
-        "[ELF] loaded {} segments, brk=0x{:x}",
-        load_count, process.brk
-    );
+    crate::println!("[ELF] loaded {} segments, brk=0x{:x}", load_count, process.brk);
     Ok(())
 }

@@ -190,3 +190,35 @@ pub fn get_cached_page(key: PageKey) -> Option<alloc::vec::Vec<u8>> {
 pub fn cache_page(key: PageKey, data: &[u8]) -> Result<(), AbiError> {
     PAGE_CACHE.lock().put(key, data)
 }
+
+/// Run hit/miss benchmarks entirely inside the pagecache module.
+/// Returns (hit_avg_cycles, miss_avg_cycles) so callers need no knowledge
+/// of PageKey or cache internals.
+pub fn bench() -> (u64, u64) {
+    let test_data = [0u8; PAGE_SIZE];
+    let hit_key = PageKey { file_id: 0xBEEF, page_num: 0 };
+    let _ = PAGE_CACHE.lock().put(hit_key, &test_data);
+
+    // Cache-hit benchmark
+    let mut hit_total = 0u64;
+    const ITERS: u64 = 1000;
+    for _ in 0..ITERS {
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
+        let _ = PAGE_CACHE.lock().get(hit_key);
+        let end = unsafe { core::arch::x86_64::_rdtsc() };
+        hit_total += end.saturating_sub(start);
+    }
+
+    // Cache-miss benchmark (unique keys that won't be in cache)
+    let mut miss_total = 0u64;
+    const MISS_ITERS: u64 = 100;
+    for i in 0..MISS_ITERS {
+        let miss_key = PageKey { file_id: 0xDEAD, page_num: i as u32 };
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
+        let _ = PAGE_CACHE.lock().put(miss_key, &test_data);
+        let end = unsafe { core::arch::x86_64::_rdtsc() };
+        miss_total += end.saturating_sub(start);
+    }
+
+    (hit_total / ITERS, miss_total / MISS_ITERS)
+}

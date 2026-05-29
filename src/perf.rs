@@ -140,39 +140,16 @@ where
 pub fn benchmark_page_cache() {
     crate::println!("\n━━━ Page Cache Benchmark ━━━");
 
-    use crate::fs::pagecache::{cache_page, get_cached_page, PageKey};
-
-    let test_data = [42u8; 4096];
-    let key = PageKey {
-        file_id: 1,
-        page_num: 0,
-    };
-
-    // Warm up
-    let _ = cache_page(key, &test_data);
-
-    // Benchmark cache hits
-    let hits = benchmark("PageCache Hit", 1000, || {
-        let _ = get_cached_page(key);
-    });
-
-    // Benchmark cache misses + inserts
-    let misses = benchmark("PageCache Miss+Insert", 100, || {
-        let key2 = PageKey {
-            file_id: 2,
-            page_num: 100,
-        };
-        let _ = cache_page(key2, &test_data);
-    });
+    let (hit_avg, miss_avg) = crate::fs::pagecache::bench();
 
     crate::println!(
-        "  Cache Hit: {} cycles/op (~{} ns)",
-        hits.avg_cycles_per_op,
-        hits.avg_ns()
+        "  Cache Hit:        {} cycles/op (~{} ns)",
+        hit_avg,
+        hit_avg / 2
     );
     crate::println!(
-        "  Cache Miss: {} cycles/op (~{} ns)",
-        misses.avg_cycles_per_op,
-        misses.avg_ns()
+        "  Cache Miss+Insert: {} cycles/op (~{} ns)",
+        miss_avg,
+        miss_avg / 2
     );
 }

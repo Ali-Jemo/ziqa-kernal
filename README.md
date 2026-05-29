@@ -392,8 +392,8 @@ make zig-check   # Verify Zig blitter compiles independently
 
 ### Long Term (P2)
 1.  ~~**SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.~~ ✅ **COMPLETED (May 2026)** — SMEP (CR4.20), SMAP (CR4.21), and UMIP (CR4.11) enabled after CPUID detection; `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets; CR4 write-back verification; `rt_sigaction` hardened.
-2.  **Performance Tooling Decoupling**: Separate benchmarking subsystem from pagecache internals.
-3.  **ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.
+2.  ~~**Performance Tooling Decoupling**: Separate benchmarking subsystem from pagecache internals.~~ ✅ **COMPLETED** — `pagecache::bench()` encapsulates hit/miss measurements; `perf.rs` no longer imports `PageKey`, `cache_page`, or `get_cached_page`.
+3.  ~~**ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.~~ ✅ **COMPLETED** — `ElfBytes` cursor extracted; `parse_header`/`parse_phdr` are pure (no I/O or logging); all logging confined to `load_elf` boundary.
 4.  **Multi-architecture Support**: Explore aarch64 or RISC-V as additional targets.
 
 <div align="center">
@@ -473,4 +473,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete</sup>
+<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete | P2 roadmap: ✅ complete</sup>
