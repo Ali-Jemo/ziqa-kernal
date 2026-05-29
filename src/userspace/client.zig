@@ -8,9 +8,12 @@
 
 const std = @import("std");
 
-// Native Axiq-IQ Syscall Numbers
+// Native Axiq-IQ Syscall Numbers (Synced with src/abi/syscall.rs)
 const ZIQA_SHM_CREATE = 1010;
-const ZIQA_IPC_SEND   = 1020;
+const ZIQA_SHM_ATTACH = 1011;
+const ZIQA_IPC_CREATE = 1020;
+const ZIQA_IPC_SEND   = 1021;
+const ZIQA_IPC_RECV   = 1022;
 
 // Wayland-inspired IPC protocol messages for NWCC (must match compositor.rs)
 const WlMessageTag = enum(u32) {
@@ -37,7 +40,7 @@ pub fn main() void {
 
     // 1. Create SHM Segment
     const shm_id = ziqa_syscall(ZIQA_SHM_CREATE, width * height * 4, 0, 0, 0, 0, 0);
-    const shm_ptr: [*]u32 = @ptrFromInt(ziqa_syscall(1011, shm_id, 0, 0, 0, 0, 0)); // ZIQA_SHM_ATTACH
+    const shm_ptr: [*]u32 = @ptrFromInt(ziqa_syscall(ZIQA_SHM_ATTACH, shm_id, 0, 0, 0, 0, 0));
 
     // 2. Register Buffer with Compositor
     var msg = WlMessage{
@@ -55,7 +58,7 @@ pub fn main() void {
     while (true) {
         tick +%= 1;
         
-        // Render ultra-fast color cycle directly in SHM
+        // Render cycle directly in SHM
         var i: usize = 0;
         while (i < width * height) : (i += 1) {
             const x = @as(u32, @intCast(i % width));

@@ -54,6 +54,18 @@ pub mod nr {
     pub const NET_NOTIFY: u64 = 500;
     pub const NET_ACK: u64 = 501;
 
+    // ── ZiqaKernel native IPC and SHM syscalls ────────────────────────────────
+    /// Create SHM segment: [size] → id
+    pub const ZIQA_SHM_CREATE: u64 = 1010;
+    /// Attach SHM segment: [id] → addr
+    pub const ZIQA_SHM_ATTACH: u64 = 1011;
+    /// Create IPC channel: () → id
+    pub const ZIQA_IPC_CREATE: u64 = 1020;
+    /// Send IPC message: [chan_id, data_ptr, len] → 0 / -errno
+    pub const ZIQA_IPC_SEND: u64 = 1021;
+    /// Recv IPC message: [chan_id, data_ptr, max_len] → bytes_read / -errno
+    pub const ZIQA_IPC_RECV: u64 = 1022;
+
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
     /// Close a file capability and release its FD slot.
     /// args: [fd: usize] → 0 / -EBADF
@@ -86,6 +98,8 @@ pub mod nr {
 pub mod errno {
     pub const EPERM: u64 = 1;
     pub const ESRCH: u64 = 3;
+    pub const EBADF: u64 = 9;
+    pub const EFAULT: u64 = 14;
     pub const EINVAL: u64 = 22;
     pub const ENOSYS: u64 = 38;
 }
@@ -246,6 +260,71 @@ pub fn dispatch_syscall(
         nr::ZIQA_SIG_SETMASK   => return ziqa_sig_setmask(ctx),
         nr::ZIQA_SIG_KILL      => return ziqa_sig_kill(ctx),
         nr::ZIQA_SIG_PAUSE     => return ziqa_sig_pause(ctx),
+
+        // ── SHM / IPC handlers ──
+        nr::ZIQA_SHM_CREATE => {
+            let size = ctx.args[0] as usize;
+            let pid = ctx.process.pid;
+            let id = crate::ipc::shm::SHM.lock().create(pid, size);
+            klog_syscall("shm_create", id as u64);
+            return Ok(id as u64);
+        }
+        nr::ZIQA_SHM_ATTACH => {
+            let id = ctx.args[0] as u32;
+            let pid = ctx.process.pid;
+            match crate::ipc::shm::SHM.lock().attach(id, pid) {
+                Ok(addr) => {
+                    klog_syscall("shm_attach", addr);
+                    return Ok(addr);
+                }
+                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+            }
+        }
+        nr::ZIQA_IPC_CREATE => {
+            match crate::ipc::create_channel() {
+                Some(id) => {
+                    klog_syscall("ipc_create", id as u64);
+                    return Ok(id as u64);
+                }
+                None => return Ok((-errno::ENOSYS as i64) as u64),
+            }
+        }
+        nr::ZIQA_IPC_SEND => {
+            let chan_id = ctx.args[0] as u32;
+            let ptr = ctx.args[1] as *const u8;
+            let len = ctx.args[2] as usize;
+            let sender = ctx.process.pid;
+
+            if ptr.is_null() || len > crate::ipc::MSG_MAX {
+                return Ok((-errno::EFAULT as i64) as u64);
+            }
+
+            let mut tmp = [0u8; crate::ipc::MSG_MAX];
+            unsafe { core::ptr::copy_nonoverlapping(ptr, tmp.as_mut_ptr(), len); }
+
+            match crate::ipc::send(chan_id, sender, &tmp[..len]) {
+                Ok(_) => return Ok(0),
+                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+            }
+        }
+        nr::ZIQA_IPC_RECV => {
+            let chan_id = ctx.args[0] as u32;
+            let ptr = ctx.args[1] as *mut u8;
+            let max_len = ctx.args[2] as usize;
+
+            if ptr.is_null() {
+                return Ok((-errno::EFAULT as i64) as u64);
+            }
+
+            match crate::ipc::recv(chan_id) {
+                Ok(msg) => {
+                    let copy_len = msg.len.min(max_len);
+                    unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), ptr, copy_len); }
+                    return Ok(copy_len as u64);
+                }
+                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+            }
+        }
         _ => {}
     }
 
