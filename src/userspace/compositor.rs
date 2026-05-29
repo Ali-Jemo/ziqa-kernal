@@ -68,33 +68,44 @@ impl CompositorState {
         Ok(())
     }
 
-    /// Compose all active surfaces into the primary DRM backbuffer
-    pub fn compose(&self, target_fb: *mut u8, target_pitch: u32) {
-        // Sort surfaces by Z-index before rendering
-        let mut sorted_surfaces: Vec<_> = self.surfaces.values().collect();
-        sorted_surfaces.sort_by_key(|s| s.z_index);
+    /// Main loop for the compositor process
+    pub fn run(&mut self) -> ! {
+        crate::println!("[NWCC] Starting Native Wayland-Compatible Compositor");
 
-        for surface in sorted_surfaces {
-            if let Some(buf_id) = surface.active_buffer {
-                if let Some(buf) = self.buffers.get(&buf_id) {
-                    // 1. Get SHM address for this compositor process
-                    // (Assuming the compositor is a privileged process that can attach any SHM)
-                    if let Ok(shm_addr) = SHM.lock().attach(buf.shm_id, Pid(0)) {
-                        // 2. Use Zig blitter to blend the surface into the target
-                        // ARCH: [compositor->zig] Blend client buffer to screen
-                        crate::zig_ffi::blend_rect(
-                            target_fb,
-                            target_pitch,
-                            surface.x as u32,
-                            surface.y as u32,
-                            shm_addr as *const u8,
-                            buf.stride,
-                            buf.width,
-                            buf.height,
-                        );
-                    }
-                }
-            }
+        // 1. Initialize DRM and get display resources
+        let (width, height, pitch) = {
+            let drm = crate::drivers::drm::DRM.lock();
+            let res = drm.get_resources();
+            (res.width, res.height, res.width * 4)
+        };
+
+        // 2. Create primary back-buffer in kernel memory (simulated via static buffer for now)
+        // In a real implementation, we'd use DRM_IOCTL_MODE_FB_CREATE.
+        let mut back_buffer = [0u8; 1920 * 1080 * 4]; 
+        let bb_ptr = back_buffer.as_mut_ptr();
+
+        loop {
+            // 3. Clear back-buffer using Zig-accelerated clear
+            crate::zig_ffi::clear(bb_ptr, (width * height * 4) as usize, 0xFF000000); // Black
+
+            // 4. Composite all client surfaces
+            self.compose(bb_ptr, pitch);
+
+            // 5. Trigger DRM Page Flip
+            // We use the primary framebuffer ID here (simplified)
+            let _ = crate::drivers::drm::handle_ioctl(
+                crate::drivers::drm::ioctl::MODE_PAGE_FLIP, 
+                &mut (1u32) as *mut u32 as *mut u8
+            );
+
+            // 6. Wait for vsync or client signals (yield to scheduler)
+            // In the future, we'll use a specific NWCC_SIGNAL_FRAME_READY.
+            crate::timer::sleep_ms(Pid(0), 16); // ~60 FPS
         }
     }
+}
+
+pub fn start() -> ! {
+    let mut compositor = CompositorState::new();
+    compositor.run();
 }
