@@ -47,7 +47,7 @@ pub struct CompositorState {
     pub surfaces: BTreeMap<usize, Surface>,
     pub buffers: BTreeMap<usize, CompositorBuffer>,
     pub next_id: usize,
-    pub ipc_channel: Option<usize>,
+    pub ipc_channel: Option<u32>,
 
     // Interaction state
     pub grabbed_surface: Option<usize>,
@@ -57,15 +57,15 @@ pub struct CompositorState {
 
 impl CompositorState {
     pub fn new() -> Self {
-        let chan = crate::ipc::create_channel();
-        if let Some(id) = chan {
-            crate::println!("[NWCC] Created IPC channel: {}", id);
-        }
+        // Use a well-known channel ID for the compositor (ID 1)
+        let chan = 1;
+        crate::println!("[NWCC] Initialized on well-known channel: {}", chan);
+        
         Self {
             surfaces: BTreeMap::new(),
             buffers: BTreeMap::new(),
             next_id: 1,
-            ipc_channel: chan,
+            ipc_channel: Some(chan),
             grabbed_surface: None,
             grab_offset_x: 0,
             grab_offset_y: 0,
@@ -98,7 +98,7 @@ impl CompositorState {
     /// Compose all active surfaces with shadows and borders
     pub fn compose(&self, target_fb: *mut u8, target_pitch: u32) {
         let mut sorted_keys: Vec<usize> = self.surfaces.keys().cloned().collect();
-        // Sort by Z-index (proxy)
+        // Sort by Z-index
         sorted_keys.sort_by_key(|id| self.surfaces.get(id).unwrap().z_index);
 
         for id in sorted_keys {
@@ -189,50 +189,49 @@ impl CompositorState {
                 s.y = my - self.grab_offset_y;
                 s.z_index = 100; // Bring to front
             }
-            // Release if mouse leaves screen area
+            // Release if mouse leaves screen area (demo hack)
             if mx < 0 || my < 0 || mx > 1900 { self.grabbed_surface = None; }
         }
     }
 
-    /// Main loop for the compositor process
+    /// Compose all active surfaces and blit to the HARDWARE framebuffer
     pub fn run(&mut self) -> ! {
         crate::println!("[NWCC] Starting Native Wayland-Compatible Compositor");
 
-        let (width, height, pitch) = {
-            let drm = crate::drivers::drm::DRM.lock();
-            let res = drm.get_resources();
-            (res.width, res.height, res.width * 4)
+        // 1. Get hardware framebuffer info
+        let (hw_ptr, width, _height, pitch) = {
+            let fb_lock = crate::drivers::framebuffer::FB.lock();
+            let fb = fb_lock.as_ref().expect("Framebuffer not initialized");
+            (fb.ptr, fb.width as u32, fb.height as u32, fb.pitch as u32)
         };
+        // Height is fixed at 1080 for this 32MiB heap allocation
+        let height = 1080;
 
-        // Pre-register surface 1 for demo
+        // 2. Pre-register surface 1 for demo
         self.surfaces.insert(1, Surface {
             owner: Pid(0),
             active_buffer: None,
-            x: 200, y: 150, z_index: 10,
+            x: 50, y: 50, z_index: 10,
         });
 
-        let mut back_buffer = alloc::vec![0u8; (width * height * 4) as usize].into_boxed_slice();
+        // 3. Allocate back-buffer
+        let mut back_buffer = alloc::vec![0u8; (pitch * height) as usize].into_boxed_slice();
         let bb_ptr = back_buffer.as_mut_ptr();
 
         loop {
-            // 1. Interaction
+            // 4. Interaction & IPC
             self.update_interaction();
-
-            // 2. IPC
             self.process_ipc();
 
-            // 3. Render
-            crate::zig_ffi::clear(bb_ptr, (width * height * 4) as usize, 0xFF111111); // Dark Gray
+            // 5. Render to Back-buffer
+            crate::zig_ffi::clear(bb_ptr, (pitch * height) as usize, 0xFF111111); // Gray
             self.compose(bb_ptr, pitch);
             self.draw_cursor(bb_ptr, pitch);
 
-            // 4. Flip
-            let mut fb_id: u32 = 1; 
-            let _ = crate::drivers::drm::handle_ioctl(
-                crate::drivers::drm::ioctl::MODE_PAGE_FLIP, 
-                &mut fb_id as *mut u32 as *mut u8
-            );
+            // 6. HARDWARE SYNC: Copy back-buffer to actual screen
+            crate::zig_ffi::memcpy(hw_ptr, bb_ptr, (pitch * height) as usize);
 
+            // 7. VSync delay
             crate::timer::sleep_ms(Pid(0), 16); 
         }
     }
@@ -240,7 +239,6 @@ impl CompositorState {
     /// Render a native Axiq-IQ mouse cursor
     fn draw_cursor(&self, target_fb: *mut u8, pitch: u32) {
         let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
-        // Use Zig blitter to draw a fast white cursor arrow (simple rect for now)
         crate::zig_ffi::fill_rect(
             target_fb,
             pitch,
@@ -250,16 +248,13 @@ impl CompositorState {
             12,
             0xFFFFFFFF, // White
         );
-        // Draw a small black border for contrast
         crate::zig_ffi::draw_line(target_fb, pitch, mx as u32, my as u32, (mx+12) as u32, (my+12) as u32, 0xFF000000);
     }
 
     /// Poll for IPC messages from clients
     fn process_ipc(&mut self) {
         if let Some(chan_id) = self.ipc_channel {
-            // Attempt to receive a message (non-blocking)
             while let Ok(msg) = crate::ipc::recv(chan_id) {
-                // Protocol Decoding: Treat msg.data as WlMessage
                 if msg.len >= core::mem::size_of::<WlMessage>() {
                     let cmd = unsafe { core::ptr::read(msg.data.as_ptr() as *const WlMessage) };
                     self.handle_message(cmd);
@@ -294,7 +289,7 @@ impl CompositorState {
                 }
             }
             WlMessage::Commit { surface_id: _ } => {
-                // Mark for redraw (already handled by main loop frequency)
+                // Redraw is continuous
             }
         }
     }

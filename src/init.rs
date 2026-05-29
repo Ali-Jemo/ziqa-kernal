@@ -57,6 +57,16 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     memory::paging::init_kernel_mapper(VirtAddr::new(boot_info.physical_memory_offset));
 
     // Device/scheduler init.
+    // ARCH: [init→framebuffer] Initialize LFB if provided by bootloader
+    if let Some(fb) = boot_info.framebuffer.as_ref() {
+        let addr = fb.buffer().as_ptr() as u64;
+        let info = fb.info();
+        crate::drivers::framebuffer::init_xrgb(addr, info.width, info.height);
+        crate::klog!(crate::klog::Level::Info, "LFB: {}x{} @ 0x{:x}", info.width, info.height, addr);
+    } else {
+        crate::klog!(crate::klog::Level::Warn, "No LFB provided by bootloader, falling back to text mode");
+    }
+
     drivers::drm::init();
     process::scheduler::init();
 

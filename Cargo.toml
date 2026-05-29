@@ -31,5 +31,12 @@ opt-level = 0
 opt-level = 3
 panic = "abort"
 
+[package.metadata.bootloader]
+# Enable high-resolution graphical framebuffer (XRGB8888)
+# This will provide a linear framebuffer address in BootInfo
+map-physical-memory = true
+minimum-framebuffer-width = 1024
+minimum-framebuffer-height = 768
+
 [package.metadata.bootimage]
-run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-serial", "stdio", "-display", "none"]
+run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "format=raw,file=disk.img", "-serial", "stdio", "-display", "gtk", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]
