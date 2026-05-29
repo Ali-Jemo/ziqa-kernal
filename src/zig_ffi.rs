@@ -139,6 +139,26 @@ extern "C" {
     pub fn zig_demo_client_main();
 }
 
+/// Native Axiq-IQ Syscall Entry Point (for Zig/C FFI)
+///
+/// This allows Zig/C code linked into the kernel to make "syscalls"
+/// through the same dispatcher as user-mode processes.
+#[no_mangle]
+pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
+    let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(proc) = scheduler.current_task_mut() {
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, [a1, a2, a3, a4, a5, a6], proc);
+        let registry = crate::init_abi_registry();
+        let handler = crate::abi::handler::KernelSyscallHandler;
+        match crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx) {
+            Ok(v) => v,
+            Err(_) => u64::MAX, // Simplified error for FFI
+        }
+    } else {
+        u64::MAX
+    }
+}
+
 // ── Safe wrappers ───────────────────────────────────────────────────────────
 
 /// Fill a rectangle in the framebuffer with XRGB8888 color.

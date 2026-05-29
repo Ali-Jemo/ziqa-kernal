@@ -88,6 +88,41 @@ impl Scheduler {
         None
     }
 
+    /// Spawn a native kernel thread (shares kernel address space, runs in Ring 0)
+    pub fn spawn_kthread(&mut self, entry: fn()) -> Option<Pid> {
+        if self.count >= MAX_TASKS {
+            return None;
+        }
+        let pid = self.table.alloc_pid();
+        // Use 1 as stack sentinel to trigger kstack allocation in Process::new
+        let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(entry as u64), VirtAddr::new(1));
+        
+        // Kernel thread specifics:
+        proc.cpu_state.cs = 0x8; // Kernel Code
+        proc.cpu_state.ss = 0x10; // Kernel Data
+        proc.cpu_state.rflags = 0x202; // IF enabled
+        
+        // Shares kernel page table
+        proc.page_table_frame = None;
+
+        proc.make_ready();
+
+        for slot in self.tasks.iter_mut() {
+            if let Some(p) = slot {
+                if p.pid == pid {
+                    // Safety check: don't overwrite
+                    return None;
+                }
+            }
+            if slot.is_none() {
+                *slot = Some(proc);
+                self.count += 1;
+                return Some(pid);
+            }
+        }
+        None
+    }
+
     /// Terminate a process with an exit code.
     /// Sends SIGCHLD to the parent if one exists.
     pub fn exit_process(&mut self, pid: Pid, code: i64) {
@@ -502,7 +537,11 @@ pub fn wake_sleeping(woken_mask: u64) {
 }
 
 pub fn init() {
-    SCHEDULER.lock().init_boot_process();
+    // Disable interrupts while taking the scheduler lock — init_pics() has
+    // already enabled the PIT timer, and the timer ISR also takes this lock.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.lock().init_boot_process();
+    });
 }
 
 impl Scheduler {
@@ -592,10 +631,6 @@ pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
 }
 
 pub fn init_process_stack(proc: &mut Process) {
-    crate::println!(
-        "[DEBUG] Entering init_process_stack for PID {}...",
-        proc.pid.0
-    );
     let stack_top = proc.stack_top.as_u64();
 
     // 1. Map user stack page if the process has a user stack (stack_top != 0)
@@ -676,7 +711,6 @@ pub fn init_process_stack(proc: &mut Process) {
             proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
         }
     }
-    crate::println!("[DEBUG] Exited init_process_stack successfully.");
 }
 
 pub fn yield_now() {

@@ -1121,7 +1121,7 @@ impl Shell {
         println!("  - Spawning Compositor Task...");
         
         // Spawn Compositor as a separate task
-        crate::process::scheduler::SCHEDULER.lock().spawn(|| {
+        crate::process::scheduler::SCHEDULER.lock().spawn_kthread(|| {
             crate::userspace::compositor::start();
         });
 
@@ -1131,7 +1131,7 @@ impl Shell {
         println!("  - Spawning Zig-accelerated Demo Client...");
         
         // Spawn Zig Client as a separate task
-        crate::process::scheduler::SCHEDULER.lock().spawn(|| {
+        crate::process::scheduler::SCHEDULER.lock().spawn_kthread(|| {
             unsafe { crate::zig_ffi::zig_demo_client_main(); }
         });
 
