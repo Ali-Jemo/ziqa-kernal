@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::collections::BTreeMap;
 use crate::{print, println};
-use crate::process::{AbiKind, Pid, ProcessState, signal};
+use crate::process::{AbiKind, Pid};
 use crate::fs::vfs::VFS;
 use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
 use x86_64::VirtAddr;
@@ -31,7 +31,8 @@ const COMMANDS: &[&str] = &[
     "reboot", "echo", "clear", "edit", "ls", "cd", "pwd", "mkdir",
     "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
     "mv", "cp", "touch", "stat", "du",
-    "dashboard", "top", "history",
+    "dashboard", "top", "history", "alias", "export",
+    "jobs", "bg", "fg", "nwm-test",
 ];
 
 const MAX_HISTORY: usize = 50;
@@ -60,7 +61,7 @@ pub struct Shell {
     env: BTreeMap<String, String>,
     /// Job control
     jobs: Vec<Job>,
-    fg_job: Option<usize>, // index in jobs vector of foreground job
+    _fg_job: Option<usize>, // index in jobs vector of foreground job
 }
 
 impl Shell {
@@ -78,7 +79,7 @@ impl Shell {
             aliases: BTreeMap::new(),
             env: BTreeMap::new(),
             jobs: Vec::new(),
-            fg_job: None,
+            _fg_job: None,
         }
     }
 
@@ -214,6 +215,10 @@ impl Shell {
                     "netstat" => self.cmd_netstat(),
                     "doom"    => self.cmd_doom(arg1.as_deref()),
                     "tetris"  => self.cmd_tetris(),
+                    "nwm-test" => {
+                        self.cmd_nwm_test();
+                        self.set_exit_status(0);
+                    },
                     "dashboard" | "top" => self.cmd_dashboard(),
                     "reboot"  => self.cmd_reboot(),
                     "edit"    => self.cmd_edit(arg1.as_deref()),
@@ -656,6 +661,7 @@ impl Shell {
             ("Entertainment", &[
                 ("doom [steps]",     "DOOM fire demo (SPACE=blow, T=tornado)"),
                 ("tetris",           "graphical Tetris on VGA console"),
+                ("nwm-test",         "launch native Wayland compositor + Zig client"),
             ]),
         ];
 
@@ -1110,6 +1116,18 @@ impl Shell {
         crate::doom::run(steps);
     }
 
+    fn cmd_nwm_test(&self) {
+        println!("{}{}  🚀 LAUNCHING NATIVE COMPOSITOR (NWCC) ...{}", C_CYAN, C_BOLD, C_RESET);
+        println!("  - Initializing DRM Display...");
+        println!("  - Spawning NWCC background process...");
+        println!("  - Spawning Zig-accelerated test client...");
+        println!("");
+        
+        // This is a demo trigger. In a real system, these would be separate processes.
+        // For the demo, we'll start the compositor which enters its loop.
+        crate::userspace::compositor::start();
+    }
+
     fn cmd_clear(&self) {
         crate::drivers::vga::clear_screen();
         if crate::drivers::vga::is_scrolled() {
@@ -1400,7 +1418,6 @@ impl Shell {
 
             for seq in 0..count as u16 {
                 let start = crate::timer::uptime_ms();
-                println!("[PING] sending seq={} ident={}", seq, ident);
                 {
                     let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
                     let repr = Icmpv4Repr::EchoRequest {
@@ -1409,21 +1426,15 @@ impl Shell {
                         data: b"ziqa-ping-payload-56bytes-padding-here-1234567890ab",
                     };
                     if let Some(payload) = socket.send(repr.buffer_len(), IpAddress::Ipv4(ip)).ok() {
-                        let len = payload.len();
                         let mut pkt = Icmpv4Packet::new_unchecked(payload);
                         repr.emit(&mut pkt, &smoltcp::phy::ChecksumCapabilities::default());
-                        println!("[PING] send queued, {} bytes", len);
-                    } else {
-                        println!("[PING] send failed");
                     }
                 }
 
                 let mut got = false;
                 let deadline = start + 2000;
-                let mut poll_count = 0u32;
                 while crate::timer::uptime_ms() < deadline {
                     let serviced = stack.poll();
-                    if serviced { poll_count += 1; }
                     let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
                     if socket.can_recv() {
                         if let Ok(_) = socket.recv() {
@@ -1443,7 +1454,6 @@ impl Shell {
                         x86_64::instructions::nop();
                     }
                 }
-                println!("[PING] seq={} done, poll_serviced={} times", seq, poll_count);
                 if !got {
                     println!("Request timeout for icmp_seq {}", seq);
                 }
@@ -1735,6 +1745,24 @@ impl Shell {
         } else {
             println!("du: ZiqaFS not mounted");
         }
+    }
+
+    fn cmd_jobs(&self) {
+        if self.jobs.is_empty() {
+            println!("No background jobs.");
+        } else {
+            for (i, _job) in self.jobs.iter().enumerate() {
+                println!("[{}] (job details not available)", i + 1);
+            }
+        }
+    }
+
+    fn cmd_bg(&self, _arg: Option<&str>) {
+        println!("bg: job control not fully implemented");
+    }
+
+    fn cmd_fg(&self, _arg: Option<&str>) {
+        println!("fg: job control not fully implemented");
     }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

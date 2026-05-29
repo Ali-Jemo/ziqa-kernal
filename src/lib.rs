@@ -23,6 +23,7 @@ pub mod shell;
 pub mod tests;
 pub mod tetris;
 pub mod timer;
+pub mod userspace;
 pub mod zig_ffi;
 pub mod zig_kernel_ops;
 
