@@ -51,6 +51,35 @@ pub mod nr {
     pub const WAITPID: u64 = 61; // wait4 in Linux; simplified as waitpid
     pub const MMAP: u64 = 9;
     pub const MUNMAP: u64 = 11;
+    pub const NET_NOTIFY: u64 = 500;
+    pub const NET_ACK: u64 = 501;
+
+    // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
+    /// Close a file capability and release its FD slot.
+    /// args: [fd: usize] → 0 / -EBADF
+    pub const ZIQA_CAP_CLOSE: u64 = 1003;
+    /// Seek within a file capability.
+    /// args: [fd: usize, offset: i64, whence: i32] → new_offset / -errno
+    pub const ZIQA_CAP_SEEK: u64 = 1004;
+
+    // ── ZiqaKernel native signal syscalls (userspace libposix signal ABI) ─────
+    /// Install or clear a signal action.
+    /// args: [signum: u8, action_kind: u64, handler_ptr: u64, sa_mask: u32]
+    ///   action_kind: 0=Default, 1=Ignore, 2=Custom(handler_ptr)
+    /// → 0 / -EINVAL
+    pub const ZIQA_SIG_SETACTION: u64 = 2000;
+    /// Read the calling process's current signal block mask.
+    /// args: (none) → mask: u32
+    pub const ZIQA_SIG_GETMASK: u64 = 2001;
+    /// Write the calling process's signal block mask.
+    /// args: [new_mask: u32] → 0
+    pub const ZIQA_SIG_SETMASK: u64 = 2002;
+    /// Send signal to a process (ZiqaKernel IPC path).
+    /// args: [pid: u64, signum: u8] → 0 / -ESRCH / -EINVAL
+    pub const ZIQA_SIG_KILL: u64 = 2003;
+    /// Suspend the calling process until an unblocked signal is received.
+    /// args: (none) → always -EINTR
+    pub const ZIQA_SIG_PAUSE: u64 = 2004;
 }
 
 /// Error codes (negated errno values)
@@ -178,6 +207,45 @@ pub fn dispatch_syscall(
             }
             return Err(crate::abi::AbiError::Other("munmap: region not found"));
         }
+        nr::NET_NOTIFY => {
+            if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
+                return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
+            }
+            let queue_index = ctx.args[0] as u32;
+            unsafe {
+                let net_ptr = &raw mut crate::drivers::virtio_net::VIRTIO_NET;
+                if let Some(net) = (*net_ptr).as_mut() {
+                    net.write_config_32(0x050, queue_index);
+                }
+            }
+            return Ok(0);
+        }
+        nr::NET_ACK => {
+            if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
+                return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
+            }
+            unsafe {
+                let net_ptr = &raw mut crate::drivers::virtio_net::VIRTIO_NET;
+                if let Some(net) = (*net_ptr).as_mut() {
+                    net.ack_interrupt();
+                }
+            }
+            return Ok(0);
+        }
+        _ => {}
+    }
+
+    // ── ZiqaKernel native capability/signal syscalls ──────────────────────────
+    // These are ABI-independent (not Linux-specific) and sit above the plugin
+    // layer so that libposix can call them regardless of process ABI kind.
+    match ctx.number {
+        nr::ZIQA_CAP_CLOSE => return ziqa_cap_close(ctx),
+        nr::ZIQA_CAP_SEEK  => return ziqa_cap_seek(ctx),
+        nr::ZIQA_SIG_SETACTION => return ziqa_sig_setaction(ctx),
+        nr::ZIQA_SIG_GETMASK   => return ziqa_sig_getmask(ctx),
+        nr::ZIQA_SIG_SETMASK   => return ziqa_sig_setmask(ctx),
+        nr::ZIQA_SIG_KILL      => return ziqa_sig_kill(ctx),
+        nr::ZIQA_SIG_PAUSE     => return ziqa_sig_pause(ctx),
         _ => {}
     }
 
@@ -187,6 +255,184 @@ pub fn dispatch_syscall(
         Some(plugin) => plugin.handle_syscall(handler, ctx),
         None => Err(crate::abi::AbiError::UnsupportedSyscall(ctx.number)),
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ZiqaKernel Native Syscall Implementations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// ZIQA_CAP_CLOSE (1003) — close a file descriptor.
+///
+/// args[0] = fd (usize)
+/// Returns 0 on success, -EBADF if fd is not open, -EPERM if fd is 0/1/2.
+fn ziqa_cap_close(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    let fd = ctx.args[0] as usize;
+    // Refuse to close stdin/stdout/stderr via this path — use dup2 to redirect.
+    if fd < 3 {
+        klog_syscall("ziqa_cap_close", fd as u64);
+        return Ok((-1_i64) as u64); // -EPERM
+    }
+    let ok = ctx.process.fds.close(fd);
+    klog_syscall("ziqa_cap_close", fd as u64);
+    if ok {
+        Ok(0)
+    } else {
+        Ok((-9_i64) as u64) // -EBADF
+    }
+}
+
+/// ZIQA_CAP_SEEK (1004) — reposition file offset.
+///
+/// args[0] = fd (usize)
+/// args[1] = offset (i64, sign-extended)
+/// args[2] = whence: 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END
+/// Returns new offset / -EBADF / -EINVAL / -ESPIPE
+fn ziqa_cap_seek(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    use crate::process::FdTarget;
+    let fd      = ctx.args[0] as usize;
+    let offset  = ctx.args[1] as i64;
+    let whence  = ctx.args[2] as i32;
+
+    let desc = match ctx.process.fds.get_mut(fd) {
+        Some(d) => d,
+        None    => return Ok((-9_i64) as u64), // -EBADF
+    };
+
+    // Only regular file FDs support seeking.
+    let is_file = matches!(desc.target, FdTarget::File(_));
+    if !is_file {
+        return Ok((-29_i64) as u64); // -ESPIPE
+    }
+
+    // To get the file size for SEEK_END we'd need a VFS stat; for now we
+    // cap SEEK_END at current offset (conservative — avoids unsound reads).
+    let current = desc.offset as i64;
+    let new_offset: i64 = match whence {
+        0 => offset,                   // SEEK_SET
+        1 => current.saturating_add(offset), // SEEK_CUR
+        2 => current,                  // SEEK_END — clamp to current until VFS stat
+        _ => return Ok((-22_i64) as u64), // -EINVAL
+    };
+
+    if new_offset < 0 {
+        return Ok((-22_i64) as u64); // -EINVAL: negative file position
+    }
+
+    desc.offset = new_offset as usize;
+    klog_syscall("ziqa_cap_seek", new_offset as u64);
+    Ok(new_offset as u64)
+}
+
+/// ZIQA_SIG_SETACTION (2000) — install a signal action.
+///
+/// args[0] = signum (u8)
+/// args[1] = action_kind: 0=Default, 1=Ignore, 2=Custom
+/// args[2] = handler_ptr (u64, used only when action_kind == 2)
+/// args[3] = sa_mask (u32) — signals to block during handler (stored for reference)
+/// Returns 0 on success, -EINVAL on bad signum or attempt to catch SIGKILL/SIGSTOP.
+fn ziqa_sig_setaction(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    use crate::process::signal::{SignalAction, sig};
+    let signum      = ctx.args[0] as u8;
+    let action_kind = ctx.args[1];
+    let handler_ptr = ctx.args[2];
+
+    if signum == 0 || signum > sig::MAX {
+        return Ok((-22_i64) as u64); // -EINVAL
+    }
+    // SIGKILL (9) and SIGSTOP (19) cannot be caught or ignored.
+    if signum == sig::SIGKILL || signum == sig::SIGSTOP {
+        return Ok((-22_i64) as u64); // -EINVAL
+    }
+
+    let action = match action_kind {
+        0 => SignalAction::Default,
+        1 => SignalAction::Ignore,
+        2 => SignalAction::Handler(handler_ptr),
+        _ => return Ok((-22_i64) as u64), // -EINVAL
+    };
+
+    let ok = ctx.process.signals.set_action(signum, action);
+    klog_syscall("ziqa_sig_setaction", signum as u64);
+    if ok { Ok(0) } else { Ok((-22_i64) as u64) }
+}
+
+/// ZIQA_SIG_GETMASK (2001) — read the calling process's signal block mask.
+///
+/// Returns the current blocked mask as u32 (bit N = signal N+1 is blocked).
+fn ziqa_sig_getmask(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    let mask = ctx.process.signals.blocked as u64;
+    klog_syscall("ziqa_sig_getmask", mask);
+    Ok(mask)
+}
+
+/// ZIQA_SIG_SETMASK (2002) — overwrite the signal block mask.
+///
+/// args[0] = new_mask (u32)
+/// SIGKILL and SIGSTOP bits are always cleared (unblockable).
+/// Returns 0.
+fn ziqa_sig_setmask(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    use crate::process::signal::sig;
+    let mut new_mask = ctx.args[0] as u32;
+    // Force-clear unblockable signals.
+    new_mask &= !((1u32 << (sig::SIGKILL - 1)) | (1u32 << (sig::SIGSTOP - 1)));
+    ctx.process.signals.blocked = new_mask;
+    klog_syscall("ziqa_sig_setmask", new_mask as u64);
+    Ok(0)
+}
+
+/// ZIQA_SIG_KILL (2003) — IPC-native signal delivery.
+///
+/// args[0] = target_pid (u64); if 0, send to calling process.
+/// args[1] = signum (u8)
+/// Returns 0 / -ESRCH / -EINVAL
+fn ziqa_sig_kill(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    use crate::process::signal::sig;
+    let pid_arg = ctx.args[0];
+    let signum  = ctx.args[1] as u8;
+
+    if signum > sig::MAX {
+        return Ok((-22_i64) as u64); // -EINVAL
+    }
+
+    // pid 0 means "send to self".
+    let target = if pid_arg == 0 {
+        ctx.process.pid
+    } else {
+        crate::process::Pid(pid_arg)
+    };
+
+    // Self-signal: modify directly without scheduler lock.
+    if target == ctx.process.pid {
+        ctx.process.signals.send(signum);
+        klog_syscall("ziqa_sig_kill(self)", signum as u64);
+        return Ok(0);
+    }
+
+    // Remote signal: go through the scheduler.
+    let ok = crate::process::scheduler::SCHEDULER
+        .lock()
+        .send_signal(target, signum);
+    klog_syscall("ziqa_sig_kill", target.0);
+    if ok {
+        Ok(0)
+    } else {
+        Ok((-3_i64) as u64) // -ESRCH
+    }
+}
+
+/// ZIQA_SIG_PAUSE (2004) — suspend until an unblocked signal is delivered.
+///
+/// Transitions the process to Blocked.  The scheduler will unblock it
+/// when `deliver_signals()` detects a pending unblocked signal.
+/// Always returns -EINTR (POSIX: pause only returns on signal delivery).
+fn ziqa_sig_pause(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    // Only block if there is no already-pending unblocked signal.
+    if !ctx.process.signals.has_pending() {
+        ctx.process.state = crate::process::ProcessState::Blocked;
+        klog_syscall("ziqa_sig_pause", ctx.process.pid.0);
+    }
+    // POSIX: pause() always returns -1/EINTR.
+    Ok((-4_i64) as u64) // -EINTR
 }
 
 #[inline(always)]
