@@ -77,6 +77,7 @@ fn init_subsystems() {
     set_fg(Color::LightGreen);
     ziqa_kernel::net::init();
     ziqa_kernel::drivers::virtio_net::init().ok();
+    ziqa_kernel::drivers::ps2_mouse::init();
     set_fg(Color::White);
     section("Self-tests");
     ziqa_kernel::tests::run_all();

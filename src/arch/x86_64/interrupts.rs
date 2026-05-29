@@ -16,6 +16,7 @@ pub static PICS: Mutex<ChainedPics> =
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,        // 32
     Keyboard = PIC_1_OFFSET + 1, // 33
+    Mouse = PIC_2_OFFSET + 4,    // 44 (IRQ 12)
     Ata1 = PIC_1_OFFSET + 14,    // 46
     Ata2 = PIC_1_OFFSET + 15,    // 47
 }
@@ -40,6 +41,7 @@ lazy_static! {
         // ── Hardware interrupts ──
         idt[InterruptIndex::Timer as usize].set_handler_fn(timer_handler);
         idt[InterruptIndex::Keyboard as usize].set_handler_fn(keyboard_handler);
+        idt[InterruptIndex::Mouse as usize].set_handler_fn(mouse_handler);
         idt[InterruptIndex::Ata1 as usize].set_handler_fn(ata1_handler);
         idt[InterruptIndex::Ata2 as usize].set_handler_fn(ata2_handler);
 
@@ -269,6 +271,14 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     crate::drivers::keyboard::push_scancode(scancode);
 
     unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard as u8) };
+}
+
+extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
+    crate::drivers::ps2_mouse::on_interrupt();
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Mouse as u8)
+    };
 }
 
 

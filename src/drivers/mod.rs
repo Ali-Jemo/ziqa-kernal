@@ -8,4 +8,5 @@ pub mod keyboard;
 pub mod uart;
 pub mod vga;
 pub mod virtio_block;
+pub mod ps2_mouse;
 // pub mod input; // Directory is empty, removing from module tree

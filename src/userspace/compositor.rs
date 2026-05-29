@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use crate::ipc::shm::SHM;
 use crate::process::Pid;
-use crate::drivers::drm::FramebufferId;
+
 
 /// Represents a client-side buffer backed by shared memory.
 pub struct CompositorBuffer {
@@ -47,7 +47,7 @@ pub struct CompositorState {
     pub surfaces: BTreeMap<usize, Surface>,
     pub buffers: BTreeMap<usize, CompositorBuffer>,
     pub next_id: usize,
-    pub ipc_channel: Option<usize>,
+    pub ipc_channel: Option<u32>,
 }
 
 impl CompositorState {
@@ -97,16 +97,17 @@ impl CompositorState {
             if let Some(surface) = self.surfaces.get(&id) {
                 if let Some(buf_id) = surface.active_buffer {
                     if let Some(buf) = self.buffers.get(&buf_id) {
-                        if let Ok(shm_addr) = SHM.lock().attach(buf.shm_id, Pid(0)) {
-                            crate::zig_ffi::blend_rect(
+                        if let Ok(shm_addr) = SHM.lock().attach(buf.shm_id as u32, Pid(0)) {
+                            crate::zig_ffi::blit_bitmap(
                                 target_fb,
                                 target_pitch,
-                                surface.x as u32,
-                                surface.y as u32,
                                 shm_addr as *const u8,
-                                buf.stride,
+                                0,
+                                0,
                                 buf.width,
                                 buf.height,
+                                surface.x as u32,
+                                surface.y as u32,
                             );
                         }
                     }
@@ -140,16 +141,36 @@ impl CompositorState {
             // 5. Composite all client surfaces
             self.compose(bb_ptr, pitch);
 
-            // 6. Trigger DRM Page Flip
+            // 6. Draw Mouse Cursor (Axiq-IQ Native Enhancement)
+            self.draw_cursor(bb_ptr, pitch);
+
+            // 7. Trigger DRM Page Flip
             let mut fb_id: u32 = 1; // Default FB
             let _ = crate::drivers::drm::handle_ioctl(
                 crate::drivers::drm::ioctl::MODE_PAGE_FLIP, 
                 &mut fb_id as *mut u32 as *mut u8
             );
 
-            // 7. VSync delay
+            // 8. VSync delay
             crate::timer::sleep_ms(Pid(0), 16); 
         }
+    }
+
+    /// Render a native Axiq-IQ mouse cursor
+    fn draw_cursor(&self, target_fb: *mut u8, pitch: u32) {
+        let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
+        // Use Zig blitter to draw a fast white cursor arrow (simple rect for now)
+        crate::zig_ffi::fill_rect(
+            target_fb,
+            pitch,
+            mx as u32,
+            my as u32,
+            12,
+            12,
+            0xFFFFFFFF, // White
+        );
+        // Draw a small black border for contrast
+        crate::zig_ffi::draw_line(target_fb, pitch, mx as u32, my as u32, (mx+12) as u32, (my+12) as u32, 0xFF000000);
     }
 
     /// Poll for IPC messages from clients
