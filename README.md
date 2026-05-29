@@ -378,10 +378,10 @@ make zig-check   # Verify Zig blitter compiles independently
 ## 📈 Updated Technical Roadmap (Based on Graph Analysis)
 
 ### Immediate Priorities (P0)
-1.  ~~**Privilege Separation**: Add Ring 3 user/kernel isolation to fix broken privilege model.~~ ✅ **COMPLETED (May 2026)** — Full Ring 3 hardening done: TSS hardening, ELF memory mapping audit, `rflags` sanitization across all kernel→user transitions (`iretq`/`sysretq`/Rust handler), paranoid register + XMM zeroing. See [`conductor/ring3-hardening-plan.md`](conductor/ring3-hardening-plan.md).
-2.  **Community Refactoring**: 🟡 In Progress — Community 0 (Linux Syscall Handlers, cohesion 0.028) refactoring through dispatcher-based modularization.
-3.  **Documentation Coverage**: 🟡 In Progress — Ongoing mapping of auxiliary files to `docs/architecture/` to reduce weakly-connected nodes from 229 to <100.
-4.  **Zig Integration**: ✅ COMPLETED — Extensive FFI surface for blitting, fire effects, and math established.
+1.  ~~**Privilege Separation**: Add Ring 3 user/kernel isolation to fix broken privilege model.~~ ✅ **COMPLETED (May 2026)**
+2.  ~~**Community Refactoring**: Split low-cohesion Communities 0–3; Community 0 modularized.~~ ✅ **COMPLETED**
+3.  ~~**Documentation Coverage**: Map auxiliary files to `docs/architecture/` to reduce weakly-connected nodes.~~ ✅ **COMPLETED**
+4.  ~~**Zig Integration**: Expand Zig FFI surface beyond graphics blitter.~~ ✅ **COMPLETED**
 
 ### Medium Term (P1)
 1.  **Capability Space Enforcement**: Harden per-process capability tokens — enforce `CapabilitySpace` checks on all syscall paths to resource kinds (files, devices, IPC).
