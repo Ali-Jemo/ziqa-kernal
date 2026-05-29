@@ -1,18 +1,15 @@
-use x86_64::{
-    VirtAddr,
-    structures::paging::{
-        OffsetPageTable, PageTable, PageTableFlags, PhysFrame,
-        page_table::PageTableEntry,
-        mapper::Translate,
-        FrameAllocator,
-    },
-    PhysAddr,
-    registers::control::{Cr3, Cr3Flags},
-};
+use crate::memory::{BootInfoFrameAllocator, FRAME_ALLOCATOR};
 use alloc::vec::Vec;
-use spin::Mutex;
 use lazy_static::lazy_static;
-use crate::memory::{FRAME_ALLOCATOR, BootInfoFrameAllocator};
+use spin::Mutex;
+use x86_64::{
+    registers::control::{Cr3, Cr3Flags},
+    structures::paging::{
+        mapper::Translate, page_table::PageTableEntry, FrameAllocator, OffsetPageTable, PageTable,
+        PageTableFlags, PhysFrame,
+    },
+    PhysAddr, VirtAddr,
+};
 
 /// A wrapper around a mapper that also tracks the frame allocator.
 pub struct MemoryMapper {
@@ -59,10 +56,22 @@ pub struct MemoryRegionFlags {
 
 impl MemoryRegionFlags {
     pub const fn empty() -> Self {
-        Self { readable: false, writable: false, executable: false, user_accessible: false, copy_on_write: false }
+        Self {
+            readable: false,
+            writable: false,
+            executable: false,
+            user_accessible: false,
+            copy_on_write: false,
+        }
     }
     pub const fn read_write() -> Self {
-        Self { readable: true, writable: true, executable: false, user_accessible: true, copy_on_write: false }
+        Self {
+            readable: true,
+            writable: true,
+            executable: false,
+            user_accessible: true,
+            copy_on_write: false,
+        }
     }
 }
 
@@ -84,10 +93,14 @@ pub struct AddressSpace {
 
 impl AddressSpace {
     pub fn new() -> Self {
-        Self { root_page_table: PageTable::new(), regions: Vec::new() }
+        Self {
+            root_page_table: PageTable::new(),
+            regions: Vec::new(),
+        }
     }
     pub unsafe fn activate(&self) {
-        let frame = PhysFrame::containing_address(PhysAddr::new(&self.root_page_table as *const _ as u64));
+        let frame =
+            PhysFrame::containing_address(PhysAddr::new(&self.root_page_table as *const _ as u64));
         Cr3::write(frame, Cr3Flags::empty());
     }
 
@@ -130,18 +143,36 @@ pub fn get_leaf_entry_mut(vaddr: VirtAddr) -> Option<&'static mut PageTableEntry
 
     let l4 = unsafe { frame_as_page_table(l4_frame) };
     let l4_idx = (vaddr.as_u64() >> 39) & 0x1FF;
-    if !l4[l4_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l4[l4_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l3_frame = l4[l4_idx as usize].frame().ok()?;
 
     let l3 = unsafe { frame_as_page_table(l3_frame) };
     let l3_idx = (vaddr.as_u64() >> 30) & 0x1FF;
-    if !l3[l3_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l3[l3_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l2_frame = l3[l3_idx as usize].frame().ok()?;
 
     let l2 = unsafe { frame_as_page_table(l2_frame) };
     let l2_idx = (vaddr.as_u64() >> 21) & 0x1FF;
-    if !l2[l2_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
-    if l2[l2_idx as usize].flags().contains(PageTableFlags::HUGE_PAGE) {
+    if !l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
+    if l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::HUGE_PAGE)
+    {
         // 2MB huge page — not handled
         return None;
     }
@@ -149,33 +180,64 @@ pub fn get_leaf_entry_mut(vaddr: VirtAddr) -> Option<&'static mut PageTableEntry
 
     let l1 = unsafe { frame_as_page_table_mut(l1_frame) };
     let l1_idx = (vaddr.as_u64() >> 12) & 0x1FF;
-    if !l1[l1_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l1[l1_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     Some(&mut l1[l1_idx as usize])
 }
 
 /// Walk a specific page table hierarchy (by root frame) to find the leaf entry for `vaddr`.
-pub fn get_leaf_entry_mut_in(root_frame: PhysFrame, vaddr: VirtAddr) -> Option<&'static mut PageTableEntry> {
+pub fn get_leaf_entry_mut_in(
+    root_frame: PhysFrame,
+    vaddr: VirtAddr,
+) -> Option<&'static mut PageTableEntry> {
     let l4 = unsafe { frame_as_page_table(root_frame) };
     let l4_idx = (vaddr.as_u64() >> 39) & 0x1FF;
-    if !l4[l4_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l4[l4_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l3_frame = l4[l4_idx as usize].frame().ok()?;
 
     let l3 = unsafe { frame_as_page_table(l3_frame) };
     let l3_idx = (vaddr.as_u64() >> 30) & 0x1FF;
-    if !l3[l3_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l3[l3_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l2_frame = l3[l3_idx as usize].frame().ok()?;
 
     let l2 = unsafe { frame_as_page_table(l2_frame) };
     let l2_idx = (vaddr.as_u64() >> 21) & 0x1FF;
-    if !l2[l2_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
-    if l2[l2_idx as usize].flags().contains(PageTableFlags::HUGE_PAGE) {
+    if !l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
+    if l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::HUGE_PAGE)
+    {
         return None;
     }
     let l1_frame = l2[l2_idx as usize].frame().ok()?;
 
     let l1 = unsafe { frame_as_page_table_mut(l1_frame) };
     let l1_idx = (vaddr.as_u64() >> 12) & 0x1FF;
-    if !l1[l1_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l1[l1_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     Some(&mut l1[l1_idx as usize])
 }
 
@@ -183,25 +245,48 @@ pub fn get_leaf_entry_mut_in(root_frame: PhysFrame, vaddr: VirtAddr) -> Option<&
 pub fn get_phys_frame(root_frame: PhysFrame, vaddr: VirtAddr) -> Option<PhysFrame> {
     let l4 = unsafe { frame_as_page_table(root_frame) };
     let l4_idx = (vaddr.as_u64() >> 39) & 0x1FF;
-    if !l4[l4_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l4[l4_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l3_frame = l4[l4_idx as usize].frame().ok()?;
 
     let l3 = unsafe { frame_as_page_table(l3_frame) };
     let l3_idx = (vaddr.as_u64() >> 30) & 0x1FF;
-    if !l3[l3_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l3[l3_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     let l2_frame = l3[l3_idx as usize].frame().ok()?;
 
     let l2 = unsafe { frame_as_page_table(l2_frame) };
     let l2_idx = (vaddr.as_u64() >> 21) & 0x1FF;
-    if !l2[l2_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
-    if l2[l2_idx as usize].flags().contains(PageTableFlags::HUGE_PAGE) {
+    if !l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
+    if l2[l2_idx as usize]
+        .flags()
+        .contains(PageTableFlags::HUGE_PAGE)
+    {
         return None;
     }
     let l1_frame = l2[l2_idx as usize].frame().ok()?;
 
     let l1 = unsafe { frame_as_page_table(l1_frame) };
     let l1_idx = (vaddr.as_u64() >> 12) & 0x1FF;
-    if !l1[l1_idx as usize].flags().contains(PageTableFlags::PRESENT) { return None; }
+    if !l1[l1_idx as usize]
+        .flags()
+        .contains(PageTableFlags::PRESENT)
+    {
+        return None;
+    }
     l1[l1_idx as usize].frame().ok()
 }
 
@@ -211,24 +296,59 @@ pub fn get_phys_frame(root_frame: PhysFrame, vaddr: VirtAddr) -> Option<PhysFram
 pub fn make_user_leaf_readonly(root_frame: PhysFrame) {
     let l4 = unsafe { frame_as_page_table_mut(root_frame) };
     for l4_idx in 0..256 {
-        if !l4[l4_idx].flags().contains(PageTableFlags::PRESENT) { continue; }
-        if l4[l4_idx].flags().contains(PageTableFlags::HUGE_PAGE) { continue; }
-        let l3_frame = match l4[l4_idx].frame() { Ok(f) => f, _ => continue };
+        if !l4[l4_idx].flags().contains(PageTableFlags::PRESENT) {
+            continue;
+        }
+        // Skip non-user L4 entries — these are kernel identity mappings
+        if !l4[l4_idx].flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+            continue;
+        }
+        if l4[l4_idx].flags().contains(PageTableFlags::HUGE_PAGE) {
+            continue;
+        }
+        let l3_frame = match l4[l4_idx].frame() {
+            Ok(f) => f,
+            _ => continue,
+        };
         let l3 = unsafe { frame_as_page_table_mut(l3_frame) };
         for l3_idx in 0..512 {
-            if !l3[l3_idx].flags().contains(PageTableFlags::PRESENT) { continue; }
-            let l2_frame = match l3[l3_idx].frame() { Ok(f) => f, _ => continue };
+            if !l3[l3_idx].flags().contains(PageTableFlags::PRESENT) {
+                continue;
+            }
+            // Skip non-user L3 entries
+            if !l3[l3_idx].flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+                continue;
+            }
+            let l2_frame = match l3[l3_idx].frame() {
+                Ok(f) => f,
+                _ => continue,
+            };
             let l2 = unsafe { frame_as_page_table_mut(l2_frame) };
             for l2_idx in 0..512 {
-                if !l2[l2_idx].flags().contains(PageTableFlags::PRESENT) { continue; }
+                if !l2[l2_idx].flags().contains(PageTableFlags::PRESENT) {
+                    continue;
+                }
+                // Skip non-user L2 entries
+                if !l2[l2_idx].flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+                    continue;
+                }
                 if l2[l2_idx].flags().contains(PageTableFlags::HUGE_PAGE) {
                     continue;
                 }
-                let l1_frame = match l2[l2_idx].frame() { Ok(f) => f, _ => continue };
+                let l1_frame = match l2[l2_idx].frame() {
+                    Ok(f) => f,
+                    _ => continue,
+                };
                 let l1 = unsafe { frame_as_page_table_mut(l1_frame) };
                 for l1_idx in 0..512 {
                     let entry = &mut l1[l1_idx];
-                    if !entry.flags().contains(PageTableFlags::PRESENT) { continue; }
+                    if !entry.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+                    // Skip non-user leaf entries
+                    if !entry.flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+                        continue;
+                    }
                     let flags = entry.flags();
                     if flags.contains(PageTableFlags::WRITABLE) {
                         let addr = entry.addr();
@@ -261,7 +381,25 @@ pub fn clone_user_table_tree(
             new[i] = src[i].clone();
             continue;
         }
-        if !src[i].flags().contains(PageTableFlags::PRESENT) { continue; }
+        if !src[i].flags().contains(PageTableFlags::PRESENT) {
+            continue;
+        }
+
+        // Skip non-user entries to avoid cloning kernel identity-mapped pages
+        if !src[i].flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+            continue;
+        }
+
+        // Handle huge pages at intermediate levels — copy as-is (leaf-like)
+        if level > 1 && src[i].flags().contains(PageTableFlags::HUGE_PAGE) {
+            let cow_flags = if src[i].flags().contains(PageTableFlags::WRITABLE) {
+                src[i].flags() & !PageTableFlags::WRITABLE
+            } else {
+                src[i].flags()
+            };
+            new[i].set_addr(src[i].addr(), cow_flags);
+            continue;
+        }
 
         if level == 1 {
             // Leaf page: copy entry as-is (already read-only from parent fixup)
@@ -275,7 +413,10 @@ pub fn clone_user_table_tree(
             new[i].set_addr(src[i].addr(), cow_flags);
         } else {
             // Table: recursively clone
-            let child_frame = match src[i].frame() { Ok(f) => f, _ => continue };
+            let child_frame = match src[i].frame() {
+                Ok(f) => f,
+                _ => continue,
+            };
             if let Some(cloned) = clone_user_table_tree(child_frame, level - 1, fa) {
                 new[i].set_addr(cloned.start_address(), src[i].flags());
             } else {
@@ -327,7 +468,9 @@ pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
     // Read the current mapping to find the old physical frame
     let old_frame = match get_phys_frame(Cr3::read().0, fault_addr) {
         Some(f) => f,
-        None => { return false; }
+        None => {
+            return false;
+        }
     };
 
     // Allocate a new frame
@@ -335,7 +478,9 @@ pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
     let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
     let new_frame = match fa.allocate_frame() {
         Some(f) => f,
-        None => { return false; }
+        None => {
+            return false;
+        }
     };
     drop(fa_guard);
 
@@ -351,7 +496,9 @@ pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
     // Update the leaf entry to point to the new frame with writable permission
     let leaf = match get_leaf_entry_mut(fault_addr) {
         Some(e) => e,
-        None => { return false; }
+        None => {
+            return false;
+        }
     };
 
     let mut flags = leaf.flags();
@@ -361,6 +508,34 @@ pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
     // Flush TLB for this page
     x86_64::instructions::tlb::flush(fault_addr);
 
-    crate::println!("[COW] Copied page at {:?} to new frame {:?}", fault_addr, new_frame);
+    crate::println!(
+        "[COW] Copied page at {:?} to new frame {:?}",
+        fault_addr,
+        new_frame
+    );
     true
+}
+
+/// Create a new page table for a process by copying kernel space L4 entries.
+pub fn create_process_page_table() -> Option<PhysFrame> {
+    let (parent_l4_frame, _) = Cr3::read();
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+
+    // Allocate a new frame for L4 table
+    let new_frame = fa.allocate_frame()?;
+    let new_table = unsafe { frame_as_page_table_mut(new_frame) };
+
+    // Clear all entries first
+    for i in 0..512 {
+        new_table[i].set_unused();
+    }
+
+    // Copy the kernel mappings (L4 indices 256 to 511)
+    let parent_table = unsafe { frame_as_page_table(parent_l4_frame) };
+    for i in 256..512 {
+        new_table[i] = parent_table[i].clone();
+    }
+
+    Some(new_frame)
 }

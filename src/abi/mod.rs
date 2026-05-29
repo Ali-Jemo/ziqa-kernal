@@ -9,10 +9,10 @@
 ///
 /// This lets ZiqaKernel run Linux ELF binaries, WASM modules, and future
 /// native formats — all through the same unified interface.
-
 pub mod linux;
-pub mod wasm;
 pub mod syscall;
+pub mod wasm;
+pub mod handler;
 
 use crate::process::Process;
 
@@ -60,7 +60,11 @@ pub trait AbiPlugin {
     ///
     /// # Returns
     /// The syscall return value (placed in RAX)
-    fn handle_syscall(&self, ctx: &mut syscall::SyscallContext) -> Result<u64, AbiError>;
+    fn handle_syscall(
+        &self,
+        handler: &dyn handler::SyscallHandler,
+        ctx: &mut syscall::SyscallContext,
+    ) -> Result<u64, AbiError>;
 }
 
 /// Maximum number of registered ABI plugins

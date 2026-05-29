@@ -1,5 +1,9 @@
 /// Linux ABI Plugin for ZiqaKernel
 ///
+/// Community boundary: this file is the Linux ABI facade. Graphify flagged the
+/// Linux syscall handlers as low-cohesion; keep new syscall-family logic in
+/// dedicated modules per `docs/architecture/community-boundaries.md`.
+///
 /// This plugin allows ZiqaKernel to run standard Linux ELF binaries.
 /// It implements the Linux x86_64 syscall ABI (syscall numbers, argument
 /// passing convention) and routes each syscall to its handler.
@@ -12,14 +16,20 @@
 ///   - sys_read (0)     — read from fd
 ///   - sys_close (3)    — close fd
 ///   - sys_uname (63)   — system identification
-
 pub mod elf_loader;
 
-use crate::abi::{AbiPlugin, AbiError};
+mod fs;
+mod memory;
+mod misc;
+mod net;
+mod process;
+mod time;
+
 use crate::abi::syscall::SyscallContext;
-use crate::process::{Process, AbiKind};
-use crate::println;
+use crate::abi::{AbiError, AbiPlugin};
 use crate::capability::ResourceKind;
+use crate::println;
+use crate::process::{AbiKind, Process};
 
 /// Linux x86_64 syscall numbers
 mod nr {
@@ -176,125 +186,35 @@ impl AbiPlugin for LinuxAbiPlugin {
         elf_loader::load_elf(binary, process)
     }
 
-    fn handle_syscall(&self, ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-        match ctx.number {
-            nr::SYS_WRITE => sys_write(ctx),
-            nr::SYS_READ => sys_read(ctx),
-            nr::SYS_EXIT | nr::SYS_EXIT_GROUP => sys_exit(ctx),
-            nr::SYS_BRK => sys_brk(ctx),
-            nr::SYS_GETPID => sys_getpid(ctx),
-            nr::SYS_KILL => sys_kill(ctx),
-            nr::SYS_WAITPID => sys_waitpid(ctx),
-            nr::SYS_NANOSLEEP => sys_nanosleep(ctx),
-            nr::SYS_UNAME => sys_uname(ctx),
-            nr::SYS_MMAP => sys_mmap(ctx),
-            nr::SYS_MPROTECT => sys_mprotect(ctx),
-            nr::SYS_MUNMAP => sys_munmap(ctx),
-            nr::SYS_CLOSE => sys_close(ctx),
-            nr::SYS_FSTAT => sys_fstat(ctx),
-            nr::SYS_IOCTL => sys_ioctl(ctx),
-            nr::SYS_WRITEV => sys_writev(ctx),
-            nr::SYS_ACCESS => sys_access(ctx),
-            nr::SYS_OPEN => sys_open(ctx),
-            nr::SYS_ARCH_PRCTL => sys_arch_prctl(ctx),
-            nr::SYS_SET_TID_ADDRESS => sys_set_tid_address(ctx),
-            nr::SYS_STAT | nr::SYS_LSTAT => sys_stat(ctx),
-            nr::SYS_LSEEK => sys_lseek(ctx),
-            nr::SYS_DUP => sys_dup(ctx),
-            nr::SYS_DUP2 => sys_dup2(ctx),
-            nr::SYS_PIPE => sys_pipe(ctx),
-            nr::SYS_GETCWD => sys_getcwd(ctx),
-            nr::SYS_CHDIR => sys_chdir(ctx),
-            nr::SYS_GETUID | nr::SYS_GETGID => Ok(0),   // root
-            nr::SYS_GETEUID | nr::SYS_GETEGID => Ok(0), // root
-            nr::SYS_POLL | nr::SYS_SELECT => sys_poll(ctx),
-            nr::SYS_FUTEX => sys_futex(ctx),
-            nr::SYS_RT_SIGACTION => sys_rt_sigaction(ctx),
-            nr::SYS_RT_SIGPROCMASK => Ok(0),
-            nr::SYS_CLONE => sys_clone(ctx),
-            nr::SYS_PREAD64 => sys_pread64(ctx),
-            nr::SYS_READV => sys_readv(ctx),
-            nr::SYS_OPENAT => sys_openat(ctx),
-            nr::SYS_GETPPID => Ok(ctx.process.parent),
-            nr::SYS_GETTID => Ok(ctx.process.pid.0),
-            nr::SYS_TGKILL => sys_tgkill(ctx),
-            nr::SYS_SOCKET => sys_socket(ctx),
-            nr::SYS_BIND | nr::SYS_LISTEN => Ok(0),
-            nr::SYS_CONNECT => Ok((-111_i64) as u64), // -ECONNREFUSED
-            nr::SYS_ACCEPT => Ok((-11_i64) as u64),   // -EAGAIN
-            nr::SYS_SENDTO => sys_sendto(ctx),
-            nr::SYS_RECVFROM => Ok((-11_i64) as u64), // -EAGAIN
-            nr::SYS_SETSOCKOPT | nr::SYS_GETSOCKOPT => Ok(0),
-            nr::SYS_READLINK => sys_readlink(ctx),
-            nr::SYS_FCNTL => sys_fcntl(ctx),
-            nr::SYS_GETTIMEOFDAY => sys_gettimeofday(ctx),
-            nr::SYS_TIME => sys_time(ctx),
-            nr::SYS_GETRLIMIT => sys_getrlimit(ctx),
-            nr::SYS_SETRLIMIT => sys_setrlimit(ctx),
-            nr::SYS_SYSINFO => sys_sysinfo(ctx),
-            nr::SYS_SETSID => Ok(ctx.process.pid.0),
-            nr::SYS_SETPGID => Ok(0),
-            nr::SYS_GETPGID => Ok(ctx.process.pid.0),
-            nr::SYS_GETSID => Ok(ctx.process.pid.0),
-            nr::SYS_MADVISE => Ok(0),
-            nr::SYS_FTRUNCATE => Ok(0),
-            nr::SYS_FSYNC | nr::SYS_FDATASYNC => Ok(0),
-            nr::SYS_SENDFILE => Ok(0),
-            nr::SYS_SYNC => Ok(0),
-            nr::SYS_FLOCK => Ok(0),
-            nr::SYS_UTIMES => Ok(0),
-            nr::SYS_PRLIMIT64 => sys_prlimit64(ctx),
-            nr::SYS_GETPRIORITY => sys_getpriority(ctx),
-            nr::SYS_SETPRIORITY => sys_setpriority(ctx),
-            nr::SYS_IOPL => Ok(0),
-            nr::SYS_MSYNC => Ok(0),
-            nr::SYS_GETDENTS64 => sys_getdents64(ctx),
-            nr::SYS_MKDIR => sys_mkdir(ctx),
-            nr::SYS_RMDIR => sys_rmdir(ctx),
-            nr::SYS_UNLINK => sys_unlink(ctx),
-            nr::SYS_RENAME => sys_rename(ctx),
-            nr::SYS_CREAT => sys_creat(ctx),
-            nr::SYS_NEWFSTATAT => sys_newfstatat(ctx),
-            nr::SYS_CLOCK_GETTIME => sys_clock_gettime(ctx),
-            nr::SYS_GETRANDOM => sys_getrandom(ctx),
-            nr::SYS_CHMOD => sys_chmod(ctx),
-            nr::SYS_UMASK => sys_umask(ctx),
-            nr::SYS_LINK => sys_link(ctx),
-            nr::SYS_SYMLINK => sys_symlink(ctx),
-            nr::SYS_STATFS => sys_statfs(ctx),
-            nr::SYS_NICE => Ok(0),
-            nr::SYS_MKNOD => Ok(0),
-            nr::SYS_PERSONALITY => Ok(0),
-            nr::SYS_SCHED_GETPARAM => sys_sched_getparam(ctx),
-            nr::SYS_SCHED_SETPARAM => Ok(0),
-            nr::SYS_SCHED_GETSCHEDULER => Ok(0), // SCHED_OTHER
-            nr::SYS_SCHED_SETSCHEDULER => Ok(0),
-            nr::SYS_SCHED_GET_PRIORITY_MAX => Ok(0),
-            nr::SYS_SCHED_GET_PRIORITY_MIN => Ok(0),
-            nr::SYS_SCHED_RR_GET_INTERVAL => Ok(0),
-            nr::SYS_PRCTL => sys_prctl(ctx),
-            nr::SYS_CLOCK_GETRES => sys_clock_getres(ctx),
-            nr::SYS_EPOLL_CREATE1 => sys_epoll_create1(ctx),
-            nr::SYS_EPOLL_CTL => Ok(0),
-            nr::SYS_EPOLL_WAIT => Ok(0),
-            nr::SYS_EVENTFD => sys_eventfd(ctx),
-            nr::SYS_SIGNALFD => sys_signalfd(ctx),
-            nr::SYS_TIMERFD_CREATE => sys_timerfd_create(ctx),
-            nr::SYS_TIMERFD_SETTIME => Ok(0),
-            nr::SYS_FACCESSAT => Ok(0), // same as access
-            nr::SYS_UTIMENSAT => Ok(0),
-            nr::SYS_PPOLL => Ok(0), // same as poll
-            nr::SYS_PSELECT6 => Ok(0), // same as select
-            nr::SYS_GETCPU => sys_getcpu(ctx),
-            nr::SYS_PIDFD_OPEN => sys_pidfd_open(ctx),
-            nr::SYS_MEMFD_CREATE => sys_memfd_create(ctx),
-            nr::SYS_FALLOCATE => Ok(0),
-            nr::SYS_COPY_FILE_RANGE => Ok(0),
-            _ => {
-                println!("[Linux ABI] Unimplemented syscall: {}", ctx.number);
-                Err(AbiError::UnsupportedSyscall(ctx.number))
-            }
+    fn handle_syscall(
+        &self,
+        _handler: &dyn crate::abi::handler::SyscallHandler,
+        ctx: &mut SyscallContext,
+    ) -> Result<u64, AbiError> {
+        // Graphify Community 0 boundary: keep this facade thin and delegate
+        // syscall families to focused dispatch modules. Handler bodies are
+        // migrated behind these boundaries incrementally.
+        if let Some(result) = memory::handle(ctx) {
+            return result;
         }
+        if let Some(result) = process::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = fs::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = time::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = net::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = misc::handle(ctx) {
+            return result;
+        }
+
+        println!("[Linux ABI] Unimplemented syscall: {}", ctx.number);
+        Err(AbiError::UnsupportedSyscall(ctx.number))
     }
 }
 
@@ -302,23 +222,23 @@ impl AbiPlugin for LinuxAbiPlugin {
 // Syscall implementations
 // ──────────────────────────────────────────────────────────
 
-
-
 /// sys_write(fd, buf, count) → bytes_written
 fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
     let buf_addr = ctx.args[1] as *const u8;
     let count = ctx.args[2] as usize;
 
-    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) {
-        return Err(AbiError::PermissionDenied);
+    if buf_addr.is_null() && count > 0 {
+        return Err(AbiError::Other("Bad address"));
     }
 
     let target = ctx.process.fds.get(fd).map(|d| d.target);
 
     match target {
-        Some(crate::process::FdTarget::Stdout) | Some(crate::process::FdTarget::Stderr)
-        | None if fd == 1 || fd == 2 => {
+        Some(crate::process::FdTarget::Stdout) | Some(crate::process::FdTarget::Stderr) | None
+            if fd == 1 || fd == 2 =>
+        {
+            // Stdout/Stderr allowed without capability (basic console output)
             use x86_64::instructions::interrupts;
             let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
             // Print to VGA via println!
@@ -328,11 +248,17 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             // Also send to serial
             interrupts::without_interrupts(|| {
                 let mut serial = crate::drivers::uart::SERIAL1.lock();
-                for &b in bytes { serial.send(b); }
+                for &b in bytes {
+                    serial.send(b);
+                }
             });
             Ok(count as u64)
         }
         Some(crate::process::FdTarget::PipeWrite(chan_id)) => {
+            // Pipe writes require IpcChannel capability
+            if !ctx.process.capabilities.has_permission(ResourceKind::IpcChannel, true, false) {
+                return Err(AbiError::PermissionDenied);
+            }
             let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
             let pid = ctx.process.pid;
             match crate::ipc::send(chan_id, pid, bytes) {
@@ -341,9 +267,15 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             }
         }
         Some(crate::process::FdTarget::File(_)) => {
+            // VFS write requires File capability
+            if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) {
+                return Err(AbiError::PermissionDenied);
+            }
             // VFS write — update offset, return count
             let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
-            if let Some(desc) = ctx.process.fds.get_mut(fd) { desc.offset += bytes.len(); }
+            if let Some(desc) = ctx.process.fds.get_mut(fd) {
+                desc.offset += bytes.len();
+            }
             Ok(count as u64)
         }
         _ => Ok((-9_i64) as u64), // -EBADF
@@ -361,34 +293,59 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     match target {
         Some(crate::process::FdTarget::Stdin) | None if fd == 0 => {
+            // Stdin doesn't require File capability (basic I/O)
             let mut tmp = [0u8; 256];
             let n = crate::drivers::keyboard::read_stdin(&mut tmp[..count.min(256)]);
-            if n > 0 { unsafe { core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n); } }
+            if n > 0 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n);
+                }
+            }
             Ok(n as u64)
         }
         Some(crate::process::FdTarget::PipeRead(chan_id)) => {
             match crate::ipc::recv(chan_id) {
                 Ok(msg) => {
                     let n = msg.len.min(count);
-                    unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_addr, n); }
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_addr, n);
+                    }
                     Ok(n as u64)
                 }
                 Err(_) => Ok(0), // empty pipe — would block in real kernel
             }
         }
         Some(crate::process::FdTarget::File(_)) => {
+            // Check File capability before reading files
+            if !ctx.process.capabilities.has_permission(ResourceKind::File, false, false) {
+                return Err(AbiError::PermissionDenied);
+            }
             let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
             let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => { let mut t = [0u8;64]; let n=p.len().min(63); t[..n].copy_from_slice(&p[..n]); (t,n) }
+                Some(p) => {
+                    let mut t = [0u8; 64];
+                    let n = p.len().min(63);
+                    t[..n].copy_from_slice(&p[..n]);
+                    (t, n)
+                }
                 None => return Ok((-9_i64) as u64),
             };
             let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
             let mut tmp = [0u8; 4096];
             let to_read = count.min(4096);
-            match crate::fs::vfs::VFS.lock().read_raw(path_str, &mut tmp[..to_read], offset) {
+            match crate::fs::vfs::VFS
+                .lock()
+                .read_raw(path_str, &mut tmp[..to_read], offset)
+            {
                 Ok(n) => {
-                    if n > 0 { unsafe { core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n); } }
-                    if let Some(desc) = ctx.process.fds.get_mut(fd) { desc.offset += n; }
+                    if n > 0 {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n);
+                        }
+                    }
+                    if let Some(desc) = ctx.process.fds.get_mut(fd) {
+                        desc.offset += n;
+                    }
                     Ok(n as u64)
                 }
                 Err(_) => Ok(0),
@@ -401,7 +358,10 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_exit(status) → never returns
 fn sys_exit(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let status = ctx.args[0] as i64;
-    println!("[Linux ABI] Process {} exiting with code {}", ctx.process.pid.0, status);
+    println!(
+        "[Linux ABI] Process {} exiting with code {}",
+        ctx.process.pid.0, status
+    );
     ctx.process.exit(status);
     Ok(0)
 }
@@ -428,7 +388,9 @@ fn sys_getpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 ///   sysname, nodename, release, version, machine, domainname
 fn sys_uname(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let buf = ctx.args[0] as *mut u8;
-    if buf.is_null() { return Ok((-14_i64) as u64); } // -EFAULT
+    if buf.is_null() {
+        return Ok((-14_i64) as u64);
+    } // -EFAULT
 
     // Each field is 65 bytes, null-padded
     let write_field = |dst: *mut u8, s: &[u8]| {
@@ -439,8 +401,8 @@ fn sys_uname(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         }
     };
 
-    write_field(buf,           b"Linux");
-    write_field(unsafe { buf.add(65)  }, b"ziqa");
+    write_field(buf, b"Linux");
+    write_field(unsafe { buf.add(65) }, b"ziqa");
     write_field(unsafe { buf.add(130) }, b"6.1.0-ziqa");
     write_field(unsafe { buf.add(195) }, b"#1 SMP ZiqaKernel");
     write_field(unsafe { buf.add(260) }, b"x86_64");
@@ -450,11 +412,18 @@ fn sys_uname(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_mmap — handled by core dispatcher; this is a fallback
 fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // Check Memory capability before mapping
+    if !ctx.process.capabilities.has_permission(ResourceKind::Memory, false, false) {
+        return Err(AbiError::PermissionDenied);
+    }
+
     let length = ctx.args[1] as usize;
-    if length == 0 { return Ok((-22_i64) as u64); } // -EINVAL
+    if length == 0 {
+        return Ok((-22_i64) as u64);
+    } // -EINVAL
     let base = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
     ctx.process.mmap_bump = base + length as u64;
-    use crate::memory::{MemoryRegion, paging::MemoryRegionFlags, VirtAddr};
+    use crate::memory::{paging::MemoryRegionFlags, MemoryRegion, VirtAddr};
     ctx.process.add_region(MemoryRegion {
         start: VirtAddr::new(base),
         size: length,
@@ -472,7 +441,10 @@ fn sys_mprotect(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let addr = ctx.args[0];
     let len = ctx.args[1];
     let prot = ctx.args[2];
-    println!("[Linux ABI] mprotect(addr=0x{:x}, len={}, prot={}) → OK", addr, len, prot);
+    println!(
+        "[Linux ABI] mprotect(addr=0x{:x}, len={}, prot={}) → OK",
+        addr, len, prot
+    );
     Ok(0)
 }
 
@@ -486,12 +458,12 @@ fn sys_munmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_close(fd) → 0/-EBADF
 fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    
+
     if fd < 3 {
         // Cannot close stdin, stdout, stderr
         return Ok(0);
     }
-    
+
     let result = ctx.process.fds.close(fd);
     if result {
         println!("[Linux ABI] close(fd={}) -> 0", fd);
@@ -505,7 +477,9 @@ fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
     let statbuf = ctx.args[1] as *mut u64;
-    if statbuf.is_null() { return Ok((-14_i64) as u64); } // -EFAULT
+    if statbuf.is_null() {
+        return Ok((-14_i64) as u64);
+    } // -EFAULT
 
     // Linux stat64 layout (simplified — only fields programs actually check):
     // offset 0:  st_dev    (u64)
@@ -518,28 +492,36 @@ fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     // offset 56: st_blksize(i64)
     // offset 64: st_blocks (i64)
     let (mode, size): (u32, u64) = match fd {
-        0 => (0x2190, 0),  // S_IFCHR | 0600 — stdin (char device)
+        0 => (0x2190, 0),     // S_IFCHR | 0600 — stdin (char device)
         1 | 2 => (0x2190, 0), // stdout/stderr
         _ => {
             // Try to get size from VFS
             let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => { let mut t = [0u8;64]; let n=p.len().min(63); t[..n].copy_from_slice(&p[..n]); (t,n) }
+                Some(p) => {
+                    let mut t = [0u8; 64];
+                    let n = p.len().min(63);
+                    t[..n].copy_from_slice(&p[..n]);
+                    (t, n)
+                }
                 None => return Ok((-9_i64) as u64),
             };
             let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
             let mut buf = [0u8; 4096];
-            let sz = crate::fs::vfs::VFS.lock().read_raw(path_str, &mut buf, 0).unwrap_or(0);
+            let sz = crate::fs::vfs::VFS
+                .lock()
+                .read_raw(path_str, &mut buf, 0)
+                .unwrap_or(0);
             (0x81A4, sz as u64) // S_IFREG | 0644
         }
     };
     unsafe {
-        *statbuf.add(0) = 1u64;           // st_dev
-        *statbuf.add(1) = fd as u64;      // st_ino
-        *statbuf.add(2) = 1u64;           // st_nlink
-        // st_mode (u32) in lower 32 bits of word at offset 24
+        *statbuf.add(0) = 1u64; // st_dev
+        *statbuf.add(1) = fd as u64; // st_ino
+        *statbuf.add(2) = 1u64; // st_nlink
+                                // st_mode (u32) in lower 32 bits of word at offset 24
         *(statbuf.add(3) as *mut u32) = mode;
-        *statbuf.add(6) = size;           // st_size at offset 48
-        *statbuf.add(7) = 4096u64;        // st_blksize
+        *statbuf.add(6) = size; // st_size at offset 48
+        *statbuf.add(7) = 4096u64; // st_blksize
         *statbuf.add(8) = ((size + 511) / 512) as u64; // st_blocks
     }
     Ok(0)
@@ -547,17 +529,18 @@ fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_ioctl(fd, request, arg) → 0/-ENOTTY
 fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // Check DeviceIo capability for DRM ioctls (privilege separation)
     let _fd = ctx.args[0];
     let request = ctx.args[1];
     let arg = ctx.args[2] as *mut u8;
 
     // TIOCGWINSZ = 0x5413 — return terminal window size
     if request == 0x5413 {
-        // struct winsize { ws_row: u16, ws_col: u16, ws_xpixel: u16, ws_ypixel: u16 }
+        // No capability check needed for terminal queries
         let ws = arg as *mut u16;
         unsafe {
-            *ws.add(0) = 24;   // rows
-            *ws.add(1) = 80;   // cols
+            *ws.add(0) = 24; // rows
+            *ws.add(1) = 80; // cols
             *ws.add(2) = 0;
             *ws.add(3) = 0;
         }
@@ -565,13 +548,20 @@ fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
 
     // TIOCSWINSZ = 0x5414 — set terminal window size (ignore)
-    if request == 0x5414 { return Ok(0); }
+    if request == 0x5414 {
+        return Ok(0);
+    }
 
     // TCGETS/TCSETS — terminal attributes (stub success)
-    if request == 0x5401 || request == 0x5402 { return Ok(0); }
+    if request == 0x5401 || request == 0x5402 {
+        return Ok(0);
+    }
 
-    // DRM ioctls
+    // DRM ioctls - require DeviceIo capability
     if (request & 0xFF00) == 0x6400 {
+        if !ctx.process.capabilities.has_permission(ResourceKind::DeviceIo, true, false) {
+            return Err(AbiError::PermissionDenied);
+        }
         return crate::drivers::drm::handle_ioctl(request, arg)
             .map(|v| v as u64)
             .map_err(|e| AbiError::Other(e));
@@ -598,10 +588,14 @@ fn sys_writev(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         for i in 0..iovcnt.min(16) {
             // Each iovec is 16 bytes: [base: u64, len: u64]
             let base = unsafe { *iov_ptr.add(i * 2) } as *const u8;
-            let len  = unsafe { *iov_ptr.add(i * 2 + 1) } as usize;
-            if len == 0 || base.is_null() { continue; }
+            let len = unsafe { *iov_ptr.add(i * 2 + 1) } as usize;
+            if len == 0 || base.is_null() {
+                continue;
+            }
             let bytes = unsafe { core::slice::from_raw_parts(base, len) };
-            for &b in bytes { serial.send(b); }
+            for &b in bytes {
+                serial.send(b);
+            }
             total += len;
         }
     });
@@ -622,27 +616,49 @@ fn sys_access(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_open(pathname, flags, mode) → fd/-ENOENT
 fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // Check File capability before opening files
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, false, false) {
+        return Err(AbiError::PermissionDenied);
+    }
+
     let path_addr = ctx.args[0] as *const u8;
     let flags = ctx.args[1] as u32;
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
 
     // Device/pseudo paths always succeed
-    let is_known = known_path(path_str) || matches!(path_str,
-        "/dev/null" | "/dev/zero" | "/dev/random" | "/dev/urandom"
-        | "/dev/tty" | "/dev/console" | "/proc/self/maps" | "/proc/self/exe"
-        | "/etc/passwd" | "/etc/localtime"
-    );
+    let is_known = known_path(path_str)
+        || matches!(
+            path_str,
+            "/dev/null"
+                | "/dev/zero"
+                | "/dev/random"
+                | "/dev/urandom"
+                | "/dev/tty"
+                | "/dev/console"
+                | "/proc/self/maps"
+                | "/proc/self/exe"
+                | "/etc/passwd"
+                | "/etc/localtime"
+        );
 
-    if is_known || crate::fs::vfs::VFS.lock().read_raw(path_str, &mut [0u8; 1], 0).is_ok() {
+    if is_known
+        || crate::fs::vfs::VFS
+            .lock()
+            .read_raw(path_str, &mut [0u8; 1], 0)
+            .is_ok()
+    {
         let fd = ctx.process.fds.alloc_file(&tmp[..n], flags).unwrap_or(3);
         return Ok(fd as u64);
     }
     Ok((-2_i64) as u64) // -ENOENT
 }
-
 
 /// sys_arch_prctl(code, addr) → 0  
 fn sys_arch_prctl(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
@@ -669,10 +685,10 @@ fn sys_lseek(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     let current = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
     let new_offset: usize = match whence {
-        0 => offset.max(0) as usize,                          // SEEK_SET
-        1 => (current as i64 + offset).max(0) as usize,      // SEEK_CUR
-        2 => offset.max(0) as usize,                          // SEEK_END (approx)
-        _ => return Ok((-22_i64) as u64),                     // -EINVAL
+        0 => offset.max(0) as usize,                    // SEEK_SET
+        1 => (current as i64 + offset).max(0) as usize, // SEEK_CUR
+        2 => offset.max(0) as usize,                    // SEEK_END (approx)
+        _ => return Ok((-22_i64) as u64),               // -EINVAL
     };
     if let Some(desc) = ctx.process.fds.get_mut(fd) {
         desc.offset = new_offset;
@@ -711,7 +727,9 @@ fn sys_dup2(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// pipefd is a *mut [i32; 2] in user memory: [read_fd, write_fd]
 fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let pipefd_ptr = ctx.args[0] as *mut u32;
-    if pipefd_ptr.is_null() { return Ok((-14_i64) as u64); } // -EFAULT
+    if pipefd_ptr.is_null() {
+        return Ok((-14_i64) as u64);
+    } // -EFAULT
 
     let chan_id = match crate::ipc::create_channel() {
         Some(id) => id,
@@ -732,7 +750,7 @@ fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     match (read_fd, write_fd) {
         (Some(rfd), Some(wfd)) => {
             unsafe {
-                *pipefd_ptr       = rfd as u32;
+                *pipefd_ptr = rfd as u32;
                 *pipefd_ptr.add(1) = wfd as u32;
             }
             Ok(0)
@@ -761,10 +779,16 @@ fn sys_getcwd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_chdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     // Accept any path that looks valid (starts with '/')
-    if n == 0 { return Ok((-2_i64) as u64); }
+    if n == 0 {
+        return Ok((-2_i64) as u64);
+    }
     ctx.process.cwd[..n].copy_from_slice(&tmp[..n]);
     ctx.process.cwd_len = n;
     Ok(0)
@@ -809,7 +833,7 @@ fn sys_nanosleep(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let ms = if req_ptr.is_null() {
         1
     } else {
-        let tv_sec  = unsafe { *req_ptr };
+        let tv_sec = unsafe { *req_ptr };
         let tv_nsec = unsafe { *req_ptr.add(1) };
         tv_sec * 1000 + tv_nsec / 1_000_000
     };
@@ -821,7 +845,7 @@ fn sys_nanosleep(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let nfds = ctx.args[1] as usize;
     let timeout_ms = ctx.args[2] as i64;
-    
+
     // For now, just check stdin (fd=0) for readability
     // In a real implementation, we'd iterate over all fds
     if nfds > 0 {
@@ -832,7 +856,7 @@ fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             return Ok(1); // One fd ready
         }
     }
-    
+
     // Handle timeout
     if timeout_ms > 0 {
         crate::timer::sleep_ms(ctx.process.pid, timeout_ms as u64);
@@ -840,7 +864,7 @@ fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         // poll with timeout=0 is non-blocking
     }
     // timeout < 0 means wait forever (not implemented)
-    
+
     Ok(0) // No fds ready or timeout
 }
 
@@ -854,9 +878,10 @@ fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let op = ctx.args[1] as u32 & 0x7F; // mask off FUTEX_PRIVATE_FLAG
     let _uaddr = ctx.args[0];
     let _val = ctx.args[2] as i32;
-    
+
     match op {
-        0 => { // FUTEX_WAIT
+        0 => {
+            // FUTEX_WAIT
             // Check if value matches, if so block
             // For now, we just yield the CPU
             if ctx.process.state == crate::process::ProcessState::Running {
@@ -866,9 +891,9 @@ fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             // and only block if true
         }
         1 => { // FUTEX_WAKE
-            // Wake up to 'val' waiters
-            // For now, just return success
-            // A real implementation would add processes to ready queue
+             // Wake up to 'val' waiters
+             // For now, just return success
+             // A real implementation would add processes to ready queue
         }
         _ => {
             // Other operations not implemented
@@ -890,22 +915,22 @@ fn sys_rt_sigaction(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 ///   CLONE_FILES = 0x00000400 - share file descriptors
 ///   CLONE_SIGHAND = 0x00000002 - share signal handlers
 ///   CLONE_PIDFD = 0x00002000 - pidfd object
-/// 
+///
 /// For now, treat as fork (full copy). Thread support requires shared memory.
 fn sys_clone(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let flags = ctx.args[0];
     let _stack = ctx.args[1];
     let _ptid = ctx.args[2];
     let _ctid = ctx.args[3];
-    
+
     const CLONE_VM: u64 = 0x01000000;
-    
+
     let parent_pid = ctx.process.pid;
-    
+
     if flags & CLONE_VM != 0 {
         println!("[Linux ABI] clone(CLONE_VM) → thread (falling back to fork)");
     }
-    
+
     match crate::process::scheduler::SCHEDULER.lock().fork(parent_pid) {
         Some(child_pid) => Ok(child_pid.0),
         None => Ok((-11_i64) as u64), // -EAGAIN
@@ -918,7 +943,7 @@ fn sys_pread64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _buf_addr = ctx.args[1];
     let count = ctx.args[2] as usize;
     let _offset = ctx.args[3];
-    
+
     match fd {
         0 => {
             // stdin - read from keyboard
@@ -975,17 +1000,35 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[1] as *const u8;
     let flags = ctx.args[2] as u32;
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
 
-    let is_known = known_path(path_str) || matches!(path_str,
-        "/dev/null" | "/dev/zero" | "/dev/random" | "/dev/urandom"
-        | "/dev/tty" | "/dev/console" | "/proc/self/maps" | "/proc/self/exe"
-        | "/etc/passwd" | "/etc/localtime"
-    );
+    let is_known = known_path(path_str)
+        || matches!(
+            path_str,
+            "/dev/null"
+                | "/dev/zero"
+                | "/dev/random"
+                | "/dev/urandom"
+                | "/dev/tty"
+                | "/dev/console"
+                | "/proc/self/maps"
+                | "/proc/self/exe"
+                | "/etc/passwd"
+                | "/etc/localtime"
+        );
 
-    if is_known || crate::fs::vfs::VFS.lock().read_raw(path_str, &mut [0u8; 1], 0).is_ok() {
+    if is_known
+        || crate::fs::vfs::VFS
+            .lock()
+            .read_raw(path_str, &mut [0u8; 1], 0)
+            .is_ok()
+    {
         let fd = ctx.process.fds.alloc_file(&tmp[..n], flags).unwrap_or(3);
         return Ok(fd as u64);
     }
@@ -996,9 +1039,14 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_tgkill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let tid = ctx.args[1];
     let sig = ctx.args[2] as u8;
-    let ok = crate::process::scheduler::SCHEDULER.lock()
+    let ok = crate::process::scheduler::SCHEDULER
+        .lock()
         .send_signal(crate::process::Pid(tid), sig);
-    if ok { return Ok(0); } else { return Ok((-3_i64) as u64); }
+    if ok {
+        return Ok(0);
+    } else {
+        return Ok((-3_i64) as u64);
+    }
 }
 
 /// === BATCH 2: 20 more syscalls toward 100+ ===
@@ -1010,7 +1058,7 @@ fn sys_gettimeofday(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !tv.is_null() {
         let ms = crate::timer::uptime_ms();
         unsafe {
-            *tv       = (ms / 1000) as i64;
+            *tv = (ms / 1000) as i64;
             *tv.add(1) = ((ms % 1000) * 1000) as i64; // tv_usec
         }
     }
@@ -1022,7 +1070,9 @@ fn sys_time(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let tloc = ctx.args[0] as *mut i64;
     let secs = (crate::timer::uptime_ms() / 1000) as i64;
     if !tloc.is_null() {
-        unsafe { *tloc = secs; }
+        unsafe {
+            *tloc = secs;
+        }
     }
     Ok(secs as u64)
 }
@@ -1032,9 +1082,11 @@ fn sys_time(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_getrlimit(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _resource = ctx.args[0];
     let rlim = ctx.args[1] as *mut u64;
-    if rlim.is_null() { return Ok((-14_i64) as u64); }
+    if rlim.is_null() {
+        return Ok((-14_i64) as u64);
+    }
     unsafe {
-        *rlim       = 0x1_0000_0000; // rlim_cur = 4GB
+        *rlim = 0x1_0000_0000; // rlim_cur = 4GB
         *rlim.add(1) = 0x1_0000_0000; // rlim_max = 4GB
     }
     Ok(0)
@@ -1049,20 +1101,22 @@ fn sys_setrlimit(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// x86_64 sysinfo (64 bytes, simplified)
 fn sys_sysinfo(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let info = ctx.args[0] as *mut u64;
-    if info.is_null() { return Ok((-14_i64) as u64); }
+    if info.is_null() {
+        return Ok((-14_i64) as u64);
+    }
     let ms = crate::timer::uptime_ms();
     unsafe {
-        *info       = (ms / 1000) as u64;            // uptime (seconds)
-        *info.add(1) = 0;                             // loads[0]
-        *info.add(2) = 0;                             // loads[1]
-        *info.add(3) = 0;                             // loads[2]
-        *info.add(4) = 512 * 1024 * 1024 / 4096;      // totalram (in pages? no, bytes)
-        *info.add(5) = 256 * 1024 * 1024;              // freeram
-        *info.add(6) = 0;                              // sharedram
-        *info.add(7) = 0;                              // bufferram
-        *info.add(8) = 0;                              // totalswap
-        *info.add(9) = 0;                              // freeswap
-        *(info.add(10) as *mut u16) = 16;             // procs
+        *info = (ms / 1000) as u64; // uptime (seconds)
+        *info.add(1) = 0; // loads[0]
+        *info.add(2) = 0; // loads[1]
+        *info.add(3) = 0; // loads[2]
+        *info.add(4) = 512 * 1024 * 1024 / 4096; // totalram (in pages? no, bytes)
+        *info.add(5) = 256 * 1024 * 1024; // freeram
+        *info.add(6) = 0; // sharedram
+        *info.add(7) = 0; // bufferram
+        *info.add(8) = 0; // totalswap
+        *info.add(9) = 0; // freeswap
+        *(info.add(10) as *mut u16) = 16; // procs
     }
     Ok(0)
 }
@@ -1076,7 +1130,7 @@ fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     // If old_rlim is not null, fill it with default values
     if !old_rlim.is_null() {
         unsafe {
-            *old_rlim       = 0x1_0000_0000; // rlim_cur
+            *old_rlim = 0x1_0000_0000; // rlim_cur
             *old_rlim.add(1) = 0x1_0000_0000; // rlim_max
         }
     }
@@ -1088,11 +1142,15 @@ fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_socket(domain, type, protocol) → fd
 /// Returns a fake socket fd backed by a File entry.
 fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let _domain = ctx.args[0];   // AF_INET=2, AF_UNIX=1
+    let _domain = ctx.args[0]; // AF_INET=2, AF_UNIX=1
     let _socktype = ctx.args[1]; // SOCK_STREAM=1, SOCK_DGRAM=2
-    // Allocate a dummy fd tagged as a socket (reuse File slot with path "socket:")
-    // Note: args[2] is protocol, unused for now
-    let fd = ctx.process.fds.alloc_file(b"socket:", ctx.args[1] as u32).unwrap_or(3);
+                                 // Allocate a dummy fd tagged as a socket (reuse File slot with path "socket:")
+                                 // Note: args[2] is protocol, unused for now
+    let fd = ctx
+        .process
+        .fds
+        .alloc_file(b"socket:", ctx.args[1] as u32)
+        .unwrap_or(3);
     Ok(fd as u64)
 }
 
@@ -1106,12 +1164,16 @@ fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_readlink(path, buf, bufsiz) → bytes_written
 fn sys_readlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
-    let buf_addr  = ctx.args[1] as *mut u8;
-    let bufsiz    = ctx.args[2] as usize;
+    let buf_addr = ctx.args[1] as *mut u8;
+    let bufsiz = ctx.args[2] as usize;
 
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
 
     // /proc/self/exe → return a fake binary path
@@ -1124,27 +1186,31 @@ fn sys_readlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     };
 
     let n = target.len().min(bufsiz);
-    unsafe { core::ptr::copy_nonoverlapping(target.as_ptr(), buf_addr, n); }
+    unsafe {
+        core::ptr::copy_nonoverlapping(target.as_ptr(), buf_addr, n);
+    }
     Ok(n as u64)
 }
 
 /// sys_fcntl(fd, cmd, arg) → result
 /// F_GETFD=1, F_SETFD=2, F_GETFL=3, F_SETFL=4, F_DUPFD=0, F_DUPFD_CLOEXEC=1030
 fn sys_fcntl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd  = ctx.args[0] as usize;
+    let fd = ctx.args[0] as usize;
     let cmd = ctx.args[1];
     let _arg = ctx.args[2];
     match cmd {
-        0 => { // F_DUPFD — dup to lowest fd >= arg
+        0 => {
+            // F_DUPFD — dup to lowest fd >= arg
             match ctx.process.fds.dup(fd, None) {
                 Some(newfd) => Ok(newfd as u64),
                 None => Ok((-9_i64) as u64),
             }
         }
-        1 | 2 => Ok(0),  // F_GETFD / F_SETFD — FD_CLOEXEC flag, ignore
-        3 => Ok(0),       // F_GETFL — return O_RDWR=2
-        4 => Ok(0),       // F_SETFL — accept any flags
-        1030 => {         // F_DUPFD_CLOEXEC
+        1 | 2 => Ok(0), // F_GETFD / F_SETFD — FD_CLOEXEC flag, ignore
+        3 => Ok(0),     // F_GETFL — return O_RDWR=2
+        4 => Ok(0),     // F_SETFL — accept any flags
+        1030 => {
+            // F_DUPFD_CLOEXEC
             match ctx.process.fds.dup(fd, None) {
                 Some(newfd) => Ok(newfd as u64),
                 None => Ok((-9_i64) as u64),
@@ -1187,10 +1253,10 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         }
         unsafe {
             let base = dirp.add(written);
-            *(base as *mut u64) = 1;               // d_ino
+            *(base as *mut u64) = 1; // d_ino
             *(base.add(8) as *mut i64) = reclen as i64; // d_off
             *(base.add(16) as *mut u16) = reclen as u16; // d_reclen
-            *base.add(18) = 8;                     // d_type (DT_REG)
+            *base.add(18) = 8; // d_type (DT_REG)
             core::ptr::copy_nonoverlapping(name_bytes.as_ptr(), base.add(19), name_len);
             *base.add(19 + name_len) = 0;
         }
@@ -1204,8 +1270,12 @@ fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     if path_str.is_empty() {
         return Ok((-22_i64) as u64); // -EINVAL
@@ -1218,8 +1288,12 @@ fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     match crate::fs::vfs::VFS.lock().remove(path_str) {
         Ok(()) => Ok(0),
@@ -1231,8 +1305,12 @@ fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     match crate::fs::vfs::VFS.lock().remove(path_str) {
         Ok(()) => Ok(0),
@@ -1246,8 +1324,12 @@ fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let new_addr = ctx.args[1] as *const u8;
     let mut old_tmp = [0u8; 128];
     let mut new_tmp = [0u8; 128];
-    let on = (0..127).take_while(|&i| unsafe { *old_addr.add(i) != 0 }).count();
-    let nn = (0..127).take_while(|&i| unsafe { *new_addr.add(i) != 0 }).count();
+    let on = (0..127)
+        .take_while(|&i| unsafe { *old_addr.add(i) != 0 })
+        .count();
+    let nn = (0..127)
+        .take_while(|&i| unsafe { *new_addr.add(i) != 0 })
+        .count();
     unsafe {
         core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
         core::ptr::copy_nonoverlapping(new_addr, new_tmp.as_mut_ptr(), nn);
@@ -1266,8 +1348,12 @@ fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     let exists = crate::fs::vfs::VFS.lock().exists(path_str);
     if !exists {
@@ -1293,27 +1379,33 @@ fn sys_newfstatat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Ok((-14_i64) as u64); // -EFAULT
     }
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     let exists = crate::fs::vfs::VFS.lock().exists(path_str);
-    if !exists { return Ok((-2_i64) as u64); } // -ENOENT
+    if !exists {
+        return Ok((-2_i64) as u64);
+    } // -ENOENT
     unsafe {
         // Zero out the whole 144-byte buffer first
         core::ptr::write_bytes(statbuf as *mut u8, 0, 144);
-        *statbuf.add(0) = 0;                                   // st_dev
-        *statbuf.add(1) = 1;                                   // st_ino
-        *statbuf.add(2) = 1;                                   // st_nlink
-        *(statbuf.add(3) as *mut u32) = 0o100644;              // st_mode (S_IFREG|0644)
-        *(statbuf.add(3) as *mut u32).add(1) = 0;              // st_uid
-        *(statbuf.add(3) as *mut u32).add(2) = 0;              // st_gid
-        *statbuf.add(5) = 0;                                   // st_rdev
-        // st_size at offset 48 = u64 index 6
+        *statbuf.add(0) = 0; // st_dev
+        *statbuf.add(1) = 1; // st_ino
+        *statbuf.add(2) = 1; // st_nlink
+        *(statbuf.add(3) as *mut u32) = 0o100644; // st_mode (S_IFREG|0644)
+        *(statbuf.add(3) as *mut u32).add(1) = 0; // st_uid
+        *(statbuf.add(3) as *mut u32).add(2) = 0; // st_gid
+        *statbuf.add(5) = 0; // st_rdev
+                             // st_size at offset 48 = u64 index 6
         if let Some(sz) = crate::fs::vfs::VFS.lock().file_size(path_str) {
-            *statbuf.add(6) = sz as u64;                       // st_size
+            *statbuf.add(6) = sz as u64; // st_size
         }
-        *statbuf.add(7) = 4096;                                // st_blksize
-        *statbuf.add(8) = 0;                                   // st_blocks
+        *statbuf.add(7) = 4096; // st_blksize
+        *statbuf.add(8) = 0; // st_blocks
     }
     Ok(0)
 }
@@ -1322,12 +1414,14 @@ fn sys_newfstatat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_clock_gettime(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _clk_id = ctx.args[0];
     let tp = ctx.args[1] as *mut i64;
-    if tp.is_null() { return Ok((-14_i64) as u64); }
+    if tp.is_null() {
+        return Ok((-14_i64) as u64);
+    }
     let ms = crate::timer::uptime_ms();
-    let tv_sec  = (ms / 1000) as i64;
+    let tv_sec = (ms / 1000) as i64;
     let tv_nsec = ((ms % 1000) * 1_000_000) as i64;
     unsafe {
-        *tp       = tv_sec;
+        *tp = tv_sec;
         *tp.add(1) = tv_nsec;
     }
     Ok(0)
@@ -1335,14 +1429,16 @@ fn sys_clock_gettime(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_getrandom(buf, buflen, flags) → bytes_written
 fn sys_getrandom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let buf    = ctx.args[0] as *mut u8;
+    let buf = ctx.args[0] as *mut u8;
     let buflen = ctx.args[1] as usize;
     let _flags = ctx.args[2];
     let ms = crate::timer::uptime_ms();
     for i in 0..buflen {
         let val = ((ms.wrapping_mul(1103515245).wrapping_add(12345) >> 16)
             ^ (i as u64).wrapping_mul(6364136223846793005)) as u8;
-        unsafe { *buf.add(i) = val; }
+        unsafe {
+            *buf.add(i) = val;
+        }
     }
     Ok(buflen as u64)
 }
@@ -1352,8 +1448,12 @@ fn sys_chmod(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     if crate::fs::vfs::VFS.lock().exists(path_str) {
         Ok(0) // pretend we changed the mode
@@ -1373,8 +1473,12 @@ fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let old_addr = ctx.args[0] as *const u8;
     let _new_addr = ctx.args[1] as *const u8;
     let mut old_tmp = [0u8; 128];
-    let on = (0..127).take_while(|&i| unsafe { *old_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on); }
+    let on = (0..127)
+        .take_while(|&i| unsafe { *old_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
+    }
     let old_str = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
     if crate::fs::vfs::VFS.lock().exists(old_str) {
         Ok(0) // pretend link succeeded
@@ -1394,10 +1498,16 @@ fn sys_symlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_addr = ctx.args[0] as *const u8;
     let buf = ctx.args[1] as *mut u64;
-    if buf.is_null() { return Ok((-14_i64) as u64); }
+    if buf.is_null() {
+        return Ok((-14_i64) as u64);
+    }
     let mut tmp = [0u8; 128];
-    let n = (0..127).take_while(|&i| unsafe { *path_addr.add(i) != 0 }).count();
-    unsafe { core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n); }
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     let exists = crate::fs::vfs::VFS.lock().exists(path_str);
     if !exists {
@@ -1406,13 +1516,13 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         }
     }
     unsafe {
-        *buf       = 0x01021994; // f_type (RAMFS_MAGIC)
-        *buf.add(1) = 4096;      // f_bsize
-        *buf.add(2) = 1024;      // f_blocks
-        *buf.add(3) = 512;       // f_bfree
-        *buf.add(4) = 512;       // f_bavail
-        *buf.add(5) = 1024;      // f_files
-        *buf.add(6) = 512;       // f_ffree
+        *buf = 0x01021994; // f_type (RAMFS_MAGIC)
+        *buf.add(1) = 4096; // f_bsize
+        *buf.add(2) = 1024; // f_blocks
+        *buf.add(3) = 512; // f_bfree
+        *buf.add(4) = 512; // f_bavail
+        *buf.add(5) = 1024; // f_files
+        *buf.add(6) = 512; // f_ffree
     }
     Ok(0)
 }
@@ -1434,7 +1544,9 @@ fn sys_setpriority(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_sched_getparam(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let param = ctx.args[1] as *mut i32;
     if !param.is_null() {
-        unsafe { *param = 0; }
+        unsafe {
+            *param = 0;
+        }
     }
     Ok(0)
 }
@@ -1450,7 +1562,7 @@ fn sys_clock_getres(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let tp = ctx.args[1] as *mut i64;
     if !tp.is_null() {
         unsafe {
-            *tp       = 0; // tv_sec
+            *tp = 0; // tv_sec
             *tp.add(1) = 1; // tv_nsec (1 nsec resolution)
         }
     }
@@ -1487,8 +1599,16 @@ fn sys_timerfd_create(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_getcpu(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let cpu_ptr = ctx.args[0] as *mut u32;
     let node_ptr = ctx.args[1] as *mut u32;
-    if !cpu_ptr.is_null() { unsafe { *cpu_ptr = 0; } }
-    if !node_ptr.is_null() { unsafe { *node_ptr = 0; } }
+    if !cpu_ptr.is_null() {
+        unsafe {
+            *cpu_ptr = 0;
+        }
+    }
+    if !node_ptr.is_null() {
+        unsafe {
+            *node_ptr = 0;
+        }
+    }
     Ok(0)
 }
 

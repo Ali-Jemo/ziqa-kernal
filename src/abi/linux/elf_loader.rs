@@ -1,10 +1,9 @@
 /// ELF64 Loader for ZiqaKernel
 /// Parses ELF64 binaries and maps their LOAD segments into a Process.
-
 use crate::abi::AbiError;
-use crate::memory::{VirtAddr, MemoryRegion};
-use crate::process::Process;
+use crate::memory::{MemoryRegion, VirtAddr};
 use crate::println;
+use crate::process::Process;
 
 // ELF64 constants
 const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
@@ -51,25 +50,52 @@ struct Elf64Phdr {
     p_align: u64,
 }
 
-fn read_u16(d: &[u8], o: usize) -> u16 { u16::from_le_bytes([d[o], d[o+1]]) }
-fn read_u32(d: &[u8], o: usize) -> u32 { u32::from_le_bytes([d[o],d[o+1],d[o+2],d[o+3]]) }
+fn read_u16(d: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([d[o], d[o + 1]])
+}
+fn read_u32(d: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+}
 fn read_u64(d: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes([d[o],d[o+1],d[o+2],d[o+3],d[o+4],d[o+5],d[o+6],d[o+7]])
+    u64::from_le_bytes([
+        d[o],
+        d[o + 1],
+        d[o + 2],
+        d[o + 3],
+        d[o + 4],
+        d[o + 5],
+        d[o + 6],
+        d[o + 7],
+    ])
 }
 
 fn parse_header(data: &[u8]) -> Result<Elf64Header, AbiError> {
-    if data.len() < 64 { return Err(AbiError::ParseError); }
-    if data[0..4] != ELF_MAGIC { return Err(AbiError::UnknownFormat); }
-    if data[4] != ELFCLASS64 { return Err(AbiError::Other("Not 64-bit ELF")); }
-    if data[5] != ELFDATA2LSB { return Err(AbiError::Other("Not little-endian ELF")); }
+    if data.len() < 64 {
+        return Err(AbiError::ParseError);
+    }
+    if data[0..4] != ELF_MAGIC {
+        return Err(AbiError::UnknownFormat);
+    }
+    if data[4] != ELFCLASS64 {
+        return Err(AbiError::Other("Not 64-bit ELF"));
+    }
+    if data[5] != ELFDATA2LSB {
+        return Err(AbiError::Other("Not little-endian ELF"));
+    }
     let e_type = read_u16(data, 16);
     let e_machine = read_u16(data, 18);
-    if e_type != ET_EXEC && e_type != ET_DYN { return Err(AbiError::Other("Not executable ELF")); }
-    if e_machine != EM_X86_64 { return Err(AbiError::Other("Not x86_64 ELF")); }
+    if e_type != ET_EXEC && e_type != ET_DYN {
+        return Err(AbiError::Other("Not executable ELF"));
+    }
+    if e_machine != EM_X86_64 {
+        return Err(AbiError::Other("Not x86_64 ELF"));
+    }
     let mut e_ident = [0u8; 16];
     e_ident.copy_from_slice(&data[0..16]);
     Ok(Elf64Header {
-        e_ident, e_type, e_machine,
+        e_ident,
+        e_type,
+        e_machine,
         e_version: read_u32(data, 20),
         e_entry: read_u64(data, 24),
         e_phoff: read_u64(data, 32),
@@ -85,7 +111,9 @@ fn parse_header(data: &[u8]) -> Result<Elf64Header, AbiError> {
 }
 
 fn parse_phdr(data: &[u8], offset: usize) -> Result<Elf64Phdr, AbiError> {
-    if data.len() < offset + 56 { return Err(AbiError::ParseError); }
+    if data.len() < offset + 56 {
+        return Err(AbiError::ParseError);
+    }
     Ok(Elf64Phdr {
         p_type: read_u32(data, offset),
         p_flags: read_u32(data, offset + 4),
@@ -108,9 +136,12 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     let phoff = header.e_phoff;
     let phentsize = header.e_phentsize;
 
-    println!("[ELF] entry=0x{:x} phdrs={} type={}",
-        entry, phnum,
-        if etype == ET_EXEC { "EXEC" } else { "DYN" });
+    println!(
+        "[ELF] entry=0x{:x} phdrs={} type={}",
+        entry,
+        phnum,
+        if etype == ET_EXEC { "EXEC" } else { "DYN" }
+    );
 
     process.entry_point = VirtAddr::new(entry);
     process.cpu_state.rip = entry;
@@ -140,7 +171,9 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                 return Err(AbiError::Other("Too many memory regions"));
             }
             let end = phdr.p_vaddr + phdr.p_memsz;
-            if end > max_vaddr { max_vaddr = end; }
+            if end > max_vaddr {
+                max_vaddr = end;
+            }
             load_count += 1;
         } else if phdr.p_type == PT_INTERP {
             println!("[ELF] WARNING: dynamic linker required (not supported)");
@@ -149,6 +182,9 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
 
     // Align brk to next page boundary
     process.brk = (max_vaddr + 0xFFF) & !0xFFF;
-    println!("[ELF] loaded {} segments, brk=0x{:x}", load_count, process.brk);
+    println!(
+        "[ELF] loaded {} segments, brk=0x{:x}",
+        load_count, process.brk
+    );
     Ok(())
 }

@@ -4,6 +4,11 @@
 /target-alt
 /target-verify
 /build
+/zig-cache
+/zig-out
+*.o
+*.a
+*.img
 
 # IDE and editor files
 .idea/
@@ -21,5 +26,7 @@
 # Graphify output
 /graphify-out
 
-# Cargo lock (optional - uncomment if you don't want to track it)
-# Cargo.lock
+# OS configuration & tools
+.gemini/
+.antigravitycli/
+.poolside/

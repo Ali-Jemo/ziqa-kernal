@@ -1,9 +1,9 @@
+use crate::println;
+use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::paging::{FrameAllocator, Mapper};
-use lazy_static::lazy_static;
-use crate::println;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -14,8 +14,10 @@ pub static PICS: Mutex<ChainedPics> =
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum InterruptIndex {
-    Timer    = PIC_1_OFFSET,      // 32
-    Keyboard = PIC_1_OFFSET + 1,  // 33
+    Timer = PIC_1_OFFSET,        // 32
+    Keyboard = PIC_1_OFFSET + 1, // 33
+    Ata1 = PIC_1_OFFSET + 14,    // 46
+    Ata2 = PIC_1_OFFSET + 15,    // 47
 }
 
 /// int 0x80 — Linux-compatible syscall gate
@@ -38,6 +40,8 @@ lazy_static! {
         // ── Hardware interrupts ──
         idt[InterruptIndex::Timer as usize].set_handler_fn(timer_handler);
         idt[InterruptIndex::Keyboard as usize].set_handler_fn(keyboard_handler);
+        idt[InterruptIndex::Ata1 as usize].set_handler_fn(ata1_handler);
+        idt[InterruptIndex::Ata2 as usize].set_handler_fn(ata2_handler);
 
         // ── int 0x80 syscall gate ──
         idt[SYSCALL_VECTOR as usize].set_handler_fn(syscall_handler);
@@ -62,9 +66,14 @@ extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn gpf_handler(frame: InterruptStackFrame, error_code: u64) {
-    println!("EXCEPTION: GENERAL PROTECTION FAULT (code={:#x})\n{:#?}", error_code, frame);
+    println!(
+        "EXCEPTION: GENERAL PROTECTION FAULT (code={:#x})\n{:#?}",
+        error_code, frame
+    );
     // In a real kernel we'd kill the offending process; for now halt.
-    loop { x86_64::instructions::hlt(); }
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 extern "x86-interrupt" fn page_fault_handler(
@@ -77,7 +86,7 @@ extern "x86-interrupt" fn page_fault_handler(
         "EXCEPTION: PAGE FAULT\n  addr={:?}  code={:?}\n{:#?}",
         fault_addr, error_code, frame
     );
-    
+
     // Handle demand paging
     let scheduler = crate::process::scheduler::SCHEDULER.lock();
     let current_proc = scheduler.current_task();
@@ -85,11 +94,14 @@ extern "x86-interrupt" fn page_fault_handler(
         println!("[MM] Current process {} found", proc.pid.0);
         // Check if fault address is within any of the process's memory regions
         let has_region = proc.regions.iter().any(|opt_region| {
-            opt_region.as_ref().map(|region| {
-                let start = region.start.as_u64();
-                let end = start + region.size as u64;
-                fault_addr.as_u64() >= start && fault_addr.as_u64() < end
-            }).unwrap_or(false)
+            opt_region
+                .as_ref()
+                .map(|region| {
+                    let start = region.start.as_u64();
+                    let end = start + region.size as u64;
+                    fault_addr.as_u64() >= start && fault_addr.as_u64() < end
+                })
+                .unwrap_or(false)
         });
         if has_region {
             println!("[MM] Found region for address {:?}", fault_addr);
@@ -103,17 +115,22 @@ extern "x86-interrupt" fn page_fault_handler(
         // Check if this is a COW page — allocate a private copy and remap writable
         let cow_handled = {
             let scheduler = crate::process::scheduler::SCHEDULER.lock();
-            let is_cow = scheduler.current_task().map(|proc| {
-                proc.regions.iter().any(|opt| {
-                    opt.as_ref().map(|r| {
-                        let start = r.start.as_u64();
-                        let end = start + r.size as u64;
-                        r.flags.copy_on_write
-                            && fault_addr.as_u64() >= start
-                            && fault_addr.as_u64() < end
-                    }).unwrap_or(false)
+            let is_cow = scheduler
+                .current_task()
+                .map(|proc| {
+                    proc.regions.iter().any(|opt| {
+                        opt.as_ref()
+                            .map(|r| {
+                                let start = r.start.as_u64();
+                                let end = start + r.size as u64;
+                                r.flags.copy_on_write
+                                    && fault_addr.as_u64() >= start
+                                    && fault_addr.as_u64() < end
+                            })
+                            .unwrap_or(false)
+                    })
                 })
-            }).unwrap_or(false);
+                .unwrap_or(false);
             drop(scheduler);
             if is_cow {
                 crate::memory::paging::handle_cow_fault(fault_addr)
@@ -128,7 +145,10 @@ extern "x86-interrupt" fn page_fault_handler(
         println!("[MM] Protection violation, but NOT a COW page — halting");
     } else {
         // Page not present - demand paging opportunity
-        println!("[MM] Page not present, attempting demand paging at addr {:?}", fault_addr);
+        println!(
+            "[MM] Page not present, attempting demand paging at addr {:?}",
+            fault_addr
+        );
 
         // Extract region + binary data info while holding the scheduler lock,
         // then drop it before taking memory locks to avoid deadlocks.
@@ -136,11 +156,14 @@ extern "x86-interrupt" fn page_fault_handler(
             let scheduler = crate::process::scheduler::SCHEDULER.lock();
             if let Some(proc) = scheduler.current_task() {
                 let region_entry = proc.regions.iter().find(|opt_region| {
-                    opt_region.as_ref().map(|region| {
-                        let start = region.start.as_u64();
-                        let end = start + region.size as u64;
-                        fault_addr.as_u64() >= start && fault_addr.as_u64() < end
-                    }).unwrap_or(false)
+                    opt_region
+                        .as_ref()
+                        .map(|region| {
+                            let start = region.start.as_u64();
+                            let end = start + region.size as u64;
+                            fault_addr.as_u64() >= start && fault_addr.as_u64() < end
+                        })
+                        .unwrap_or(false)
                 });
                 if let Some(Some(region)) = region_entry {
                     // Clone what we need before dropping the lock
@@ -161,9 +184,9 @@ extern "x86-interrupt" fn page_fault_handler(
 
         if let Some((region_start, file_offset, binary_info)) = demand_info {
             let page = x86_64::structures::paging::Page::containing_address(fault_addr);
-            let flags = x86_64::structures::paging::PageTableFlags::PRESENT |
-                        x86_64::structures::paging::PageTableFlags::WRITABLE |
-                        x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+            let flags = x86_64::structures::paging::PageTableFlags::PRESENT
+                | x86_64::structures::paging::PageTableFlags::WRITABLE
+                | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
 
             // Hold a SINGLE lock on the frame allocator for the entire operation.
             // This prevents map_to from getting frames that conflict with our frame.
@@ -184,16 +207,17 @@ extern "x86-interrupt" fn page_fault_handler(
                                 let page_addr = page.start_address().as_u64();
                                 let in_region_off = page_addr.saturating_sub(region_start);
                                 let binary_off = file_offset as usize + in_region_off as usize;
-                                let copy_size = 4096usize.min(
-                                    bin_len.saturating_sub(binary_off)
-                                );
+                                let copy_size = 4096usize.min(bin_len.saturating_sub(binary_off));
                                 if copy_size > 0 {
                                     core::ptr::copy_nonoverlapping(
                                         bin_ptr.add(binary_off),
                                         page_addr as *mut u8,
                                         copy_size,
                                     );
-                                    println!("[MM] Copied {} bytes from binary to {:x}", copy_size, page_addr);
+                                    println!(
+                                        "[MM] Copied {} bytes from binary to {:x}",
+                                        copy_size, page_addr
+                                    );
                                 }
                             }
 
@@ -213,9 +237,11 @@ extern "x86-interrupt" fn page_fault_handler(
             }
         }
     }
-    
+
     // For now halt on unhandled faults
-    loop { x86_64::instructions::hlt(); }
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code: u64) -> ! {
@@ -227,7 +253,10 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code
 extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
     crate::process::scheduler::tick();
     crate::timer::tick();
-    unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer as u8) };
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Timer as u8)
+    };
 }
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
@@ -240,8 +269,8 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     crate::drivers::keyboard::push_scancode(scancode);
 
     unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard as u8) };
-
 }
+
 
 // ── int 0x80 syscall gate ──
 
@@ -277,7 +306,8 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
     let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
     if let Some(proc) = scheduler.current_task_mut() {
         let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
-        match crate::abi::syscall::dispatch_syscall(&registry, &mut ctx) {
+        let handler = crate::abi::handler::KernelSyscallHandler;
+        match crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx) {
             Ok(v) => {
                 println!("[ZIQA] syscall {} -> OK({})", num, v);
             }
@@ -289,4 +319,18 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
         println!("[ZIQA] int 0x80 but no current process");
     }
     // No EOI needed — software interrupt, not PIC-sourced.
+}
+
+extern "x86-interrupt" fn ata1_handler(_frame: InterruptStackFrame) {
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Ata1 as u8)
+    };
+}
+
+extern "x86-interrupt" fn ata2_handler(_frame: InterruptStackFrame) {
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Ata2 as u8)
+    };
 }

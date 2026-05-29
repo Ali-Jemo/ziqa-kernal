@@ -1,10 +1,9 @@
+use crate::drivers::keyboard;
+use crate::drivers::vga::{self, Color, WRITER};
+use crate::fs::vfs::VFS;
 /// Simple text editor (nano-like) for ZiqaKernel
-
 use alloc::vec::Vec;
 use core::cmp::min;
-use crate::drivers::vga::{self, Color, WRITER};
-use crate::drivers::keyboard;
-use crate::fs::vfs::VFS;
 
 const COLS: usize = 80;
 const ROWS: usize = 24;
@@ -82,7 +81,10 @@ impl Editor {
 
     fn screen_pos(&self) -> (usize, usize) {
         let line = self.cursor_line();
-        (line.saturating_sub(self.scroll), self.cursor - self.lines[line])
+        (
+            line.saturating_sub(self.scroll),
+            self.cursor - self.lines[line],
+        )
     }
 
     fn ensure_scroll(&mut self) {
@@ -188,7 +190,59 @@ impl Editor {
         let path = self.path_str();
         let mut vfs = VFS.lock();
         if !vfs.exists(path) {
-            vfs.create(path);
+            if path.starts_with("/disk/") {
+                let name = path.trim_start_matches("/disk/");
+                if let Some(idx) = name.rfind('/') {
+                    let dir_name = &name[..idx];
+                    let file_name = &name[idx + 1..];
+                    let fs_guard = crate::fs::ziqafs::ZIQAFS.lock();
+                    if let Some(ref fs) = *fs_guard {
+                        let mut fs_lock = fs.lock();
+                        let parent_id = crate::fs::ziqafs::ZiqaFs::root_lookup(
+                            &mut fs_lock,
+                            &alloc::format!("/disk/{}", dir_name),
+                        )
+                        .unwrap_or(0);
+                        if let Ok(id) = crate::fs::ziqafs::ZiqaFs::create_file(
+                            &mut fs_lock,
+                            parent_id,
+                            file_name,
+                        ) {
+                            let inode = crate::fs::ziqafs::ZiqaFs::get_inode(&mut fs_lock, id).ok();
+                            if let Some(ino) = inode {
+                                let file = crate::fs::ziqafs::ZiqaFsFile {
+                                    fs: fs.clone(),
+                                    inode_id: id,
+                                    inode: ino,
+                                };
+                                vfs.mount(path, alloc::sync::Arc::new(spin::Mutex::new(file)));
+                            }
+                        }
+                    }
+                } else {
+                    let fs_guard = crate::fs::ziqafs::ZIQAFS.lock();
+                    if let Some(ref fs) = *fs_guard {
+                        let mut fs_lock = fs.lock();
+                        if let Ok(id) = crate::fs::ziqafs::ZiqaFs::create_file(
+                            &mut fs_lock,
+                            crate::fs::ziqafs::ROOT_INODE,
+                            name,
+                        ) {
+                            let inode = crate::fs::ziqafs::ZiqaFs::get_inode(&mut fs_lock, id).ok();
+                            if let Some(ino) = inode {
+                                let file = crate::fs::ziqafs::ZiqaFsFile {
+                                    fs: fs.clone(),
+                                    inode_id: id,
+                                    inode: ino,
+                                };
+                                vfs.mount(path, alloc::sync::Arc::new(spin::Mutex::new(file)));
+                            }
+                        }
+                    }
+                }
+            } else {
+                vfs.create(path);
+            }
         }
         let _ = vfs.write_raw(path, &self.buf, 0);
         self.modified = false;

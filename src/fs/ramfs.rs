@@ -1,11 +1,10 @@
 /// RamFS implementation for ZiqaKernel
 ///
 /// Stores files in-memory using dynamic buffers.
-
 extern crate alloc;
-use alloc::vec::Vec;
-use crate::fs::{File, FileType};
 use crate::abi::AbiError;
+use crate::fs::{File, FileType};
+use alloc::vec::Vec;
 
 pub struct RamFile {
     pub data: Vec<u8>,
@@ -13,11 +12,9 @@ pub struct RamFile {
 
 impl RamFile {
     pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-        }
+        Self { data: Vec::new() }
     }
-    
+
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             data: bytes.to_vec(),

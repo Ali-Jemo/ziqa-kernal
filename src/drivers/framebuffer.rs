@@ -2,7 +2,6 @@
 ///
 /// Supports both 8-bit (Mode 13h, 320×200) and 32-bit XRGB8888 modes.
 /// When available, uses the Zig blitter for high-performance operations.
-
 use core::ptr::write_volatile;
 use spin::Mutex;
 

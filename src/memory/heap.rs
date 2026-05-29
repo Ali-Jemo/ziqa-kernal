@@ -1,9 +1,9 @@
 use linked_list_allocator::LockedHeap;
 use x86_64::{
-    VirtAddr,
     structures::paging::{
         mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
     },
+    VirtAddr,
 };
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
@@ -26,7 +26,9 @@ pub fn init_heap(
     };
 
     for page in page_range {
-        let frame = frame_allocator.allocate_frame().ok_or(MapToError::FrameAllocationFailed)?;
+        let frame = frame_allocator
+            .allocate_frame()
+            .ok_or(MapToError::FrameAllocationFailed)?;
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
         unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
     }

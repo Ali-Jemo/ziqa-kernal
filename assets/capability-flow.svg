@@ -1,88 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 400" width="750" height="400">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 250" width="500" height="250">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1a1b26"/>
-      <stop offset="100%" stop-color="#16161e"/>
-    </linearGradient>
-    <linearGradient id="procg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7aa2f7"/>
-      <stop offset="100%" stop-color="#5d8fe8"/>
-    </linearGradient>
-    <linearGradient id="capg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#e0af68"/>
-      <stop offset="100%" stop-color="#d49a4a"/>
-    </linearGradient>
-    <linearGradient id="allowg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#9ece6a"/>
-      <stop offset="100%" stop-color="#7db84d"/>
-    </linearGradient>
-    <linearGradient id="denyg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f7768e"/>
-      <stop offset="100%" stop-color="#e55a75"/>
-    </linearGradient>
-    <linearGradient id="resourceg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#2ac3de"/>
-      <stop offset="100%" stop-color="#1fb0cc"/>
-    </linearGradient>
-    <filter id="shadow">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
-    </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7aa2f7" />
     </marker>
   </defs>
-  <rect width="750" height="400" fill="url(#bg)" rx="12"/>
-  <text x="375" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Capability-Based Security Flow</text>
-
-  <!-- Process -->
-  <rect x="50" y="65" width="180" height="65" rx="8" fill="url(#procg)" filter="url(#shadow)"/>
-  <text x="140" y="90" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Process</text>
-  <text x="140" y="110" text-anchor="middle" fill="#1a1b26" font-size="11" font-family="system-ui, -apple-system, sans-serif">requests resource</text>
-  <text x="140" y="124" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="monospace">PID: 1..63</text>
-
-  <line x1="230" y1="97" x2="290" y2="97" stroke="#565f89" stroke-width="2.5" marker-end="url(#arrow)"/>
-
-  <!-- Capability Space -->
-  <rect x="290" y="55" width="220" height="85" rx="8" fill="url(#capg)" filter="url(#shadow)"/>
-  <text x="400" y="78" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Capability Check</text>
-  <text x="400" y="98" text-anchor="middle" fill="#1a1b26" font-size="11" font-family="system-ui, -apple-system, sans-serif">CapabilitySpace::check(resource, perm)</text>
-  <text x="400" y="115" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">ResourceKind::File | Network | IPC | Memory | CPU</text>
-
-  <!-- Decision diamond -->
-  <polygon points="550,97 630,140 550,183 470,140" fill="#24283b" stroke="#2ac3de" stroke-width="2" filter="url(#shadow)"/>
-  <text x="550" y="136" text-anchor="middle" fill="#2ac3de" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Capability</text>
-  <text x="550" y="150" text-anchor="middle" fill="#2ac3de" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">present?</text>
-
-  <line x1="510" y1="140" x2="470" y2="140" stroke="#565f89" stroke-width="2"/>
-
-  <!-- Deny path -->
-  <line x1="550" y1="183" x2="550" y2="230" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
-  <rect x="460" y="230" width="180" height="60" rx="8" fill="url(#denyg)" filter="url(#shadow)"/>
-  <text x="550" y="255" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Access Denied</text>
-  <text x="550" y="275" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">returns -EACCES</text>
-
-  <!-- Allow path -->
-  <line x1="630" y1="140" x2="690" y2="140" stroke="#9ece6a" stroke-width="2"/>
-  <line x1="690" y1="140" x2="690" y2="230" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow)"/>
-  <rect x="600" y="230" width="180" height="60" rx="8" fill="url(#allowg)" filter="url(#shadow)"/>
-  <text x="690" y="255" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Access Granted</text>
-  <text x="690" y="275" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">performs operation</text>
-
-  <!-- Resource -->
-  <rect x="50" y="230" width="250" height="80" rx="8" fill="url(#resourceg)" filter="url(#shadow)"/>
-  <text x="175" y="255" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Protected Resource</text>
-  <rect x="70" y="270" width="80" height="25" rx="4" fill="#1a1b26" opacity="0.3"/>
-  <text x="110" y="287" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">/dev/dri</text>
-  <rect x="165" y="270" width="80" height="25" rx="4" fill="#1a1b26" opacity="0.3"/>
-  <text x="205" y="287" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">/proc/..</text>
-
-  <!-- Connections -->
-  <line x1="140" y1="130" x2="140" y2="230" stroke="#565f89" stroke-width="2" stroke-dasharray="5 3"/>
-
-  <!-- Legend -->
-  <g transform="translate(50, 340)">
-    <rect x="0" y="0" width="600" height="45" rx="6" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
-    <text x="300" y="18" text-anchor="middle" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Capabilities are assigned at process spawn / exec. No ambient authority — explicit capability check on every access.</text>
-    <text x="300" y="35" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">Inspired by CHERI / seL4 capability models · src/capability/mod.rs</text>
-  </g>
+  <rect x="50" y="50" width="120" height="150" rx="10" fill="#1f2335" stroke="#7aa2f7" stroke-width="2"/>
+  <text x="110" y="80" text-anchor="middle" fill="#c0caf5" font-family="monospace">Process</text>
+  <rect x="330" y="50" width="120" height="150" rx="10" fill="#1f2335" stroke="#2ac3de" stroke-width="2"/>
+  <text x="390" y="80" text-anchor="middle" fill="#c0caf5" font-family="monospace">Kernel</text>
+  <path d="M170 100 L330 100" stroke="#7aa2f7" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="250" y="90" text-anchor="middle" fill="#c0caf5" font-size="12" font-family="monospace">Request Cap</text>
+  <rect x="350" y="100" width="80" height="60" rx="5" fill="#16161e" stroke="#2ac3de" stroke-width="1"/>
+  <text x="390" y="130" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">Capability<br/>Space</text>
+  <path d="M330 150 L170 150" stroke="#2ac3de" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="250" y="140" text-anchor="middle" fill="#c0caf5" font-size="12" font-family="monospace">Grant/Deny</text>
 </svg>

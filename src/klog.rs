@@ -3,7 +3,6 @@
 /// Stores log entries in a fixed-size circular buffer.
 /// Supports log levels: Error, Warn, Info, Debug.
 /// Replaces scattered println! calls with structured, queryable log entries.
-
 use spin::Mutex;
 
 const KLOG_CAPACITY: usize = 256;
@@ -13,8 +12,8 @@ const MSG_LEN: usize = 128;
 #[repr(u8)]
 pub enum Level {
     Error = 0,
-    Warn  = 1,
-    Info  = 2,
+    Warn = 1,
+    Info = 2,
     Debug = 3,
 }
 
@@ -22,8 +21,8 @@ impl Level {
     pub fn as_str(self) -> &'static str {
         match self {
             Level::Error => "ERROR",
-            Level::Warn  => "WARN ",
-            Level::Info  => "INFO ",
+            Level::Warn => "WARN ",
+            Level::Info => "INFO ",
             Level::Debug => "DEBUG",
         }
     }
@@ -54,8 +53,8 @@ impl LogEntry {
 
 pub struct KernelLog {
     entries: [LogEntry; KLOG_CAPACITY],
-    head: usize,   // oldest entry
-    tail: usize,   // next write position
+    head: usize, // oldest entry
+    tail: usize, // next write position
     count: usize,
     /// Minimum level to store (entries below this are dropped)
     pub min_level: Level,
@@ -73,7 +72,9 @@ impl KernelLog {
     }
 
     pub fn log(&mut self, level: Level, tick: u64, msg: &str) {
-        if level > self.min_level { return; }
+        if level > self.min_level {
+            return;
+        }
 
         let bytes = msg.as_bytes();
         let len = bytes.len().min(MSG_LEN);
@@ -100,13 +101,19 @@ impl KernelLog {
         KlogIter { log: self, pos: 0 }
     }
 
-    pub fn count(&self) -> usize { self.count }
+    pub fn count(&self) -> usize {
+        self.count
+    }
 
     /// Dump all entries via the serial/VGA println macro
     pub fn dump(&self) {
         for entry in self.iter() {
-            crate::println!("[klog][{}][t={}] {}",
-                entry.level.as_str(), entry.tick, entry.message());
+            crate::println!(
+                "[klog][{}][t={}] {}",
+                entry.level.as_str(),
+                entry.tick,
+                entry.message()
+            );
         }
     }
 
@@ -114,8 +121,12 @@ impl KernelLog {
     pub fn dump_level(&self, min: Level) {
         for entry in self.iter() {
             if entry.level <= min {
-                crate::println!("[klog][{}][t={}] {}",
-                    entry.level.as_str(), entry.tick, entry.message());
+                crate::println!(
+                    "[klog][{}][t={}] {}",
+                    entry.level.as_str(),
+                    entry.tick,
+                    entry.message()
+                );
             }
         }
     }
@@ -129,7 +140,9 @@ pub struct KlogIter<'a> {
 impl<'a> Iterator for KlogIter<'a> {
     type Item = &'a LogEntry;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.log.count { return None; }
+        if self.pos >= self.log.count {
+            return None;
+        }
         let idx = (self.log.head + self.pos) % KLOG_CAPACITY;
         self.pos += 1;
         Some(&self.log.entries[idx])
@@ -154,7 +167,10 @@ macro_rules! klog {
 /// Format into a fixed stack buffer (no alloc)
 pub fn fmt_to_buf<'a>(buf: &'a mut [u8; 128], args: core::fmt::Arguments<'_>) -> &'a str {
     use core::fmt::Write;
-    struct BufWriter<'a> { buf: &'a mut [u8; 128], pos: usize }
+    struct BufWriter<'a> {
+        buf: &'a mut [u8; 128],
+        pos: usize,
+    }
     impl<'a> Write for BufWriter<'a> {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
             let bytes = s.as_bytes();

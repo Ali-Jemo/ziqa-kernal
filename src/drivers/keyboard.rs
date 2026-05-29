@@ -1,11 +1,10 @@
+use lazy_static::lazy_static;
+use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, ScancodeSet1};
 /// Keyboard input ring buffer for ZiqaKernel
 ///
 /// The keyboard ISR pushes raw scancodes here.
 /// sys_read(stdin) drains decoded characters from this buffer.
-
 use spin::Mutex;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1, KeyCode};
-use lazy_static::lazy_static;
 
 const BUF_CAP: usize = 256;
 
@@ -18,7 +17,12 @@ struct RingBuf {
 
 impl RingBuf {
     const fn new() -> Self {
-        Self { buf: [0; BUF_CAP], head: 0, tail: 0, count: 0 }
+        Self {
+            buf: [0; BUF_CAP],
+            head: 0,
+            tail: 0,
+            count: 0,
+        }
     }
 
     fn push(&mut self, byte: u8) {
@@ -30,14 +34,18 @@ impl RingBuf {
     }
 
     fn pop(&mut self) -> Option<u8> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         let b = self.buf[self.head];
         self.head = (self.head + 1) % BUF_CAP;
         self.count -= 1;
         Some(b)
     }
 
-    fn is_empty(&self) -> bool { self.count == 0 }
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 }
 
 static INPUT_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
@@ -45,12 +53,11 @@ static EDITOR_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
 static ECHO_ENABLED: Mutex<bool> = Mutex::new(true);
 
 lazy_static! {
-    static ref KB: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
-        Mutex::new(Keyboard::new(
-            ScancodeSet1::new(),
-            layouts::Us104Key,
-            HandleControl::Ignore,
-        ));
+    static ref KB: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> = Mutex::new(Keyboard::new(
+        ScancodeSet1::new(),
+        layouts::Us104Key,
+        HandleControl::Ignore,
+    ));
 }
 
 /// Called from the keyboard ISR with the raw scancode.
@@ -61,7 +68,9 @@ pub fn push_scancode(scancode: u8) {
             match key {
                 DecodedKey::Unicode(c) => {
                     if *ECHO_ENABLED.lock() {
-                        crate::print!("{}", c);
+                        if c >= ' ' || c == '\n' || c == '\r' {
+                            crate::print!("{}", c);
+                        }
                     }
                     if c.is_ascii() {
                         let b = c as u8;
@@ -71,19 +80,19 @@ pub fn push_scancode(scancode: u8) {
                 }
                 DecodedKey::RawKey(k) => {
                     let code: u8 = match k {
-                        KeyCode::ArrowUp    => 0x80,
-                        KeyCode::ArrowDown  => 0x81,
-                        KeyCode::ArrowLeft  => 0x82,
+                        KeyCode::ArrowUp => 0x80,
+                        KeyCode::ArrowDown => 0x81,
+                        KeyCode::ArrowLeft => 0x82,
                         KeyCode::ArrowRight => 0x83,
-                        KeyCode::Home       => 0x84,
-                        KeyCode::End        => 0x85,
-                        KeyCode::PageUp     => 0x86,
-                        KeyCode::PageDown   => 0x87,
-                        KeyCode::Delete     => 0x88,
+                        KeyCode::Home => 0x84,
+                        KeyCode::End => 0x85,
+                        KeyCode::PageUp => 0x86,
+                        KeyCode::PageDown => 0x87,
+                        KeyCode::Delete => 0x88,
                         _ => return,
                     };
-                    // ArrowUp/Down to shell for history; all raw keys to editor
-                    if code == 0x80 || code == 0x81 {
+                    // Pass navigation keys to shell for input handling
+                    if code >= 0x80 && code <= 0x83 {
                         INPUT_BUF.lock().push(code);
                     }
                     EDITOR_BUF.lock().push(code);
@@ -100,7 +109,10 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
     let mut n = 0;
     while n < buf.len() {
         match ring.pop() {
-            Some(b) => { buf[n] = b; n += 1; }
+            Some(b) => {
+                buf[n] = b;
+                n += 1;
+            }
             None => break,
         }
     }
@@ -126,7 +138,10 @@ pub fn read_editor_byte(buf: &mut [u8]) -> usize {
     let mut n = 0;
     while n < buf.len() {
         match ring.pop() {
-            Some(b) => { buf[n] = b; n += 1; }
+            Some(b) => {
+                buf[n] = b;
+                n += 1;
+            }
             None => break,
         }
     }

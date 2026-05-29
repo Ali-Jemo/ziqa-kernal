@@ -2,12 +2,11 @@
 ///
 /// Simple synchronous message-passing channels.
 /// Each channel has a fixed-size ring buffer; no heap allocation required.
-
 pub mod shm;
 pub mod signal;
 
-use spin::Mutex;
 use crate::process::Pid;
+use spin::Mutex;
 
 /// Maximum bytes in a single IPC message
 pub const MSG_MAX: usize = 256;
@@ -29,7 +28,11 @@ impl Message {
         let len = data.len().min(MSG_MAX);
         let mut buf = [0u8; MSG_MAX];
         buf[..len].copy_from_slice(&data[..len]);
-        Self { sender, len, data: buf }
+        Self {
+            sender,
+            len,
+            data: buf,
+        }
     }
 }
 
@@ -83,8 +86,12 @@ impl Channel {
         Ok(msg)
     }
 
-    pub fn is_empty(&self) -> bool { self.count == 0 }
-    pub fn is_full(&self)  -> bool { self.count >= RING_CAP }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+    pub fn is_full(&self) -> bool {
+        self.count >= RING_CAP
+    }
 }
 
 /// Global channel table
@@ -96,7 +103,10 @@ pub struct ChannelTable {
 impl ChannelTable {
     pub const fn new() -> Self {
         const NONE_CHAN: Option<Channel> = None;
-        Self { channels: [NONE_CHAN; MAX_CHANNELS], next_id: 1 }
+        Self {
+            channels: [NONE_CHAN; MAX_CHANNELS],
+            next_id: 1,
+        }
     }
 
     /// Create a new channel, returns its id
@@ -113,7 +123,8 @@ impl ChannelTable {
     }
 
     pub fn get_mut(&mut self, id: u32) -> Option<&mut Channel> {
-        self.channels.iter_mut()
+        self.channels
+            .iter_mut()
             .filter_map(|s| s.as_mut())
             .find(|c| c.id == id)
     }
@@ -132,7 +143,9 @@ impl ChannelTable {
 pub static IPC: Mutex<ChannelTable> = Mutex::new(ChannelTable::new());
 
 /// Convenience wrappers
-pub fn create_channel() -> Option<u32> { IPC.lock().create() }
+pub fn create_channel() -> Option<u32> {
+    IPC.lock().create()
+}
 
 pub fn send(channel_id: u32, sender: Pid, data: &[u8]) -> Result<(), IpcError> {
     IPC.lock()

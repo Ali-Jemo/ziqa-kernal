@@ -1,4 +1,7 @@
 extern crate alloc;
+use crate::memory::VirtAddr;
+use crate::process::signal::{default_action, DefaultDisposition, SignalAction};
+use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable};
 /// Multilevel Feedback Queue (MLFQ) Scheduler for ZiqaKernel
 ///
 /// Features:
@@ -8,12 +11,9 @@ extern crate alloc;
 /// - Starvation prevention via periodic priority boosting
 /// - Load balancing across priority levels
 /// - Fixed-size array (no heap dependency)
-
 use spin::Mutex;
-use crate::process::{Process, ProcessTable, ProcessState, Pid, AbiKind};
-use crate::process::signal::{SignalAction, default_action, DefaultDisposition};
-use crate::memory::VirtAddr;
 use x86_64::registers::control::{Cr3, Cr3Flags};
+use x86_64::structures::paging::FrameAllocator;
 
 const MAX_TASKS: usize = 64;
 const PRIORITY_LEVELS: u8 = 4;
@@ -56,6 +56,26 @@ impl Scheduler {
         let pid = self.table.alloc_pid();
         let mut proc = Process::new(pid, abi, entry, stack);
         proc.set_priority(0); // Highest priority
+
+        // 1. Give the process its own page table
+        if let Some(frame) = crate::memory::paging::create_process_page_table() {
+            proc.page_table_frame = Some(frame);
+        }
+
+        // 2. Add stack region
+        let stack_size = 256 * 1024;
+        let stack_start = stack.as_u64().checked_sub(stack_size as u64)?;
+        proc.add_region(crate::memory::MemoryRegion {
+            start: VirtAddr::new(stack_start),
+            size: stack_size as usize,
+            flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+            is_file_backed: false,
+            file_offset: 0,
+        });
+
+        // 3. Initialize process stack with TrapFrame
+        init_process_stack(&mut proc);
+
         proc.make_ready();
 
         for slot in self.tasks.iter_mut() {
@@ -79,7 +99,10 @@ impl Scheduler {
                     // Notify parent via SIGCHLD
                     let parent_pid = proc.parent;
                     if parent_pid != 0 {
-                        self.send_signal_inner(Pid(parent_pid), crate::process::signal::sig::SIGCHLD);
+                        self.send_signal_inner(
+                            Pid(parent_pid),
+                            crate::process::signal::sig::SIGCHLD,
+                        );
                     }
                     return;
                 }
@@ -94,9 +117,10 @@ impl Scheduler {
         let child_l4_frame = crate::memory::paging::cow_fork_parent();
 
         // Step 2: Find the parent and create the child
-        let parent_index = self.tasks.iter().position(|s| {
-            s.as_ref().map(|p| p.pid == parent_pid).unwrap_or(false)
-        })?;
+        let parent_index = self
+            .tasks
+            .iter()
+            .position(|s| s.as_ref().map(|p| p.pid == parent_pid).unwrap_or(false))?;
 
         let parent = self.tasks[parent_index].as_ref().unwrap();
 
@@ -117,7 +141,12 @@ impl Scheduler {
         }
 
         // Mark all writable regions as copy_on_write in BOTH parent and child
-        for region_opt in self.tasks[parent_index].as_mut().unwrap().regions.iter_mut() {
+        for region_opt in self.tasks[parent_index]
+            .as_mut()
+            .unwrap()
+            .regions
+            .iter_mut()
+        {
             if let Some(ref mut r) = region_opt {
                 if r.flags.writable {
                     r.flags.copy_on_write = true;
@@ -141,8 +170,6 @@ impl Scheduler {
             }
         }
 
-        // No free slots — clean up the child's page table frames (best-effort)
-        // For now just return None (the frames will be leaked — acceptable on failure)
         None
     }
 
@@ -160,6 +187,7 @@ impl Scheduler {
                     if let ProcessState::Exited(code) = proc.state {
                         let pid = proc.pid;
                         *slot = None; // Reap the zombie
+                        self.count -= 1;
                         return Some((pid, code));
                     }
                 }
@@ -201,35 +229,42 @@ impl Scheduler {
     fn deliver_signals(&mut self) {
         let idx = self.current;
         if let Some(proc) = &mut self.tasks[idx] {
-            if !proc.signals.has_pending() { return; }
-            
+            if !proc.signals.has_pending() {
+                return;
+            }
+
             // Check for signals that should be delivered to userspace
             let signum = proc.signals.dequeue();
-            if signum == 0 { return; }
-            
+            if signum == 0 {
+                return;
+            }
+
             let action = proc.signals.get_action(signum);
-            
+
             match action {
                 SignalAction::Ignore => {}
                 SignalAction::Handler(addr) => {
                     // Store signal info for context switch
                     proc.signals.pending_signal = signum;
                     proc.signals.handler_addr = addr;
-                    
-                    crate::println!("[SIGNAL] PID {} handler at 0x{:x} for sig {}", proc.pid.0, addr, signum);
+
+                    crate::println!(
+                        "[SIGNAL] PID {} handler at 0x{:x} for sig {}",
+                        proc.pid.0,
+                        addr,
+                        signum
+                    );
                 }
-                SignalAction::Default => {
-                    match default_action(signum) {
-                        DefaultDisposition::Terminate | DefaultDisposition::CoreDump => {
-                            proc.exit_code = -(signum as i64);
-                            proc.state = ProcessState::Exited(-(signum as i64));
-                        }
-                        DefaultDisposition::Stop => {
-                            proc.state = ProcessState::Blocked;
-                        }
-                        DefaultDisposition::Ignore => {}
+                SignalAction::Default => match default_action(signum) {
+                    DefaultDisposition::Terminate | DefaultDisposition::CoreDump => {
+                        proc.exit_code = -(signum as i64);
+                        proc.state = ProcessState::Exited(-(signum as i64));
                     }
-                }
+                    DefaultDisposition::Stop => {
+                        proc.state = ProcessState::Blocked;
+                    }
+                    DefaultDisposition::Ignore => {}
+                },
             }
         }
     }
@@ -312,21 +347,53 @@ impl Scheduler {
         }
 
         if let Some(idx) = best_idx {
-            if let Some(proc) = &mut self.tasks[idx] {
-                proc.state = ProcessState::Running;
-                // Quantum increases as priority decreases
-                self.timeslice_remaining = match proc.priority {
-                    0 => 5,   // Very fast
+            let old_idx = self.current;
+            let new_idx = idx;
+
+            self.current = new_idx;
+
+            // 1. Prepare new proc
+            {
+                let new_proc = self.tasks[new_idx].as_mut().unwrap();
+                new_proc.state = ProcessState::Running;
+                self.timeslice_remaining = match new_proc.priority {
+                    0 => 5,
                     1 => 10,
                     2 => 20,
-                    _ => 40,  // Background tasks get long quanta
+                    _ => 40,
                 };
-                self.current = idx;
 
-                // Load the process's page table if it has its own
-                if let Some(frame) = proc.page_table_frame {
+                // 2. Load page table
+                if let Some(frame) = new_proc.page_table_frame {
                     unsafe {
                         Cr3::write(frame, Cr3Flags::empty());
+                    }
+                }
+            }
+
+            // 3. Switch
+            if old_idx != new_idx {
+                let old_ptr = self.tasks[old_idx].as_mut().map(|p| p as *mut Process);
+                let new_ptr = self.tasks[new_idx].as_mut().map(|p| p as *mut Process);
+
+                unsafe {
+                    let new_proc = &mut *new_ptr.unwrap();
+
+                    // Set TSS stack and KERNEL_STACK for user space transitions
+                    if new_proc.kernel_stack_top != 0 {
+                        crate::arch::x86_64::gdt::set_tss_stack(VirtAddr::new(new_proc.kernel_stack_top));
+                        crate::arch::x86_64::switch::set_kernel_stack(new_proc.kernel_stack_top);
+                    }
+
+                    if let Some(old) = old_ptr.map(|p| &mut *p) {
+                        if old.state == ProcessState::Running {
+                            old.state = ProcessState::Ready;
+                        }
+
+                        crate::arch::x86_64::switch::switch_context(
+                            &mut old.kernel_stack_ptr,
+                            new_proc.kernel_stack_ptr,
+                        );
                     }
                 }
             }
@@ -357,12 +424,6 @@ impl Scheduler {
             if let Some(proc) = slot {
                 if proc.pid == pid {
                     self.current = i;
-                    // Load the process's page table if it has its own
-                    if let Some(frame) = proc.page_table_frame {
-                        unsafe {
-                            Cr3::write(frame, Cr3Flags::empty());
-                        }
-                    }
                     return true;
                 }
             }
@@ -375,11 +436,36 @@ impl Scheduler {
     }
 
     pub fn get_process(&self, pid: Pid) -> Option<&Process> {
-        self.tasks.iter().filter_map(|t| t.as_ref()).find(|p| p.pid == pid)
+        self.tasks
+            .iter()
+            .filter_map(|t| t.as_ref())
+            .find(|p| p.pid == pid)
     }
 
     pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
-        self.tasks.iter_mut().filter_map(|t| t.as_mut()).find(|p| p.pid == pid)
+        self.tasks
+            .iter_mut()
+            .filter_map(|t| t.as_mut())
+            .find(|p| p.pid == pid)
+    }
+
+    pub fn init_boot_process(&mut self) {
+        let pid = self.table.alloc_pid();
+        let proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
+        // The boot process starts as running (it is the current kernel thread)
+        self.tasks[0] = Some(proc);
+        self.tasks[0].as_mut().unwrap().state = ProcessState::Running;
+        self.current = 0;
+        self.count = 1;
+    }
+
+    pub fn schedule(&mut self) {
+        if let Some(proc) = &self.tasks[self.current] {
+            if proc.state == ProcessState::Running {
+                self.tasks[self.current].as_mut().unwrap().state = ProcessState::Ready;
+            }
+        }
+        self.schedule_next();
     }
 }
 
@@ -409,7 +495,13 @@ where
     F: FnOnce(&mut Process) -> R,
 {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER.lock().tasks.iter_mut().filter_map(|t| t.as_mut()).find(|p| p.pid == pid).map(f)
+        SCHEDULER
+            .lock()
+            .tasks
+            .iter_mut()
+            .filter_map(|t| t.as_mut())
+            .find(|p| p.pid == pid)
+            .map(f)
     })
 }
 
@@ -421,7 +513,7 @@ pub fn wake_sleeping(woken_mask: u64) {
 }
 
 pub fn init() {
-    // init
+    SCHEDULER.lock().init_boot_process();
 }
 
 impl Scheduler {
@@ -430,7 +522,13 @@ impl Scheduler {
         crate::println!("-----|---------|----------|--------");
         for slot in self.tasks.iter() {
             if let Some(proc) = slot {
-                crate::println!("{:4} | {:7?} | {:8} | {:6}", proc.pid.0, proc.state, proc.priority, proc.parent);
+                crate::println!(
+                    "{:4} | {:7?} | {:8} | {:6}",
+                    proc.pid.0,
+                    proc.state,
+                    proc.priority,
+                    proc.parent
+                );
             }
         }
     }
@@ -467,8 +565,26 @@ pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
     let mut proc = Process::new(pid, plugin.kind(), entry, stack);
     proc.binary_data = binary.to_vec();
 
+    // 1. Give the process its own page table
+    if let Some(frame) = crate::memory::paging::create_process_page_table() {
+        proc.page_table_frame = Some(frame);
+    }
+
+    // 2. Add stack region
+    let stack_size = 256 * 1024;
+    let stack_start = stack.as_u64() - stack_size;
+    proc.add_region(crate::memory::MemoryRegion {
+        start: VirtAddr::new(stack_start),
+        size: stack_size as usize,
+        flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+        is_file_backed: false,
+        file_offset: 0,
+    });
+
     match plugin.load(binary, &mut proc) {
         Ok(()) => {
+            // 3. Initialize stack AFTER loading (so we have the real entry point)
+            init_process_stack(&mut proc);
             proc.make_ready();
             x86_64::instructions::interrupts::without_interrupts(|| {
                 let mut sched = SCHEDULER.lock();
@@ -483,5 +599,99 @@ pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
             })
         }
         Err(_) => None,
+    }
+}
+
+pub fn init_process_stack(proc: &mut Process) {
+    crate::println!(
+        "[DEBUG] Entering init_process_stack for PID {}...",
+        proc.pid.0
+    );
+    let stack_top = proc.stack_top.as_u64();
+
+    // 1. Map user stack page if the process has a user stack (stack_top != 0)
+    if stack_top != 0 {
+        let page_addr = (stack_top - 4096) & !0xFFF;
+        let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
+
+        let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+        let fa = fa_guard.as_mut().unwrap();
+        let flags = x86_64::structures::paging::PageTableFlags::PRESENT
+            | x86_64::structures::paging::PageTableFlags::WRITABLE
+            | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+
+        if let Some(frame) = fa.allocate_frame() {
+            unsafe {
+                use x86_64::structures::paging::Mapper;
+                if let Some(pt_frame) = proc.page_table_frame {
+                    let po = crate::memory::paging::phys_offset();
+                    let l4_virt = po + pt_frame.start_address().as_u64();
+                    let l4 = &mut *(l4_virt.as_mut_ptr());
+                    let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
+                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                } else {
+                    let mut mapper = crate::memory::paging::current_mapper();
+                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                }
+            }
+        }
+    }
+
+    // 2. Initialize the kernel stack layout if the process has a dedicated kernel stack
+    if proc.kernel_stack_top != 0 {
+        unsafe {
+            let kstack_top = proc.kernel_stack_top;
+            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64)
+                as *mut crate::process::CpuState;
+
+            // Initialize CpuState on kernel stack
+            cpu_state_ptr.write(crate::process::CpuState {
+                r15: 0,
+                r14: 0,
+                r13: 0,
+                r12: 0,
+                r11: 0,
+                r10: 0,
+                r9: 0,
+                r8: 0,
+                rdi: 0,
+                rsi: 0,
+                rbp: 0,
+                rbx: 0,
+                rdx: 0,
+                rcx: 0,
+                rax: 0,
+                rip: proc.entry_point.as_u64(),
+                cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64,
+                rflags: 0x202, // Interrupts enabled
+                rsp: stack_top,
+                ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64,
+            });
+
+            // Write the return address for switch_context (jump_to_user_stub)
+            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8)
+                as *mut u64;
+            extern "C" {
+                fn jump_to_user_stub();
+            }
+            ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
+
+            // Write 6 zeroed registers for switch_context (r15, r14, r13, r12, rbx, rbp)
+            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48)
+                as *mut u64;
+            for i in 0..6 {
+                context_ptr.add(i).write(0);
+            }
+
+            // Set the saved kernel stack pointer to point to the bottom of the switch context frame
+            proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
+        }
+    }
+    crate::println!("[DEBUG] Exited init_process_stack successfully.");
+}
+
+pub fn yield_now() {
+    unsafe {
+        core::arch::asm!("int 0x20");
     }
 }

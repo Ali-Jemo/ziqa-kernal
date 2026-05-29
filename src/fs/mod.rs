@@ -1,12 +1,11 @@
+pub mod pagecache;
 /// Virtual File System (VFS) for ZiqaKernel
 ///
 /// This module provides the core traits and management logic for
 /// the kernel's filesystem.
-
 pub mod ramfs;
 pub mod vfs;
-pub mod ziqafs;
-pub mod pagecache;
+pub mod ziqafs; // now a directory module: src/fs/ziqafs/mod.rs
 
 use crate::abi::AbiError;
 
@@ -22,13 +21,13 @@ pub enum FileType {
 pub trait File: Send {
     /// Read from the file at the given offset.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, AbiError>;
-    
+
     /// Write to the file at the given offset.
     fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, AbiError>;
-    
+
     /// Get the type of the file.
     fn file_type(&self) -> FileType;
-    
+
     /// Get the current size of the file.
     fn size(&self) -> usize;
 }
@@ -43,6 +42,8 @@ pub struct FdTable {
 
 impl FdTable {
     pub const fn new() -> Self {
-        Self { fds: [None; MAX_FDS] }
+        Self {
+            fds: [None; MAX_FDS],
+        }
     }
 }

@@ -3,7 +3,6 @@
 /// High-speed asynchronous notifications between processes.
 /// Used for process control (SIGKILL) and custom IPC (SIGUSR).
 
-
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
@@ -29,13 +28,15 @@ impl SignalQueue {
     }
 
     pub fn pop(&mut self) -> Option<Signal> {
-        if self.pending == 0 { return None; }
-        
+        if self.pending == 0 {
+            return None;
+        }
+
         for i in 0..32 {
             if (self.pending >> i) & 1 != 0 {
                 self.pending &= !(1 << i);
                 // In a real impl, we'd map bit index back to enum
-                return Some(Signal::Kill); 
+                return Some(Signal::Kill);
             }
         }
         None

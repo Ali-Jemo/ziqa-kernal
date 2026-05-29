@@ -1,3 +1,3 @@
 pub mod uring;
 
-pub use uring::{IoUring, SqEntry, CqEntry, op as io_op};
+pub use uring::{op as io_op, CqEntry, IoUring, SqEntry};

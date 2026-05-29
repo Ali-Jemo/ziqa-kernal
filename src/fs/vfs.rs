@@ -1,20 +1,19 @@
 /// Capability-based Virtual File System (VFS) for ZiqaKernel
 ///
-/// Every file operation is checked against the calling process's 
+/// Every file operation is checked against the calling process's
 /// capability space. Access is only granted if a valid token exists.
-
 extern crate alloc;
 
-use crate::process::Process;
-use crate::capability::ResourceKind;
 use crate::abi::AbiError;
+use crate::capability::ResourceKind;
 use crate::fs::File;
-use spin::Mutex;
+use crate::process::Process;
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use spin::Mutex;
 
 /// Global VFS state
 pub struct Vfs {
@@ -35,9 +34,18 @@ impl Vfs {
     }
 
     /// Read from a file, checking for a valid File capability
-    pub fn read(&self, process: &Process, path: &str, buf: &mut [u8], offset: usize) -> Result<usize, AbiError> {
+    pub fn read(
+        &self,
+        process: &Process,
+        path: &str,
+        buf: &mut [u8],
+        offset: usize,
+    ) -> Result<usize, AbiError> {
         // 1. Check if process has a File capability
-        if !process.capabilities.has_permission(ResourceKind::File, false, false) {
+        if !process
+            .capabilities
+            .has_permission(ResourceKind::File, false, false)
+        {
             return Err(AbiError::PermissionDenied);
         }
 
@@ -61,9 +69,18 @@ impl Vfs {
     }
 
     /// Write to a file, checking for a valid Write-enabled File capability
-    pub fn write(&self, process: &Process, path: &str, buf: &[u8], offset: usize) -> Result<usize, AbiError> {
+    pub fn write(
+        &self,
+        process: &Process,
+        path: &str,
+        buf: &[u8],
+        offset: usize,
+    ) -> Result<usize, AbiError> {
         // 1. Check for write permission
-        if !process.capabilities.has_permission(ResourceKind::File, true, false) {
+        if !process
+            .capabilities
+            .has_permission(ResourceKind::File, true, false)
+        {
             return Err(AbiError::PermissionDenied);
         }
 
@@ -97,11 +114,12 @@ impl Vfs {
 
     /// Create a new empty RamFile at the given path (kernel-internal)
     pub fn create(&mut self, path: &str) {
-        use alloc::sync::Arc;
         use crate::fs::ramfs::RamFile;
+        use alloc::sync::Arc;
         use spin::Mutex;
         if !self.exists(path) {
-            self.files.insert(path.to_string(), Arc::new(Mutex::new(RamFile::new())));
+            self.files
+                .insert(path.to_string(), Arc::new(Mutex::new(RamFile::new())));
         }
     }
 
@@ -175,12 +193,13 @@ impl Vfs {
 
     /// Create a directory marker in VFS
     pub fn mkdir(&mut self, path: &str) {
-        use alloc::sync::Arc;
         use crate::fs::ramfs::RamFile;
+        use alloc::sync::Arc;
         use spin::Mutex;
         let p = path.trim_end_matches('/');
         if !p.is_empty() && !self.files.contains_key(p) {
-            self.files.insert(p.to_string(), Arc::new(Mutex::new(RamFile::new())));
+            self.files
+                .insert(p.to_string(), Arc::new(Mutex::new(RamFile::new())));
         }
     }
 }

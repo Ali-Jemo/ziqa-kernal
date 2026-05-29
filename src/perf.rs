@@ -1,9 +1,8 @@
+use crate::memory::heapstats;
 /// Performance benchmarking for ZiqaKernel
 ///
 /// Provides utilities to measure scheduler, memory, and I/O performance
-
 use spin::Mutex;
-use crate::memory::heapstats;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BenchmarkResult {
@@ -91,7 +90,10 @@ impl PerformanceSuite {
         let heap_stats = heapstats::get_stats();
         crate::println!("  Total Allocations: {}", heap_stats.total_allocations);
         crate::println!("  Total Frees: {}", heap_stats.total_frees);
-        crate::println!("  Current Usage: {} bytes", heap_stats.current_usage_bytes());
+        crate::println!(
+            "  Current Usage: {} bytes",
+            heap_stats.current_usage_bytes()
+        );
         crate::println!("  Peak Usage: {} bytes", heap_stats.peak_usage_bytes);
         crate::println!("  Current Blocks: {}", heap_stats.current_blocks);
 
@@ -138,7 +140,7 @@ where
 pub fn benchmark_page_cache() {
     crate::println!("\n━━━ Page Cache Benchmark ━━━");
 
-    use crate::fs::pagecache::{PageKey, cache_page, get_cached_page};
+    use crate::fs::pagecache::{cache_page, get_cached_page, PageKey};
 
     let test_data = [42u8; 4096];
     let key = PageKey {
@@ -163,6 +165,14 @@ pub fn benchmark_page_cache() {
         let _ = cache_page(key2, &test_data);
     });
 
-    crate::println!("  Cache Hit: {} cycles/op (~{} ns)", hits.avg_cycles_per_op, hits.avg_ns());
-    crate::println!("  Cache Miss: {} cycles/op (~{} ns)", misses.avg_cycles_per_op, misses.avg_ns());
+    crate::println!(
+        "  Cache Hit: {} cycles/op (~{} ns)",
+        hits.avg_cycles_per_op,
+        hits.avg_ns()
+    );
+    crate::println!(
+        "  Cache Miss: {} cycles/op (~{} ns)",
+        misses.avg_cycles_per_op,
+        misses.avg_ns()
+    );
 }

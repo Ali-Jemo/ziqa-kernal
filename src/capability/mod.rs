@@ -39,15 +39,30 @@ pub struct Permissions {
 
 impl Permissions {
     pub const fn read_only() -> Self {
-        Self { read: true, write: false, execute: false, delegate: false }
+        Self {
+            read: true,
+            write: false,
+            execute: false,
+            delegate: false,
+        }
     }
 
     pub const fn read_write() -> Self {
-        Self { read: true, write: true, execute: false, delegate: false }
+        Self {
+            read: true,
+            write: true,
+            execute: false,
+            delegate: false,
+        }
     }
 
     pub const fn full() -> Self {
-        Self { read: true, write: true, execute: true, delegate: true }
+        Self {
+            read: true,
+            write: true,
+            execute: true,
+            delegate: true,
+        }
     }
 }
 
@@ -62,8 +77,18 @@ pub struct CapabilityToken {
 }
 
 impl CapabilityToken {
-    pub fn new(id: CapabilityId, resource: ResourceKind, permissions: Permissions, target: u64) -> Self {
-        Self { id, resource, permissions, target }
+    pub fn new(
+        id: CapabilityId,
+        resource: ResourceKind,
+        permissions: Permissions,
+        target: u64,
+    ) -> Self {
+        Self {
+            id,
+            resource,
+            permissions,
+            target,
+        }
     }
 
     /// Check if this capability grants the required permission
@@ -102,7 +127,12 @@ impl CapabilitySpace {
     }
 
     /// Grant a new capability and return its ID
-    pub fn grant(&mut self, resource: ResourceKind, permissions: Permissions, target: u64) -> Option<CapabilityId> {
+    pub fn grant(
+        &mut self,
+        resource: ResourceKind,
+        permissions: Permissions,
+        target: u64,
+    ) -> Option<CapabilityId> {
         if self.count >= MAX_CAPS_PER_PROCESS {
             return None;
         }
@@ -149,7 +179,12 @@ impl CapabilitySpace {
     }
 
     /// Check if this space grants a specific permission on a resource kind
-    pub fn has_permission(&self, resource: ResourceKind, needs_write: bool, needs_exec: bool) -> bool {
+    pub fn has_permission(
+        &self,
+        resource: ResourceKind,
+        needs_write: bool,
+        needs_exec: bool,
+    ) -> bool {
         self.caps.iter().any(|slot| {
             slot.as_ref()
                 .map(|cap| cap.allows(resource, needs_write, needs_exec))

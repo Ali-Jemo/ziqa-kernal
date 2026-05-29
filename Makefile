@@ -21,8 +21,8 @@ release:
 	cargo build --release --bin ziqa-kernel
 
 # Run on QEMU
-run: boot
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -m 512M -serial stdio -display none
+run: boot disk.img
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive format=raw,file=disk.img -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
 # Clean build artifacts
 clean:
@@ -63,4 +63,4 @@ zig-check:
 
 # Run on QEMU with graphical display (for DOOM fire visual)
 run-gui: boot
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -m 512M -serial stdio -display gtk
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive format=raw,file=disk.img -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0

@@ -6,8 +6,7 @@
 ///   - Out-of-bounds jumps
 ///   - Invalid memory access
 ///   - Reaching an exit instruction
-
-use crate::ebpf::{BpfInstruction, BpfError, op};
+use crate::ebpf::{op, BpfError, BpfInstruction};
 
 pub struct BpfVerifier<'a> {
     program: &'a [BpfInstruction],
@@ -27,7 +26,7 @@ impl<'a> BpfVerifier<'a> {
         if self.program.len() == 0 {
             return Err(BpfError::VerificationFailed("Empty program"));
         }
-        
+
         if self.program.len() > self.max_insns {
             return Err(BpfError::VerificationFailed("Program too large"));
         }
@@ -39,7 +38,7 @@ impl<'a> BpfVerifier<'a> {
                 has_exit = true;
             }
         }
-        
+
         if !has_exit {
             return Err(BpfError::VerificationFailed("No exit instruction found"));
         }
@@ -47,16 +46,19 @@ impl<'a> BpfVerifier<'a> {
         // 2. Control flow analysis (simplified: no backward jumps)
         for (i, insn) in self.program.iter().enumerate() {
             // Check jump targets
-            if (insn.code & 0x07) == 0x05 { // JMP class
+            if (insn.code & 0x07) == 0x05 {
+                // JMP class
                 if insn.code != op::RET {
                     let target = i as i32 + insn.off as i32 + 1;
                     if target < 0 || target >= self.program.len() as i32 {
                         return Err(BpfError::VerificationFailed("Jump out of bounds"));
                     }
                     if insn.off <= 0 && insn.code != op::RET {
-                         // Strictly speaking, BPF allows backward jumps in recent versions
-                         // but for ZiqaKernel safety, we'll start with DAGs only.
-                         return Err(BpfError::VerificationFailed("Backward jumps forbidden for now"));
+                        // Strictly speaking, BPF allows backward jumps in recent versions
+                        // but for ZiqaKernel safety, we'll start with DAGs only.
+                        return Err(BpfError::VerificationFailed(
+                            "Backward jumps forbidden for now",
+                        ));
                     }
                 }
             }

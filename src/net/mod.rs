@@ -5,7 +5,6 @@
 /// - A loopback device (lo) that echoes packets back
 /// - A simple packet queue per device
 /// - A global `NET` registry
-
 use spin::Mutex;
 
 pub const MTU: usize = 1500;
@@ -49,11 +48,18 @@ const NONE_PKT: Option<Packet> = None;
 
 impl PacketQueue {
     const fn new() -> Self {
-        Self { ring: [NONE_PKT; QUEUE_CAP], head: 0, tail: 0, count: 0 }
+        Self {
+            ring: [NONE_PKT; QUEUE_CAP],
+            head: 0,
+            tail: 0,
+            count: 0,
+        }
     }
 
     fn push(&mut self, pkt: Packet) -> Result<(), NetError> {
-        if self.count >= QUEUE_CAP { return Err(NetError::QueueFull); }
+        if self.count >= QUEUE_CAP {
+            return Err(NetError::QueueFull);
+        }
         self.ring[self.tail] = Some(pkt);
         self.tail = (self.tail + 1) % QUEUE_CAP;
         self.count += 1;
@@ -61,14 +67,18 @@ impl PacketQueue {
     }
 
     fn pop(&mut self) -> Result<Packet, NetError> {
-        if self.count == 0 { return Err(NetError::QueueEmpty); }
+        if self.count == 0 {
+            return Err(NetError::QueueEmpty);
+        }
         let pkt = self.ring[self.head].take().unwrap();
         self.head = (self.head + 1) % QUEUE_CAP;
         self.count -= 1;
         Ok(pkt)
     }
 
-    fn len(&self) -> usize { self.count }
+    fn len(&self) -> usize {
+        self.count
+    }
 }
 
 /// A virtual network device
@@ -168,7 +178,6 @@ impl NetDevice {
     }
 }
 
-
 /// Global network device registry
 pub struct NetStack {
     devices: [Option<NetDevice>; MAX_DEVICES],
@@ -178,7 +187,10 @@ pub struct NetStack {
 impl NetStack {
     pub const fn new() -> Self {
         const NONE_DEV: Option<NetDevice> = None;
-        Self { devices: [NONE_DEV; MAX_DEVICES], count: 0 }
+        Self {
+            devices: [NONE_DEV; MAX_DEVICES],
+            count: 0,
+        }
     }
 
     pub fn add_device(&mut self, dev: NetDevice) -> bool {
@@ -193,22 +205,36 @@ impl NetStack {
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut NetDevice> {
-        self.devices.iter_mut()
+        self.devices
+            .iter_mut()
             .filter_map(|s| s.as_mut())
             .find(|d| d.name == name)
     }
 
-    pub fn device_count(&self) -> usize { self.count }
+    pub fn device_count(&self) -> usize {
+        self.count
+    }
 
     pub fn print_stats(&self) {
         for slot in self.devices.iter() {
             if let Some(dev) = slot {
-                crate::println!("  {:4}  tx={} rx={} tx_bytes={} rx_bytes={}",
-                    dev.name, dev.tx_packets, dev.rx_packets, dev.tx_bytes, dev.rx_bytes);
+                crate::println!(
+                    "  {:4}  tx={} rx={} tx_bytes={} rx_bytes={}",
+                    dev.name,
+                    dev.tx_packets,
+                    dev.rx_packets,
+                    dev.tx_bytes,
+                    dev.rx_bytes
+                );
             }
         }
     }
 }
+
+pub mod device;
+pub mod dns;
+pub mod http;
+pub mod stack;
 
 pub static NET: Mutex<NetStack> = Mutex::new(NetStack::new());
 
@@ -216,4 +242,5 @@ pub static NET: Mutex<NetStack> = Mutex::new(NetStack::new());
 pub fn init() {
     NET.lock().add_device(NetDevice::loopback());
     crate::println!("[NET] Network stack initialized (lo registered)");
+    stack::init();
 }

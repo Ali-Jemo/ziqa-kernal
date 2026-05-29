@@ -1,21 +1,20 @@
+use crate::process::Pid;
 /// Monotonic timer and clock subsystem for ZiqaKernel
 ///
 /// - Global tick counter incremented by the PIT/APIC timer ISR
 /// - Uptime in milliseconds (assuming 100 Hz PIT = 10 ms/tick)
 /// - Sleep queue: processes can register a wake-up tick
-
 use spin::Mutex;
-use crate::process::Pid;
 
 /// PIT configured at 100 Hz → 10 ms per tick
 pub const TICKS_PER_SEC: u64 = 100;
-pub const MS_PER_TICK:   u64 = 1000 / TICKS_PER_SEC;
+pub const MS_PER_TICK: u64 = 1000 / TICKS_PER_SEC;
 
 const MAX_SLEEPERS: usize = 32;
 
 #[derive(Clone, Copy)]
 struct SleepEntry {
-    pid:       Pid,
+    pid: Pid,
     wake_tick: u64,
 }
 
@@ -50,17 +49,25 @@ impl Timer {
         self.wake_sleepers();
     }
 
-    pub fn ticks(&self) -> u64 { self.ticks }
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
 
     /// Uptime in milliseconds
-    pub fn uptime_ms(&self) -> u64 { self.ticks * MS_PER_TICK }
+    pub fn uptime_ms(&self) -> u64 {
+        self.ticks * MS_PER_TICK
+    }
 
     /// Uptime in seconds
-    pub fn uptime_secs(&self) -> u64 { self.ticks / TICKS_PER_SEC }
+    pub fn uptime_secs(&self) -> u64 {
+        self.ticks / TICKS_PER_SEC
+    }
 
     /// Register a process to be woken after `ms` milliseconds
     pub fn sleep_ms(&mut self, pid: Pid, ms: u64) -> bool {
-        if self.sleeper_count >= MAX_SLEEPERS { return false; }
+        if self.sleeper_count >= MAX_SLEEPERS {
+            return false;
+        }
         let wake_tick = self.ticks + (ms + MS_PER_TICK - 1) / MS_PER_TICK;
         for slot in self.sleepers.iter_mut() {
             if slot.is_none() {
@@ -101,19 +108,25 @@ pub fn tick() {
 
 /// Current tick count (lock-free read via brief lock)
 pub fn uptime_ticks() -> u64 {
-    TIMER.lock().ticks()
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        TIMER.lock().ticks()
+    })
 }
 
 /// Uptime in milliseconds
 pub fn uptime_ms() -> u64 {
-    TIMER.lock().uptime_ms()
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        TIMER.lock().uptime_ms()
+    })
 }
 
 /// Block a process for `ms` milliseconds
 pub fn sleep_ms(pid: Pid, ms: u64) {
-    // Mark process as Blocked first
-    crate::process::scheduler::with_process_mut(pid, |proc| {
-        proc.state = crate::process::ProcessState::Blocked;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        // Mark process as Blocked first
+        crate::process::scheduler::with_process_mut(pid, |proc| {
+            proc.state = crate::process::ProcessState::Blocked;
+        });
+        TIMER.lock().sleep_ms(pid, ms);
     });
-    TIMER.lock().sleep_ms(pid, ms);
 }

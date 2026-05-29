@@ -1,12 +1,11 @@
+use crate::abi::AbiError;
 /// Shared Memory IPC for ZiqaKernel
 ///
 /// Provides the fastest possible communication by allowing processes
 /// to share the same physical memory frames. Zero-copy.
-
 use crate::process::Pid;
-use crate::abi::AbiError;
-use spin::Mutex;
 use alloc::collections::BTreeMap;
+use spin::Mutex;
 
 /// A shared memory segment
 pub struct ShmRegion {
@@ -32,14 +31,14 @@ impl ShmManager {
     pub fn create(&mut self, owner: Pid, size: usize) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        
+
         let region = ShmRegion {
             id,
             owner,
             phys_frames: [0; 4], // In real impl, allocate from FrameAllocator
             size,
         };
-        
+
         self.regions.insert(id, region);
         id
     }

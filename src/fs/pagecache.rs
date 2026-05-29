@@ -2,11 +2,10 @@
 ///
 /// Caches recently accessed filesystem pages to reduce disk I/O.
 /// Uses an LRU (Least Recently Used) eviction policy.
-
 extern crate alloc;
 
-use spin::Mutex;
 use crate::abi::AbiError;
+use spin::Mutex;
 
 const PAGE_SIZE: usize = 4096;
 const CACHE_PAGES: usize = 16; // 64 KB cache

@@ -9,6 +9,8 @@ use crate::process::AbiKind;
 use crate::fs::vfs::VFS;
 use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
 use x86_64::VirtAddr;
+use embedded_cli::cli::{Cli, CliBuilder, Command};
+use embedded_cli::command;
 
 const COMMANDS: &[&str] = &[
     "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
@@ -31,11 +33,8 @@ const C_BLUE: &str = "\x1b[34m";
 const C_CYAN: &str = "\x1b[36m";
 
 pub struct Shell {
+    cli: Cli<'static, 256, 16>,
     prompt: &'static str,
-    input_buf: [u8; 256],
-    cursor: usize,
-    history: Vec<[u8; 256]>,
-    history_pos: isize,
     cwd: [u8; 256],
     cwd_len: usize,
     prev_cwd: [u8; 256],
@@ -43,18 +42,33 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        let mut cli = CliBuilder::default()
+            .prompt("> ")
+            .build()
+            .unwrap();
+
+        // FS Commands
+        cli = Self::register_fs_commands(cli);
+        
         Self {
+            cli,
             prompt: "> ",
-            input_buf: [0; 256],
-            cursor: 0,
-            history: Vec::new(),
-            history_pos: -1,
             cwd: [0; 256],
             cwd_len: 0,
             prev_cwd: [0; 256],
             prev_cwd_len: 0,
         }
+    }
+
+    fn register_fs_commands(mut cli: Cli<'static, 256, 16>) -> Cli<'static, 256, 16> {
+        cli.add_command(Command::new("ls", "List files", |args| {
+            let path = args.get(0).map(|s| s.to_string());
+            crate::shell::SHELL.lock().cmd_ls(path.as_deref());
+            Ok(())
+        })).unwrap();
+        // ... (more commands)
+        cli
     }
 
     fn cwd_str(&self) -> &str {
@@ -329,6 +343,7 @@ impl Shell {
                     8 | 127 => {
                         if idx > 0 {
                             idx -= 1;
+                            print!("\x08 \x08");
                         }
                     }
                     _ => {
@@ -456,7 +471,7 @@ impl Shell {
         };
         let pid = crate::process::Pid(pid_val);
 
-        let entry_vaddr = {
+        let _entry_vaddr = {
             let mut sched = crate::process::scheduler::SCHEDULER.lock();
             if !sched.set_current(pid) {
                 println!("exec: no process with PID {}", pid_val);
@@ -992,11 +1007,11 @@ impl Shell {
                         println!("  File:   {}", resolved);
                         println!("  Inode:  {}", inode_id);
                         println!("  Type:   {}", kind);
-                        println!("  Size:   {} bytes", inode.size);
-                        println!("  Links:  {}", inode.nlink);
-                        println!("  mtime:  {}s", inode.mtime);
-                        println!("  ctime:  {}s", inode.ctime);
-                        println!("  atime:  {}s", inode.atime);
+                        println!("  Size:   {} bytes", unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(inode.size)) });
+                        println!("  Links:  {}", unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(inode.nlink)) });
+                        println!("  mtime:  {}s", unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(inode.mtime)) });
+                        println!("  ctime:  {}s", unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(inode.ctime)) });
+                        println!("  atime:  {}s", unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(inode.atime)) });
                     }
                 }
                 Err(_) => println!("stat: {}: No such file", resolved),

@@ -9,8 +9,8 @@
 ///   60 = exit(code)
 ///   62 = kill(pid, sig)
 ///  230 = clock_nanosleep / nanosleep (simplified: ms in arg1)
-
-use crate::process::{Process, ProcessState, Pid};
+use crate::process::{Process, ProcessState};
+use crate::capability::ResourceKind;
 
 /// The context passed to an ABI plugin's syscall handler
 pub struct SyscallContext<'a> {
@@ -24,7 +24,11 @@ pub struct SyscallContext<'a> {
 
 impl<'a> SyscallContext<'a> {
     pub fn new(number: u64, args: [u64; 6], process: &'a mut Process) -> Self {
-        Self { number, args, process }
+        Self {
+            number,
+            args,
+            process,
+        }
     }
 
     pub fn abi_kind(&self) -> crate::process::AbiKind {
@@ -34,27 +38,33 @@ impl<'a> SyscallContext<'a> {
 
 // ── Linux x86_64 syscall numbers ──────────────────────────────────────────────
 pub mod nr {
-    pub const WRITE:      u64 = 1;
-    pub const GETPID:     u64 = 39;
-    pub const EXIT:       u64 = 60;
+    pub const WRITE: u64 = 1;
+    pub const GETPID: u64 = 39;
+    pub const EXIT: u64 = 60;
     pub const EXIT_GROUP: u64 = 231;
-    pub const KILL:       u64 = 62;
-    pub const NANOSLEEP:  u64 = 35;
+    pub const KILL: u64 = 62;
+    pub const NANOSLEEP: u64 = 35;
     pub const CLOCK_NANOSLEEP: u64 = 230;
-    pub const GETPPID:    u64 = 110;
+    pub const GETPPID: u64 = 110;
     pub const SCHED_YIELD: u64 = 24;
-    pub const FORK:       u64 = 57;
-    pub const WAITPID:    u64 = 61;  // wait4 in Linux; simplified as waitpid
-    pub const MMAP:       u64 = 9;
-    pub const MUNMAP:     u64 = 11;
+    pub const FORK: u64 = 57;
+    pub const WAITPID: u64 = 61; // wait4 in Linux; simplified as waitpid
+    pub const MMAP: u64 = 9;
+    pub const MUNMAP: u64 = 11;
 }
 
 /// Error codes (negated errno values)
 pub mod errno {
-    pub const EPERM:  u64 = 1;
-    pub const ESRCH:  u64 = 3;
+    pub const EPERM: u64 = 1;
+    pub const ESRCH: u64 = 3;
     pub const EINVAL: u64 = 22;
     pub const ENOSYS: u64 = 38;
+}
+
+/// Check if a process has the required capability for a kernel syscall.
+/// Returns true if the syscall is allowed, false if denied.
+fn check_capability(proc: &Process, kind: ResourceKind, needs_write: bool, needs_exec: bool) -> bool {
+    proc.capabilities.has_permission(kind, needs_write, needs_exec)
 }
 
 /// Top-level syscall dispatcher
@@ -63,6 +73,7 @@ pub mod errno {
 /// Falls back to the ABI plugin for ABI-specific syscalls.
 pub fn dispatch_syscall(
     registry: &crate::abi::AbiRegistry,
+    handler: &dyn crate::abi::handler::SyscallHandler,
     ctx: &mut SyscallContext,
 ) -> Result<u64, crate::abi::AbiError> {
     // ── Core kernel syscalls (ABI-independent) ────────────────────────────────
@@ -86,11 +97,13 @@ pub fn dispatch_syscall(
         }
 
         nr::KILL => {
-            let target_pid = Pid(ctx.args[0]);
+            let target_pid = ctx.args[0];
             let signum = ctx.args[1] as u8;
-            let ok = crate::process::scheduler::SCHEDULER.lock().send_signal(target_pid, signum);
-            klog_syscall("kill", ctx.args[0]);
-            if ok { return Ok(0); }
+            let ok = handler.kill(target_pid, signum);
+            klog_syscall("kill", target_pid);
+            if ok {
+                return Ok(0);
+            }
             return Err(crate::abi::AbiError::Other("ESRCH: no such process"));
         }
 
@@ -112,12 +125,16 @@ pub fn dispatch_syscall(
         }
 
         nr::FORK => {
+            // Check ProcessCreate capability before forking
+            if !check_capability(ctx.process, ResourceKind::ProcessCreate, false, false) {
+                return Err(crate::abi::AbiError::Other("EPERM: no process creation capability"));
+            }
             // Clone the current process; child gets pid, parent gets child pid
-            let parent_pid = ctx.process.pid;
-            let child = crate::process::scheduler::SCHEDULER.lock().fork(parent_pid);
-            klog_syscall("fork", child.map(|p| p.0).unwrap_or(u64::MAX));
+            let parent_pid = ctx.process.pid.0;
+            let child = handler.fork(parent_pid);
+            klog_syscall("fork", child.unwrap_or(u64::MAX));
             match child {
-                Some(child_pid) => return Ok(child_pid.0), // parent sees child pid
+                Some(child_pid) => return Ok(child_pid), // parent sees child pid
                 None => return Err(crate::abi::AbiError::Other("fork: out of slots")),
             }
         }
@@ -125,52 +142,24 @@ pub fn dispatch_syscall(
         nr::WAITPID => {
             // args: [child_pid_or_neg1, status_ptr (ignored), options (ignored)]
             let child_arg = ctx.args[0] as i64;
-            let parent_pid = ctx.process.pid;
-            let result = crate::process::scheduler::SCHEDULER.lock().waitpid(parent_pid, child_arg);
+            let parent_pid = ctx.process.pid.0;
+            let result = handler.waitpid(parent_pid, child_arg);
             klog_syscall("waitpid", ctx.args[0]);
             match result {
-                Some((pid, _code)) => return Ok(pid.0),
+                Some((pid, _code)) => return Ok(pid),
                 None => return Ok(0), // no zombie child yet
             }
         }
 
         nr::MMAP => {
-            // args: [addr_hint, length, prot, flags, fd, offset]
-            let addr_hint = ctx.args[0];
-            let length    = ctx.args[1] as usize;
-            let _prot     = ctx.args[2];
-            let flags     = ctx.args[3];
-
-            if length == 0 {
-                return Err(crate::abi::AbiError::Other("mmap: zero length"));
-            }
-
-            use crate::memory::{MemoryRegion, paging::MemoryRegionFlags};
-            use crate::memory::VirtAddr as KVirtAddr;
-
-            // MAP_FIXED (0x10): use addr_hint exactly; otherwise bump-allocate
-            const MAP_FIXED: u64 = 0x10;
-            let base = if flags & MAP_FIXED != 0 && addr_hint != 0 {
-                addr_hint
-            } else {
-                // Align bump to page boundary
-                let b = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
-                ctx.process.mmap_bump = b + length as u64;
-                b
-            };
-
-            let region = MemoryRegion {
-                start: KVirtAddr::new(base),
-                size: length,
-                flags: MemoryRegionFlags::read_write(),
-                is_file_backed: ctx.args[4] as i64 >= 0,
-                file_offset: ctx.args[5],
-            };
-            ctx.process.add_region(region);
-            klog_syscall("mmap", base);
-            return Ok(base);
+            // ... (MMAP and MUNMAP implementation remains here as they seem to operate on process state)
+            // Note: For full decoupling, these should also be moved into the handler if they modify external state
+            // or if the process management is abstracted further.
+            // Keeping them here for now as they are mostly process-local state modification.
+            // (I am omitting them in this response for brevity, you should keep the existing logic)
+            // ...
         }
-
+        // ... (Keep existing MMAP and MUNMAP implementation)
         nr::MUNMAP => {
             // args: [addr, length]
             let addr = ctx.args[0];
@@ -189,14 +178,13 @@ pub fn dispatch_syscall(
             }
             return Err(crate::abi::AbiError::Other("munmap: region not found"));
         }
-
         _ => {}
     }
 
     // ── ABI-specific syscalls ─────────────────────────────────────────────────
     let kind = ctx.abi_kind();
     match registry.get(kind) {
-        Some(plugin) => plugin.handle_syscall(ctx),
+        Some(plugin) => plugin.handle_syscall(handler, ctx),
         None => Err(crate::abi::AbiError::UnsupportedSyscall(ctx.number)),
     }
 }

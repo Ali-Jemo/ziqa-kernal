@@ -1,10 +1,10 @@
+use crate::println;
 /// Graphical Tetris Game using Zig assembly blitter and downsampled VGA output
 ///
 /// Written in Rust, calling the optimized Zig blitter FFI functions for clear/draw/fill_rect,
 /// and downsampling the virtual 32-bit framebuffer to the VGA text screen at 0xb8000.
-
 use alloc::vec;
-use crate::println;
+use alloc::vec::Vec;
 
 static mut RNG_STATE: u32 = 12345;
 
@@ -28,40 +28,19 @@ fn next_piece_idx() -> usize {
 // 7 standard Tetris pieces represented in 4x4 grids
 const SHAPE_TEMPLATES: [[[u8; 4]; 4]; 7] = [
     // 0: I
-    [[0,0,0,0],
-     [1,1,1,1],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 1: O
-    [[1,1,0,0],
-     [1,1,0,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 2: T
-    [[0,1,0,0],
-     [1,1,1,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[0, 1, 0, 0], [1, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 3: S
-    [[0,1,1,0],
-     [1,1,0,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[0, 1, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 4: Z
-    [[1,1,0,0],
-     [0,1,1,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[1, 1, 0, 0], [0, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 5: J
-    [[1,0,0,0],
-     [1,1,1,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[1, 0, 0, 0], [1, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 6: L
-    [[0,0,1,0],
-     [1,1,1,0],
-     [0,0,0,0],
-     [0,0,0,0]],
+    [[0, 0, 1, 0], [1, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
 ];
 
 const PIECE_COLORS: [u32; 7] = [
@@ -92,15 +71,21 @@ fn get_rotated_grid(template: &[[u8; 4]; 4], size: usize, rotation: usize) -> [[
 // Check if a piece fits on the board
 fn can_place(board: &[[u32; 10]; 20], shape_idx: usize, rotation: usize, px: i32, py: i32) -> bool {
     let template = SHAPE_TEMPLATES[shape_idx];
-    let size = if shape_idx == 0 { 4 } else if shape_idx == 1 { 2 } else { 3 };
+    let size = if shape_idx == 0 {
+        4
+    } else if shape_idx == 1 {
+        2
+    } else {
+        3
+    };
     let rotated = get_rotated_grid(&template, size, rotation);
-    
+
     for r in 0..size {
         for c in 0..size {
             if rotated[r][c] != 0 {
                 let board_x = px + c as i32;
                 let board_y = py + r as i32;
-                
+
                 // Out of bounds horizontally
                 if board_x < 0 || board_x >= 10 {
                     return false;
@@ -206,7 +191,11 @@ fn write_number_cell(v_fb: &mut [u32], x: usize, y: usize, num: u32, fg: u8, bg:
 
 // Present the virtual 80x25 framebuffer onto the physical 80x25 VGA text screen
 fn present_to_vga(v_fb: &[u32]) {
-    let vga_ptr = 0xb8000 as *mut u16;
+    let offset = crate::BOOT_INFO.lock()
+        .as_ref()
+        .map(|bi| bi.physical_memory_offset)
+        .unwrap_or(0);
+    let vga_ptr = (offset + 0xb8000) as *mut u16;
     for y in 0..25 {
         for x in 0..80 {
             let val = v_fb[y * 80 + x];
@@ -232,7 +221,20 @@ fn present_to_vga(v_fb: &[u32]) {
     }
 }
 
-// Render board, pieces, score, level, next preview, and controls to the virtual FB
+fn find_ghost_y(
+    board: &[[u32; 10]; 20],
+    current_piece: usize,
+    current_rotation: usize,
+    current_x: i32,
+    current_y: i32,
+) -> i32 {
+    let mut gy = current_y;
+    while can_place(board, current_piece, current_rotation, current_x, gy + 1) {
+        gy += 1;
+    }
+    gy
+}
+
 pub fn render_screen(
     fb: *mut u8,
     pitch: u32,
@@ -247,65 +249,110 @@ pub fn render_screen(
     current_x: i32,
     current_y: i32,
     is_game_over: bool,
+    ghost_y: i32,
+    line_flash: u8,
+    line_flash_rows: &[bool; 20],
+    now: u32,
 ) {
-    // 1. Clear the screen to black using the FFI blitter
     crate::zig_ffi::clear(fb, (80 * 25 * 4) as usize, 0x000000);
 
-    // 2. Draw board boundaries using FFI blitter fill_rect
-    // Center the board: width is 20 (10 columns * 2 columns per block) starting at X=30.
-    // So X=29 is left border, X=50 is right border, Y=22 is bottom border.
-    crate::zig_ffi::fill_rect(fb, pitch, 29, 2, 1, 20, 0x777777); // Left border
-    crate::zig_ffi::fill_rect(fb, pitch, 50, 2, 1, 20, 0x777777); // Right border
-    crate::zig_ffi::fill_rect(fb, pitch, 29, 22, 22, 1, 0x777777); // Bottom border
+    // ── Gradient background ────────────────────────────────────────────────
+    crate::zig_ffi::gradient_fill(fb, pitch, 0, 0, 80, 25, 0x0A0A1A, 0x000000);
 
-    // 3. Draw board contents as 2x1 blocks
+    // ── Background grid (subtle dots at cell centers) ──────────────────────
+    let grid_color = 0x1A1A3A;
+    for gy in 0..20 {
+        for gx in 0..10 {
+            crate::zig_ffi::fill_rect(fb, pitch, 30 + gx as u32 * 2, 2 + gy as u32, 1, 1, grid_color);
+        }
+    }
+
+    // ── Animated board border ─────────────────────────────────────────────
+    let hue_shift = (now / 50) & 0xFF;
+    let border_colors = [
+        0x4444FF + (hue_shift as u32).wrapping_mul(0x000100),
+        0xFF4444 + (hue_shift as u32).wrapping_mul(0x000100),
+        0x44FF44 + (hue_shift as u32).wrapping_mul(0x010000),
+        0xFFFF44 + (hue_shift as u32).wrapping_mul(0x000100),
+    ];
+    let border_bright = 0x8888FFu32.wrapping_add(((now & 0xFF) as u32) << 16);
+    crate::zig_ffi::fill_rect(fb, pitch, 29, 1, 22, 1, border_bright);
+    crate::zig_ffi::fill_rect(fb, pitch, 29, 22, 22, 1, border_bright);
+    crate::zig_ffi::fill_rect(fb, pitch, 29, 2, 1, 20, border_colors[0]);
+    crate::zig_ffi::fill_rect(fb, pitch, 50, 2, 1, 20, border_colors[1]);
+
+    // ── Draw board contents ────────────────────────────────────────────────
     for y in 0..20 {
         for x in 0..10 {
             let color = board[y][x];
             if color != 0 {
-                crate::zig_ffi::fill_rect(fb, pitch, 30 + x as u32 * 2, 2 + y as u32, 2, 1, color);
+                if line_flash > 0 && line_flash_rows[y] {
+                    // Flashing row: alternate between white and original
+                    let flash_color = if (line_flash / 2) % 2 == 0 { 0xFFFFFF } else { color };
+                    crate::zig_ffi::fill_rect(fb, pitch, 30 + x as u32 * 2, 2 + y as u32, 2, 1, flash_color);
+                } else {
+                    crate::zig_ffi::fill_rect(fb, pitch, 30 + x as u32 * 2, 2 + y as u32, 2, 1, color);
+                }
             }
         }
     }
 
-    // 4. Draw active falling piece as 2x1 blocks
     if !is_game_over {
         let template = SHAPE_TEMPLATES[current_piece];
-        let size = if current_piece == 0 { 4 } else if current_piece == 1 { 2 } else { 3 };
+        let size = get_piece_size(current_piece);
         let rotated = get_rotated_grid(&template, size, current_rotation);
         let color = PIECE_COLORS[current_piece];
+
+        // ── Ghost piece (translucent shadow) ───────────────────────────────
+        if ghost_y != current_y {
+            for r in 0..size {
+                for c in 0..size {
+                    if rotated[r][c] != 0 {
+                        let board_x = current_x + c as i32;
+                        let board_y = ghost_y + r as i32;
+                        if board_y >= 0 && board_y < 20 {
+                            crate::zig_ffi::blend_rect(
+                                fb, pitch,
+                                30 + board_x as u32 * 2, 2 + board_y as u32,
+                                2, 1,
+                                color, 60,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Active piece ───────────────────────────────────────────────────
         for r in 0..size {
             for c in 0..size {
                 if rotated[r][c] != 0 {
                     let board_x = current_x + c as i32;
                     let board_y = current_y + r as i32;
                     if board_y >= 0 && board_y < 20 {
-                        crate::zig_ffi::fill_rect(fb, pitch, 30 + board_x as u32 * 2, 2 + board_y as u32, 2, 1, color);
+                        crate::zig_ffi::fill_rect(
+                            fb, pitch,
+                            30 + board_x as u32 * 2, 2 + board_y as u32,
+                            2, 1, color,
+                        );
                     }
                 }
             }
         }
     }
 
-    // 5. Draw left UI pane using standard character cells
-    // colors: fg=11 (Light Cyan), bg=0 (Black). Other labels fg=7 (Light Gray), fg=14 (Yellow), fg=10 (Light Green)
+    // ── UI ─────────────────────────────────────────────────────────────────
     write_string_cell(v_fb, 5, 2, "ZIQA TETRIS", 11, 0);
-    
     write_string_cell(v_fb, 5, 5, "SCORE", 7, 0);
     write_number_cell(v_fb, 5, 6, score, 14, 0);
-    
     write_string_cell(v_fb, 5, 9, "LEVEL", 7, 0);
     write_number_cell(v_fb, 5, 10, level, 10, 0);
-
     write_string_cell(v_fb, 5, 13, "LINES", 7, 0);
     write_number_cell(v_fb, 5, 14, lines_cleared, 15, 0);
 
-    // 6. Draw right UI pane
     write_string_cell(v_fb, 55, 2, "NEXT PIECE", 7, 0);
-    
-    // Draw next piece preview using FFI blitter fill_rect at X=55, Y=4..8
     let next_template = SHAPE_TEMPLATES[next_piece];
-    let next_size = if next_piece == 0 { 4 } else if next_piece == 1 { 2 } else { 3 };
+    let next_size = get_piece_size(next_piece);
     let next_color = PIECE_COLORS[next_piece];
     for r in 0..next_size {
         for c in 0..next_size {
@@ -319,17 +366,19 @@ pub fn render_screen(
     write_string_cell(v_fb, 55, 12, "A / D  - Move L / R", 7, 0);
     write_string_cell(v_fb, 55, 14, "W      - Rotate", 7, 0);
     write_string_cell(v_fb, 55, 16, "S      - Soft Drop", 7, 0);
-    write_string_cell(v_fb, 55, 18, "Q      - Quit Game", 7, 0);
-    write_string_cell(v_fb, 55, 20, "R      - Restart", 7, 0);
+    write_string_cell(v_fb, 55, 18, "SPACE  - Hard Drop", 7, 0);
+    write_string_cell(v_fb, 55, 20, "Q      - Quit Game", 7, 0);
+    write_string_cell(v_fb, 55, 22, "R      - Restart", 7, 0);
 
-    // 7. Overlay GAME OVER banner if necessary
     if is_game_over {
-        // Red banner box using fill_rect
         crate::zig_ffi::fill_rect(fb, pitch, 33, 9, 14, 5, 0xAA0000);
-        // Write text overlay on top of it. Red background is Color index 4, White text is 15.
         write_string_cell(v_fb, 35, 10, "GAME OVER", 15, 4);
         write_string_cell(v_fb, 36, 12, "PRESS R", 15, 4);
     }
+}
+
+fn get_piece_size(piece: usize) -> usize {
+    if piece == 0 { 4 } else if piece == 1 { 2 } else { 3 }
 }
 
 pub fn run() {
@@ -338,93 +387,118 @@ pub fn run() {
     let mut score = 0u32;
     let mut level = 1u32;
     let mut lines_cleared = 0u32;
-    
+
     let mut current_piece = next_piece_idx();
     let mut current_rotation = 0;
     let mut current_x = 3i32;
     let mut current_y = 0i32;
     let mut next_piece = next_piece_idx();
     let mut is_game_over = false;
-    
-    // Allocate 32-bit virtual framebuffer (80 columns * 25 rows = 2000 pixels)
+
+    // ── Animation state ──
+    let mut line_flash: u8 = 0;
+    let mut line_flash_rows = [false; 20];
+    let mut pending_lines: u32 = 0;
+    let mut pending_score_inc: u32 = 0;
+
     let mut v_fb = vec![0u32; 2000];
     let fb_ptr = v_fb.as_mut_ptr() as *mut u8;
-    let pitch = 320u32; // 80 pixels * 4 bytes per pixel
-    
+    let pitch = 320u32;
+
     let mut last_tick = crate::timer::uptime_ms();
-    let mut tick_interval = 500u64; // Starting tick rate
-    
+    let mut tick_interval = 500u64;
+
     println!("Starting Tetris on VGA. Press Q to quit.");
-    
-    // Clear keyboard input buffer to discard Enter keys or previous typing
     crate::drivers::keyboard::clear_stdin();
-    
     crate::drivers::vga::clear_screen();
-    
+
     loop {
-        // 1. Scan keyboard input (non-blocking)
+        let now = crate::timer::uptime_ms();
         let mut key_buf = [0u8; 1];
+
+        // ── Keyboard input ─────────────────────────────────────────────────
         if crate::drivers::keyboard::read_stdin(&mut key_buf) > 0 {
             let key = key_buf[0];
-            if key == b'q' || key == b'Q' {
-                break;
-            }
-            if !is_game_over {
+            if key == b'q' || key == b'Q' { break; }
+            if is_game_over {
+                if key == b'r' || key == b'R' {
+                    board = [[0u32; 10]; 20];
+                    score = 0; level = 1; lines_cleared = 0;
+                    current_piece = next_piece_idx();
+                    current_rotation = 0; current_x = 3; current_y = 0;
+                    next_piece = next_piece_idx();
+                    is_game_over = false;
+                    line_flash = 0;
+                }
+            } else if line_flash == 0 {
                 match key {
                     b'a' | b'A' => {
-                        if can_place(&board, current_piece, current_rotation, current_x - 1, current_y) {
-                            current_x -= 1;
-                        }
+                        if can_place(&board, current_piece, current_rotation, current_x - 1, current_y) { current_x -= 1; }
                     }
                     b'd' | b'D' => {
-                        if can_place(&board, current_piece, current_rotation, current_x + 1, current_y) {
-                            current_x += 1;
-                        }
+                        if can_place(&board, current_piece, current_rotation, current_x + 1, current_y) { current_x += 1; }
                     }
                     b'w' | b'W' => {
                         let next_rot = (current_rotation + 1) % 4;
-                        if can_place(&board, current_piece, next_rot, current_x, current_y) {
-                            current_rotation = next_rot;
-                        }
+                        if can_place(&board, current_piece, next_rot, current_x, current_y) { current_rotation = next_rot; }
                     }
                     b's' | b'S' => {
-                        if can_place(&board, current_piece, current_rotation, current_x, current_y + 1) {
-                            current_y += 1;
-                        }
+                        if can_place(&board, current_piece, current_rotation, current_x, current_y + 1) { current_y += 1; }
+                    }
+                    b' ' => {
+                        // Hard drop: lock piece at ghost position
+                        let ghost_y = find_ghost_y(&board, current_piece, current_rotation, current_x, current_y);
+                        current_y = ghost_y;
+                        // Trigger immediate lock via gravity tick
+                        last_tick = 0;
                     }
                     _ => {}
                 }
-            } else {
-                // If game over, press R to restart
-                if key == b'r' || key == b'R' {
-                    board = [[0u32; 10]; 20];
-                    score = 0;
-                    level = 1;
-                    lines_cleared = 0;
-                    current_piece = next_piece_idx();
-                    current_rotation = 0;
-                    current_x = 3;
-                    current_y = 0;
-                    next_piece = next_piece_idx();
-                    is_game_over = false;
+            }
+        }
+
+        // ── Line clear flash animation ─────────────────────────────────────
+        if line_flash > 0 {
+            line_flash -= 1;
+            if line_flash == 0 {
+                // Flash done — actually remove the lines
+                for y in (0..20).rev() {
+                    if line_flash_rows[y] {
+                        for ny in (1..=y).rev() {
+                            board[ny] = board[ny - 1];
+                        }
+                        board[0] = [0u32; 10];
+                    }
+                }
+                if pending_lines > 0 {
+                    lines_cleared += pending_lines;
+                    score += pending_score_inc;
+                    level = 1 + lines_cleared / 10;
+                    tick_interval = (500 - (level as i64 * 35).min(400) as u64) as u64;
+                    pending_lines = 0;
+                    pending_score_inc = 0;
+                }
+                // Spawn next piece after flash
+                current_piece = next_piece;
+                current_rotation = 0; current_x = 3; current_y = 0;
+                next_piece = next_piece_idx();
+                if !can_place(&board, current_piece, current_rotation, current_x, current_y) {
+                    is_game_over = true;
                 }
             }
         }
-        
-        // 2. Gravitational game step
-        let now = crate::timer::uptime_ms();
-        if !is_game_over && now - last_tick >= tick_interval {
+
+        // ── Gravity ────────────────────────────────────────────────────────
+        if !is_game_over && line_flash == 0 && now - last_tick >= tick_interval {
             last_tick = now;
-            
             if can_place(&board, current_piece, current_rotation, current_x, current_y + 1) {
                 current_y += 1;
             } else {
-                // Lock piece into board
+                // Lock piece
                 let template = SHAPE_TEMPLATES[current_piece];
-                let size = if current_piece == 0 { 4 } else if current_piece == 1 { 2 } else { 3 };
+                let size = get_piece_size(current_piece);
                 let rotated = get_rotated_grid(&template, size, current_rotation);
                 let color = PIECE_COLORS[current_piece];
-                
                 for r in 0..size {
                     for c in 0..size {
                         if rotated[r][c] != 0 {
@@ -436,77 +510,62 @@ pub fn run() {
                         }
                     }
                 }
-                
-                // Clear filled rows
-                let mut lines_this_tick = 0;
+
+                // Check for full rows
+                let mut full_rows: Vec<usize> = alloc::vec::Vec::new();
                 for y in (0..20).rev() {
                     let mut is_full = true;
                     for x in 0..10 {
-                        if board[y][x] == 0 {
-                            is_full = false;
-                            break;
-                        }
+                        if board[y][x] == 0 { is_full = false; break; }
                     }
-                    if is_full {
-                        lines_this_tick += 1;
-                        for ny in (1..=y).rev() {
-                            board[ny] = board[ny - 1];
-                        }
-                        board[0] = [0u32; 10];
-                    }
+                    if is_full { full_rows.push(y); }
                 }
-                
-                if lines_this_tick > 0 {
-                    lines_cleared += lines_this_tick;
-                    score += match lines_this_tick {
+
+                if full_rows.len() > 0 {
+                    let n = full_rows.len() as u32;
+                    pending_lines = n;
+                    pending_score_inc = match n {
                         1 => 40 * level,
                         2 => 100 * level,
                         3 => 300 * level,
                         _ => 1200 * level,
                     };
-                    level = 1 + lines_cleared / 10;
-                    tick_interval = (500 - (level as i64 * 35).min(400) as u64) as u64; // Speed up drop speed
-                }
-                
-                // Spawn next piece
-                current_piece = next_piece;
-                current_rotation = 0;
-                current_x = 3;
-                current_y = 0;
-                next_piece = next_piece_idx();
-                
-                // Game over check
-                if !can_place(&board, current_piece, current_rotation, current_x, current_y) {
-                    is_game_over = true;
+                    line_flash_rows = [false; 20];
+                    for &r in &full_rows {
+                        line_flash_rows[r] = true;
+                    }
+                    line_flash = 12; // ~6 visible flashes
+                    // Screen shake on line clear!
+                    crate::zig_ffi::shake_fb(fb_ptr, pitch, 0, 0, 80, 25, 3, now as u32);
+                } else {
+                    // Spawn next piece immediately
+                    current_piece = next_piece;
+                    current_rotation = 0; current_x = 3; current_y = 0;
+                    next_piece = next_piece_idx();
+                    if !can_place(&board, current_piece, current_rotation, current_x, current_y) {
+                        is_game_over = true;
+                    }
                 }
             }
         }
-        
-        // 3. Render screen to the virtual 32-bit framebuffer
+
+        // ── Ghost Y ────────────────────────────────────────────────────────
+        let ghost_y = if !is_game_over && line_flash == 0 {
+            find_ghost_y(&board, current_piece, current_rotation, current_x, current_y)
+        } else { 0 };
+
+        // ── Render ─────────────────────────────────────────────────────────
         render_screen(
-            fb_ptr,
-            pitch,
-            &mut v_fb,
-            &board,
-            score,
-            level,
-            lines_cleared,
-            next_piece,
-            current_piece,
-            current_rotation,
-            current_x,
-            current_y,
-            is_game_over,
+            fb_ptr, pitch, &mut v_fb, &board,
+            score, level, lines_cleared, next_piece,
+            current_piece, current_rotation, current_x, current_y,
+            is_game_over, ghost_y, line_flash, &line_flash_rows,
         );
-        
-        // 4. Downsample and blit to the physical VGA buffer
+
         present_to_vga(&v_fb);
-        
-        // 5. Halt the CPU until the next interrupt (yielding CPU to avoid burning cycles)
         x86_64::instructions::hlt();
     }
-    
-    // Clear screen on exit
+
     crate::drivers::vga::clear_screen();
     println!("Exited Tetris. Returned to Shell.");
 }

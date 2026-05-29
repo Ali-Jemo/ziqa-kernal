@@ -1,12 +1,11 @@
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
+    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
     PhysAddr, VirtAddr,
-    structures::paging::{
-        FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB,
-    },
 };
 
 /// Initialize a page table mapper using the physical memory offset.
+/// Graph: called_by kernel_main::init
 pub unsafe fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
     let l4 = unsafe { active_level_4_table(physical_memory_offset.clone()) };
     unsafe { OffsetPageTable::new(l4, physical_memory_offset) }

@@ -1,10 +1,9 @@
+pub mod verifier;
 /// eBPF (extended Berkeley Packet Filter) subsystem for ZiqaKernel
 ///
 /// Allows running safe, verified code in kernel space for
 /// tracing, networking, and security auditing.
-
 pub mod vm;
-pub mod verifier;
 
 /// eBPF Instruction representation
 #[repr(C)]
