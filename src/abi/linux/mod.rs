@@ -188,24 +188,15 @@ impl AbiPlugin for LinuxAbiPlugin {
 
     fn handle_syscall(
         &self,
-        handler: &dyn crate::abi::handler::SyscallHandler,
+        _handler: &dyn crate::abi::handler::SyscallHandler,
         ctx: &mut SyscallContext,
     ) -> Result<u64, AbiError> {
-        // Handle native capability/signal syscalls first (independent of ABI kind)
-        match ctx.number {
-            crate::abi::syscall::nr::ZIQA_CAP_CLOSE |
-            crate::abi::syscall::nr::ZIQA_CAP_SEEK  |
-            crate::abi::syscall::nr::ZIQA_SIG_SETACTION |
-            crate::abi::syscall::nr::ZIQA_SIG_GETMASK   |
-            crate::abi::syscall::nr::ZIQA_SIG_SETMASK   |
-            crate::abi::syscall::nr::ZIQA_SIG_KILL      |
-            crate::abi::syscall::nr::ZIQA_SIG_PAUSE     => {
-                return crate::abi::syscall::dispatch_syscall(&crate::init_abi_registry(), handler, ctx);
-            }
-            _ => {}
-        }
-
-        // Handle Linux-specific syscalls
+        // NOTE: ZIQA native syscalls (1003/1004/2000–2004) are handled upstream
+        // in dispatch_syscall() before this plugin is ever called — no need to
+        // re-dispatch them here.
+        //
+        // Graphify Community 0 boundary: keep this facade thin and delegate
+        // syscall families to focused dispatch modules.
         if let Some(result) = memory::handle(ctx) {
             return result;
         }
@@ -223,6 +214,7 @@ impl AbiPlugin for LinuxAbiPlugin {
         }
         if let Some(result) = misc::handle(ctx) {
             return result;
+
         }
 
         println!("[Linux ABI] Unimplemented syscall: {}", ctx.number);
