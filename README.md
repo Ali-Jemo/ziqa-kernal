@@ -386,7 +386,7 @@ make zig-check   # Verify Zig blitter compiles independently
 ### Medium Term (P1)
 1.  **Capability Space Enforcement**: ✅ **COMPLETED** — Enforced `ResourceKind` checks on all syscall paths (Files, IPC, Network, DeviceIO).
 2.  **Bridge Point Refactoring**: ✅ **COMPLETED** — Monolithic `kernel_main` refactored into modular initialization routines.
-3.  **Cross-Community Validation**: 🔴 Not started — Verify correctness of 19 inferred `read_block()` edges that span ZiqaFS subsystems.
+3.  **Cross-Community Validation**: ✅ **COMPLETED** — All 19 inferred block access paths in ZiqaFS verified, documented with ARCH annotations, and formalized in [`docs/architecture/ziqafs-block-access-audit.md`](docs/architecture/ziqafs-block-access-audit.md).
 4.  **Input System Maturity**: ✅ **COMPLETED** — Interrupt-driven console input with buffer support and extended navigation (Delete key) added.
 5.  **Wayland Compositor Support**: 🔴 Not started — Leverage DRM/KMS driver for minimal bare-metal compositor.
 
