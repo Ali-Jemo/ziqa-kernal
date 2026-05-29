@@ -28,33 +28,52 @@ pub struct Surface {
     pub z_index: i32,
 }
 
+/// Wayland-inspired IPC protocol messages for NWCC
+#[derive(Debug, Clone, Copy)]
+pub enum WlMessage {
+    /// Create a new surface (window)
+    CreateSurface { owner: Pid },
+    /// Create a buffer from an SHM segment
+    CreateBuffer { owner: Pid, shm_id: usize, width: u32, height: u32 },
+    /// Attach a buffer to a surface
+    Attach { surface_id: usize, buffer_id: usize },
+    /// Set the screen position of a surface
+    SetPosition { surface_id: usize, x: i32, y: i32 },
+    /// Commit surface updates (mark for redraw)
+    Commit { surface_id: usize },
+}
+
 pub struct CompositorState {
     pub surfaces: BTreeMap<usize, Surface>,
     pub buffers: BTreeMap<usize, CompositorBuffer>,
     pub next_id: usize,
+    pub ipc_channel: Option<usize>,
 }
 
 impl CompositorState {
     pub fn new() -> Self {
+        let chan = crate::ipc::create_channel();
+        if let Some(id) = chan {
+            crate::println!("[NWCC] Created IPC channel: {}", id);
+        }
         Self {
             surfaces: BTreeMap::new(),
             buffers: BTreeMap::new(),
             next_id: 1,
+            ipc_channel: chan,
         }
     }
 
     /// Register a new buffer from a client's SHM segment
-    pub fn create_buffer(&mut self, owner: Pid, shm_id: usize, w: u32, h: u32) -> usize {
+    pub fn create_buffer(&mut self, _owner: Pid, shm_id: usize, w: u32, h: u32) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        
         self.buffers.insert(id, CompositorBuffer {
             shm_id,
             width: w,
             height: h,
-            stride: w * 4, // XRGB8888
+            stride: w * 4,
         });
-        
         id
     }
 
@@ -66,6 +85,34 @@ impl CompositorState {
         }
         surface.active_buffer = Some(buffer_id);
         Ok(())
+    }
+
+    /// Compose all active surfaces into the primary DRM backbuffer
+    pub fn compose(&self, target_fb: *mut u8, target_pitch: u32) {
+        let mut sorted_keys: Vec<usize> = self.surfaces.keys().cloned().collect();
+        // Simple sort by ID as proxy for Z-order for now
+        sorted_keys.sort();
+
+        for id in sorted_keys {
+            if let Some(surface) = self.surfaces.get(&id) {
+                if let Some(buf_id) = surface.active_buffer {
+                    if let Some(buf) = self.buffers.get(&buf_id) {
+                        if let Ok(shm_addr) = SHM.lock().attach(buf.shm_id, Pid(0)) {
+                            crate::zig_ffi::blend_rect(
+                                target_fb,
+                                target_pitch,
+                                surface.x as u32,
+                                surface.y as u32,
+                                shm_addr as *const u8,
+                                buf.stride,
+                                buf.width,
+                                buf.height,
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Main loop for the compositor process
@@ -80,8 +127,6 @@ impl CompositorState {
         };
 
         // 2. Allocate a real back-buffer via DRM
-        // In a real implementation, we'd use DRM_IOCTL_MODE_FB_CREATE.
-        // For now, we'll use a heap-allocated buffer to avoid stack overflow.
         let mut back_buffer = alloc::vec![0u8; (width * height * 4) as usize].into_boxed_slice();
         let bb_ptr = back_buffer.as_mut_ptr();
 
@@ -109,8 +154,47 @@ impl CompositorState {
 
     /// Poll for IPC messages from clients
     fn process_ipc(&mut self) {
-        // TODO: Use crate::ipc::recv() on a well-known compositor channel
-        // match crate::ipc::recv(NWCC_CHANNEL_ID) { ... }
+        if let Some(chan_id) = self.ipc_channel {
+            // Attempt to receive a message (non-blocking)
+            while let Ok(msg) = crate::ipc::recv(chan_id) {
+                // Protocol Decoding: Treat msg.data as WlMessage
+                if msg.len >= core::mem::size_of::<WlMessage>() {
+                    let cmd = unsafe { core::ptr::read(msg.data.as_ptr() as *const WlMessage) };
+                    self.handle_message(cmd);
+                }
+            }
+        }
+    }
+
+    fn handle_message(&mut self, msg: WlMessage) {
+        match msg {
+            WlMessage::CreateSurface { owner } => {
+                let id = self.next_id;
+                self.next_id += 1;
+                self.surfaces.insert(id, Surface {
+                    owner,
+                    active_buffer: None,
+                    x: 0, y: 0, z_index: 0,
+                });
+                crate::println!("[NWCC] Surface {} created for PID {}", id, owner.0);
+            }
+            WlMessage::CreateBuffer { owner, shm_id, width, height } => {
+                let id = self.create_buffer(owner, shm_id, width, height);
+                crate::println!("[NWCC] Buffer {} created (SHM {})", id, shm_id);
+            }
+            WlMessage::Attach { surface_id, buffer_id } => {
+                let _ = self.attach(surface_id, buffer_id);
+            }
+            WlMessage::SetPosition { surface_id, x, y } => {
+                if let Some(s) = self.surfaces.get_mut(&surface_id) {
+                    s.x = x;
+                    s.y = y;
+                }
+            }
+            WlMessage::Commit { surface_id: _ } => {
+                // Mark for redraw (already handled by main loop frequency)
+            }
+        }
     }
 }
 
