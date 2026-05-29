@@ -79,29 +79,38 @@ impl CompositorState {
             (res.width, res.height, res.width * 4)
         };
 
-        // 2. Create primary back-buffer in kernel memory (simulated via static buffer for now)
+        // 2. Allocate a real back-buffer via DRM
         // In a real implementation, we'd use DRM_IOCTL_MODE_FB_CREATE.
-        let mut back_buffer = [0u8; 1920 * 1080 * 4]; 
+        // For now, we'll use a heap-allocated buffer to avoid stack overflow.
+        let mut back_buffer = alloc::vec![0u8; (width * height * 4) as usize].into_boxed_slice();
         let bb_ptr = back_buffer.as_mut_ptr();
 
         loop {
-            // 3. Clear back-buffer using Zig-accelerated clear
+            // 3. Process IPC Commands from Clients
+            self.process_ipc();
+
+            // 4. Clear back-buffer using Zig-accelerated clear
             crate::zig_ffi::clear(bb_ptr, (width * height * 4) as usize, 0xFF000000); // Black
 
-            // 4. Composite all client surfaces
+            // 5. Composite all client surfaces
             self.compose(bb_ptr, pitch);
 
-            // 5. Trigger DRM Page Flip
-            // We use the primary framebuffer ID here (simplified)
+            // 6. Trigger DRM Page Flip
+            let mut fb_id: u32 = 1; // Default FB
             let _ = crate::drivers::drm::handle_ioctl(
                 crate::drivers::drm::ioctl::MODE_PAGE_FLIP, 
-                &mut (1u32) as *mut u32 as *mut u8
+                &mut fb_id as *mut u32 as *mut u8
             );
 
-            // 6. Wait for vsync or client signals (yield to scheduler)
-            // In the future, we'll use a specific NWCC_SIGNAL_FRAME_READY.
-            crate::timer::sleep_ms(Pid(0), 16); // ~60 FPS
+            // 7. VSync delay
+            crate::timer::sleep_ms(Pid(0), 16); 
         }
+    }
+
+    /// Poll for IPC messages from clients
+    fn process_ipc(&mut self) {
+        // TODO: Use crate::ipc::recv() on a well-known compositor channel
+        // match crate::ipc::recv(NWCC_CHANNEL_ID) { ... }
     }
 }
 
