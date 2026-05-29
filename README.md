@@ -21,7 +21,7 @@
 ## 🔬 Executive Summary
 ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF verifier + VM**, **io_uring**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
 
-While the kernel now supports complex applications like DOOM and Tetris, and has advanced features like a VFS and eBPF support, **robust user-space isolation (Ring 3) remains an active development track**. It is not a production-ready OS, but a high-performance architectural laboratory.
+While the kernel now supports complex applications like DOOM and Tetris, and has advanced features like a VFS and eBPF support, **Full User-Space Isolation (Ring 3)**: This is your most critical limitation. While you have a scheduler, the current `ring3-hardening-plan.md` implies that robust privilege separation (protecting the kernel from userspace) is still a major active development track. It is not a production-ready OS, but a high-performance architectural laboratory.
 
 ---
 
