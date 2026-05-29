@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Linux ABI Plugin for ZiqaKernel
 ///
 /// Community boundary: this file is the Linux ABI facade. Graphify flagged the
@@ -620,14 +622,14 @@ fn sys_access(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_open(pathname, flags, mode) → fd/-ENOENT
 fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    // Check File capability before opening files
+    // Enforcement: Check File capability for all open calls
     if !ctx.process.capabilities.has_permission(ResourceKind::File, false, false) {
         return Err(AbiError::PermissionDenied);
     }
 
     let path_addr = ctx.args[0] as *const u8;
     let flags = ctx.args[1] as u32;
-    let mut tmp = [0u8; 128];
+    // ... rest of the function ...
     let n = (0..127)
         .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
         .count();
@@ -1312,6 +1314,11 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_mkdir(pathname, mode) → 0 / -EINVAL
 fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // Enforcement: Check File capability for filesystem modification
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) {
+        return Err(AbiError::PermissionDenied);
+    }
+    
     let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
     let mut tmp = [0u8; 128];
@@ -1331,6 +1338,7 @@ fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_rmdir(pathname) → 0 / -ENOENT
 fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
     let path_addr = ctx.args[0] as *const u8;
     let mut tmp = [0u8; 128];
     let n = (0..127)
@@ -1348,6 +1356,7 @@ fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_unlink(pathname) → 0 / -ENOENT
 fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
     let path_addr = ctx.args[0] as *const u8;
     let mut tmp = [0u8; 128];
     let n = (0..127)
@@ -1365,6 +1374,7 @@ fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_rename(oldpath, newpath) → 0 / -ENOENT
 fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
     let old_addr = ctx.args[0] as *const u8;
     let new_addr = ctx.args[1] as *const u8;
     let mut old_tmp = [0u8; 128];
@@ -1390,6 +1400,7 @@ fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_creat(pathname, mode) → fd / -ENOENT
 /// Equivalent to open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
 fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
     let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
     let mut tmp = [0u8; 128];
