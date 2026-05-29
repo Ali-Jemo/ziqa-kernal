@@ -629,7 +629,7 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     let path_addr = ctx.args[0] as *const u8;
     let flags = ctx.args[1] as u32;
-    // ... rest of the function ...
+    let mut tmp = [0u8; 128];
     let n = (0..127)
         .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
         .count();
@@ -732,6 +732,7 @@ fn sys_dup2(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_pipe(pipefd[2]) → 0
 /// pipefd is a *mut [i32; 2] in user memory: [read_fd, write_fd]
 fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::IpcChannel, true, false) { return Err(AbiError::PermissionDenied); }
     let pipefd_ptr = ctx.args[0] as *mut u32;
     if pipefd_ptr.is_null() {
         return Ok((-14_i64) as u64);
@@ -1189,6 +1190,7 @@ fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_socket(domain, type, protocol) → fd
 /// Returns a fake socket fd backed by a File entry.
 fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
     let _domain = ctx.args[0]; // AF_INET=2, AF_UNIX=1
     let _socktype = ctx.args[1]; // SOCK_STREAM=1, SOCK_DGRAM=2
                                  // Allocate a dummy fd tagged as a socket (reuse File slot with path "socket:")
@@ -1203,6 +1205,7 @@ fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_sendto(sockfd, buf, len, flags, dest_addr, addrlen) → bytes_sent
 fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
     let count = ctx.args[2];
     // Stub: pretend we sent all bytes
     Ok(count)
