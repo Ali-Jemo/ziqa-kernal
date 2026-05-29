@@ -36,4 +36,17 @@ pub fn build(b: *std.Build) void {
     });
     libkernelops.root_module.pic = true;
     b.installArtifact(libkernelops);
+
+    // Demo Client Static Library
+    const libdemoclient = b.addLibrary(.{
+        .name = "democlient",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zig/demo_client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    libdemoclient.root_module.pic = true;
+    b.installArtifact(libdemoclient);
 }

@@ -18,7 +18,7 @@ pub struct Job {
     pub state: JobState,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JobState {
     Running,
     Stopped,
@@ -61,7 +61,7 @@ pub struct Shell {
     env: BTreeMap<String, String>,
     /// Job control
     jobs: Vec<Job>,
-    _fg_job: Option<usize>, // index in jobs vector of foreground job
+    fg_job: Option<usize>, // index in jobs vector of foreground job
 }
 
 impl Shell {
@@ -79,7 +79,7 @@ impl Shell {
             aliases: BTreeMap::new(),
             env: BTreeMap::new(),
             jobs: Vec::new(),
-            _fg_job: None,
+            fg_job: None,
         }
     }
 
@@ -1118,14 +1118,24 @@ impl Shell {
 
     fn cmd_nwm_test(&self) {
         println!("{}{}  🚀 LAUNCHING NATIVE COMPOSITOR (NWCC) ...{}", C_CYAN, C_BOLD, C_RESET);
-        println!("  - Initializing DRM Display...");
-        println!("  - Spawning NWCC background process...");
-        println!("  - Spawning Zig-accelerated test client...");
-        println!("");
+        println!("  - Spawning Compositor Task...");
         
-        // This is a demo trigger. In a real system, these would be separate processes.
-        // For the demo, we'll start the compositor which enters its loop.
-        crate::userspace::compositor::start();
+        // Spawn Compositor as a separate task
+        crate::process::scheduler::SCHEDULER.lock().spawn(|| {
+            crate::userspace::compositor::start();
+        });
+
+        // Small delay to let compositor create its IPC channel
+        crate::timer::sleep_ms(crate::process::Pid(0), 100);
+
+        println!("  - Spawning Zig-accelerated Demo Client...");
+        
+        // Spawn Zig Client as a separate task
+        crate::process::scheduler::SCHEDULER.lock().spawn(|| {
+            unsafe { crate::zig_ffi::zig_demo_client_main(); }
+        });
+
+        println!("\n  {}GUI Active. Use mouse to drag windows.{}", C_GREEN, C_RESET);
     }
 
     fn cmd_clear(&self) {
@@ -1730,6 +1740,7 @@ impl Shell {
     }
 
     fn cmd_du(&self, path: Option<&str>) {
+        // Try ZiqaFS first
         use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, BLOCK_SIZE};
         let p = path.map(|s| self.resolve_path(s)).unwrap_or_else(|| self.cwd_str().to_string());
         let guard = ZIQAFS.lock();
@@ -1739,30 +1750,93 @@ impl Shell {
                 Ok(inode_id) => {
                     let blocks = ZiqaFs::du(&mut fs, inode_id);
                     println!("{}\t{} ({} KiB)", blocks, p, blocks as usize * BLOCK_SIZE / 1024);
+                    return;
                 }
-                Err(_) => println!("du: {}: No such file", p),
+                Err(_) => {}
             }
+        }
+        
+        // Fallback to VFS for basic file size
+        let vfs = VFS.lock();
+        if vfs.is_dir(&p) {
+            // For directories, we can't easily get size without ZiqaFS
+            let entries = vfs.list_dir(&p);
+            let mut total_size: u64 = 0;
+            for entry in &entries {
+                if let Some(size) = vfs.file_size(entry) {
+                    total_size += size as u64;
+                }
+            }
+            let kib = total_size / 1024;
+            println!("{}\t{} ({} KiB)", kib, p, kib);
+        } else if let Some(size) = vfs.file_size(&p) {
+            let kib = size as u64 / 1024;
+            println!("{}\t{} ({} KiB)", kib, p, kib);
         } else {
-            println!("du: ZiqaFS not mounted");
+            println!("du: {}: No such file", p);
         }
     }
 
     fn cmd_jobs(&self) {
         if self.jobs.is_empty() {
             println!("No background jobs.");
-        } else {
-            for (i, _job) in self.jobs.iter().enumerate() {
-                println!("[{}] (job details not available)", i + 1);
-            }
+            return;
+        }
+        println!("{}{}  JOBS {} {}", C_YELLOW, C_BOLD, C_RESET, C_DIM);
+        for (i, job) in self.jobs.iter().enumerate() {
+            let state_str = match job.state {
+                JobState::Running => "\x1b[32mRunning\x1b[0m",
+                JobState::Stopped => "\x1b[33mStopped\x1b[0m",
+                JobState::Done => "\x1b[31mDone\x1b[0m",
+            };
+            println!("  [{}] {} {}", i + 1, state_str, job.command);
         }
     }
 
-    fn cmd_bg(&self, _arg: Option<&str>) {
-        println!("bg: job control not fully implemented");
+    fn cmd_bg(&mut self, arg: Option<&str>) {
+        let job_num = match arg.and_then(|s| s.parse::<usize>().ok()) {
+            Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
+            _ => {
+                println!("Usage: bg <%job-number>");
+                return;
+            }
+        };
+
+        let is_stopped = self.jobs[job_num].state == JobState::Stopped;
+        if is_stopped {
+            let pid = self.jobs[job_num].pid;
+            let cmd = self.jobs[job_num].command.clone();
+            crate::process::scheduler::SCHEDULER.lock()
+                .send_signal(pid, crate::process::signal::sig::SIGCONT);
+            self.jobs[job_num].state = JobState::Running;
+            println!("{} [{}] &", cmd, job_num + 1);
+        } else {
+            println!("bg: job {} is not stopped", job_num + 1);
+        }
     }
 
-    fn cmd_fg(&self, _arg: Option<&str>) {
-        println!("fg: job control not fully implemented");
+    fn cmd_fg(&mut self, arg: Option<&str>) {
+        let job_num = match arg.and_then(|s| s.parse::<usize>().ok()) {
+            Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
+            _ => {
+                println!("Usage: fg <%job-number>");
+                return;
+            }
+        };
+
+        let job_state = self.jobs[job_num].state;
+        if job_state == JobState::Stopped || job_state == JobState::Running {
+            self.fg_job = Some(job_num);
+            if job_state == JobState::Stopped {
+                let pid = self.jobs[job_num].pid;
+                crate::process::scheduler::SCHEDULER.lock()
+                    .send_signal(pid, crate::process::signal::sig::SIGCONT);
+            }
+            self.jobs[job_num].state = JobState::Running;
+            self.fg_job = None;
+        } else {
+            println!("fg: job {} is not in a valid state", job_num + 1);
+        }
     }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

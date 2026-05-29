@@ -135,6 +135,8 @@ extern "C" {
         color: u32,
         gravity: i16,
     ) -> u32;
+
+    pub fn zig_demo_client_main();
 }
 
 // ── Safe wrappers ───────────────────────────────────────────────────────────
