@@ -30,3 +30,14 @@
 .gemini/
 .antigravitycli/
 .poolside/
+
+# Web frontend dependencies and build output
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Zig cache
+.zig-cache/
+
+# Temp files
+temp_*.txt
