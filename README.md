@@ -384,11 +384,11 @@ make zig-check   # Verify Zig blitter compiles independently
 4.  ~~**Zig Integration**: Expand Zig FFI surface beyond graphics blitter.~~ ✅ **COMPLETED**
 
 ### Medium Term (P1)
-1.  **Capability Space Enforcement**: Harden per-process capability tokens — enforce `CapabilitySpace` checks on all syscall paths to resource kinds (files, devices, IPC).
-2.  **Bridge Point Refactoring**: Evaluate tight coupling around central bridge nodes (`kernel_main()`, `ZiqaFs`, `Pid`).
-3.  **Cross-Community Validation**: Verify correctness of 19 inferred `read_block()` edges that span ZiqaFS subsystems.
-4.  **Input System Maturity**: Enhance keyboard input with proper buffering and interrupt-driven console editing.
-5.  **Wayland Compositor Support**: Leverage the DRM/KMS driver to run a minimal compositor on bare metal.
+1.  **Capability Space Enforcement**: ✅ **COMPLETED** — Enforced `ResourceKind` checks on all syscall paths (Files, IPC, Network, DeviceIO).
+2.  **Bridge Point Refactoring**: ✅ **COMPLETED** — Monolithic `kernel_main` refactored into modular initialization routines.
+3.  **Cross-Community Validation**: 🔴 Not started — Verify correctness of 19 inferred `read_block()` edges that span ZiqaFS subsystems.
+4.  **Input System Maturity**: ✅ **COMPLETED** — Interrupt-driven console input with buffer support and extended navigation (Delete key) added.
+5.  **Wayland Compositor Support**: 🔴 Not started — Leverage DRM/KMS driver for minimal bare-metal compositor.
 
 ### Long Term (P2)
 1.  **SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.
