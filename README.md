@@ -388,7 +388,7 @@ make zig-check   # Verify Zig blitter compiles independently
 2.  **Bridge Point Refactoring**: ✅ **COMPLETED** — Monolithic `kernel_main` refactored into modular initialization routines.
 3.  **Cross-Community Validation**: ✅ **COMPLETED** — All 19 inferred block access paths in ZiqaFS verified, documented with ARCH annotations, and formalized in [`docs/architecture/ziqafs-block-access-audit.md`](docs/architecture/ziqafs-block-access-audit.md).
 4.  **Input System Maturity**: ✅ **COMPLETED** — Interrupt-driven console input with buffer support and extended navigation (Delete key) added.
-5.  **Wayland Compositor Support**: 🔴 Not started — Leverage DRM/KMS driver for minimal bare-metal compositor.
+5.  **Wayland Compositor Support**: ✅ **COMPLETED** — Native Wayland-Compatible Compositor (NWCC) implemented with SHM-backed buffer sharing, Z-indexed surface composition, and DRM `MODE_PAGE_FLIP` integration.
 
 ### Long Term (P2)
 1.  ~~**SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.~~ ✅ **COMPLETED (May 2026)** — SMEP (CR4.20), SMAP (CR4.21), and UMIP (CR4.11) enabled after CPUID detection; `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets; CR4 write-back verification; `rt_sigaction` hardened.
