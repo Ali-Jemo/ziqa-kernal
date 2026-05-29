@@ -143,8 +143,8 @@ Following a comprehensive forensic audit, the project status has been updated to
 | :--- | :--- | :--- |
 | **Boot & HAL** | **Functional** | Reliable BIOS/UEFI boot. **Three-stage VGA boot pipeline with CP437-safe animation.** |
 | **Scheduler** | **Functional** | Robust MLFQ scheduling with priority boosting, signal delivery, and context switching. |
-| **Privilege** | **Work-in-Progress** | Full User-Space Isolation (Ring 3): This is your most critical limitation. While you have a scheduler, the current `ring3-hardening-plan.md` implies that robust privilege separation (protecting the kernel from userspace) is still a major active development track. |
-| **Syscall ABI** | **Hardened** | 111+ syscalls across fs, process, memory, time, net, misc; return proper error codes. |
+| **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. |
+| **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. |
 | **Memory** | **Hardening** | `copy_from_user` with page-table validation, demand paging placeholders, heap profiler. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
 | **eBPF VM** | **Experimental** | Bytecode verifier (kCFI) + interpreter; tracing and networking use cases. |
@@ -378,21 +378,22 @@ make zig-check   # Verify Zig blitter compiles independently
 ## 📈 Updated Technical Roadmap (Based on Graph Analysis)
 
 ### Immediate Priorities (P0)
-1.  **Privilege Separation**: Add Ring 3 user/kernel isolation to fix broken privilege model.
+1.  ~~**Privilege Separation**: Add Ring 3 user/kernel isolation to fix broken privilege model.~~ ✅ **COMPLETED (May 2026)** — Full Ring 3 hardening done: TSS hardening, ELF memory mapping audit, `rflags` sanitization across all kernel→user transitions (`iretq`/`sysretq`/Rust handler), paranoid register + XMM zeroing. See [`conductor/ring3-hardening-plan.md`](conductor/ring3-hardening-plan.md).
 2.  **Community Refactoring**: Continue the Graphify-driven split of low-cohesion Communities 0–3; Community 0 (Linux Syscall Handlers, cohesion 0.028) is the highest priority.
 3.  **Documentation Coverage**: Continue documenting auxiliary/config files to reduce weakly-connected nodes from 229 to <100.
 4.  **Zig Integration**: Expand Zig FFI surface beyond graphics blitter to cover more performance-critical paths.
 
 ### Medium Term (P1)
-1.  **Bridge Point Refactoring**: Evaluate tight coupling around central bridge nodes (`kernel_main()`, `ZiqaFs`, `Pid`).
-2.  **Cross-Community Validation**: Verify correctness of 19 inferred `read_block()` edges that span ZiqaFS subsystems.
-3.  **Input System Maturity**: Enhance keyboard input with proper buffering and interrupt-driven console editing.
-4.  **Wayland Compositor Support**: Leverage the DRM/KMS driver to run a minimal compositor on bare metal.
+1.  **Capability Space Enforcement**: Harden per-process capability tokens — enforce `CapabilitySpace` checks on all syscall paths to resource kinds (files, devices, IPC).
+2.  **Bridge Point Refactoring**: Evaluate tight coupling around central bridge nodes (`kernel_main()`, `ZiqaFs`, `Pid`).
+3.  **Cross-Community Validation**: Verify correctness of 19 inferred `read_block()` edges that span ZiqaFS subsystems.
+4.  **Input System Maturity**: Enhance keyboard input with proper buffering and interrupt-driven console editing.
+5.  **Wayland Compositor Support**: Leverage the DRM/KMS driver to run a minimal compositor on bare metal.
 
 ### Long Term (P2)
-1.  **Performance Tooling Decoupling**: Separate benchmarking subsystem from pagecache internals.
-2.  **ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.
-3.  **Advanced Security Features**: Implement capability-based security primitives (Capability Space) more thoroughly.
+1.  **SMEP/SMAP Enforcement**: Enable Supervisor Mode Execution/Access Prevention for defense-in-depth against kernel pointer exploits.
+2.  **Performance Tooling Decoupling**: Separate benchmarking subsystem from pagecache internals.
+3.  **ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.
 4.  **Multi-architecture Support**: Explore aarch64 or RISC-V as additional targets.
 
 <div align="center">
@@ -472,4 +473,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands</sup>
+<sup>Last updated: May 29, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | Rust + Zig hybrid | 111+ syscalls | 34 shell commands | Ring 3 hardening: ✅ complete</sup>
