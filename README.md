@@ -143,7 +143,7 @@ Following a comprehensive forensic audit, the project status has been updated to
 | :--- | :--- | :--- |
 | **Boot & HAL** | **Functional** | Reliable BIOS/UEFI boot. **Three-stage VGA boot pipeline with CP437-safe animation.** |
 | **Scheduler** | **Functional** | Robust MLFQ scheduling with priority boosting, signal delivery, and context switching. |
-| **Privilege** | **Broken** | Currently a kernel-mode execution environment; missing Ring 3 isolation. |
+| **Privilege** | **Work-in-Progress** | Full User-Space Isolation (Ring 3): This is your most critical limitation. While you have a scheduler, the current `ring3-hardening-plan.md` implies that robust privilege separation (protecting the kernel from userspace) is still a major active development track. |
 | **Syscall ABI** | **Hardened** | 111+ syscalls across fs, process, memory, time, net, misc; return proper error codes. |
 | **Memory** | **Hardening** | `copy_from_user` with page-table validation, demand paging placeholders, heap profiler. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
