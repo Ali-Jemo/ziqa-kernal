@@ -4,6 +4,7 @@
 /// 1. SHM-backed buffer allocation for clients.
 /// 2. Surface-to-Buffer attachments.
 /// 3. Integration with the Zig-accelerated blitter.
+/// 4. Downsampled VGA output for legacy display support.
 
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
@@ -109,8 +110,8 @@ impl CompositorState {
                         crate::zig_ffi::blend_rect(
                             target_fb,
                             target_pitch,
-                            (surface.x + 8) as u32,
-                            (surface.y + 8) as u32,
+                            (surface.x + 4) as u32,
+                            (surface.y + 4) as u32,
                             buf.width,
                             buf.height,
                             0x00000000, // Black
@@ -121,10 +122,10 @@ impl CompositorState {
                         crate::zig_ffi::fill_rect(
                             target_fb,
                             target_pitch,
-                            (surface.x - 2) as u32,
-                            (surface.y - 2) as u32,
-                            buf.width + 4,
-                            buf.height + 4,
+                            (surface.x - 1) as u32,
+                            (surface.y - 1) as u32,
+                            buf.width + 2,
+                            buf.height + 2,
                             0x003366FF, // Axiq Blue
                         );
 
@@ -171,52 +172,49 @@ impl CompositorState {
     /// Update mouse interaction logic
     fn update_interaction(&mut self) {
         let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
+        // Mouse range is 0..1920, 0..1080. Map to 80x25 for hit testing
+        let cur_x = mx * 80 / 1920;
+        let cur_y = my * 25 / 1080;
         
         if self.grabbed_surface.is_none() {
-            // Check for new grab (top 20px header)
-            if let Some(id) = self.hit_test(mx, my) {
+            if let Some(id) = self.hit_test(cur_x, cur_y) {
                 let s = self.surfaces.get(&id).unwrap();
-                if my < s.y + 20 { 
+                // Simple header grab
+                if cur_y < s.y + 2 { 
                     self.grabbed_surface = Some(id);
-                    self.grab_offset_x = mx - s.x;
-                    self.grab_offset_y = my - s.y;
+                    self.grab_offset_x = cur_x - s.x;
+                    self.grab_offset_y = cur_y - s.y;
                 }
             }
         } else if let Some(id) = self.grabbed_surface {
-            // Update position of grabbed window
             if let Some(s) = self.surfaces.get_mut(&id) {
-                s.x = mx - self.grab_offset_x;
-                s.y = my - self.grab_offset_y;
-                s.z_index = 100; // Bring to front
+                s.x = cur_x - self.grab_offset_x;
+                s.y = cur_y - self.grab_offset_y;
+                s.z_index = 100;
             }
-            // Release if mouse leaves screen area (demo hack)
-            if mx < 0 || my < 0 || mx > 1900 { self.grabbed_surface = None; }
+            if cur_x < 0 || cur_y < 0 || cur_x > 79 { self.grabbed_surface = None; }
         }
     }
 
-    /// Compose all active surfaces and blit to the HARDWARE framebuffer
+    /// Compose all active surfaces and blit to the physical VGA text screen
     pub fn run(&mut self) -> ! {
-        crate::println!("[NWCC] Starting Native Wayland-Compatible Compositor");
+        crate::println!("[NWCC] Starting Native Wayland-Compatible Compositor (VGA-Downsampled)");
 
-        // 1. Get hardware framebuffer info
-        let (hw_ptr, width, _height, pitch) = {
-            let fb_lock = crate::drivers::framebuffer::FB.lock();
-            let fb = fb_lock.as_ref().expect("Framebuffer not initialized");
-            (fb.ptr, fb.width as u32, fb.height as u32, fb.pitch as u32)
-        };
-        // Height is fixed at 1080 for this 32MiB heap allocation
-        let height = 1080;
+        // 1. Virtual Resolution: 80x25
+        let width = 80;
+        let height = 25;
+        let pitch = width * 4;
 
         // 2. Pre-register surface 1 for demo
         self.surfaces.insert(1, Surface {
             owner: Pid(0),
             active_buffer: None,
-            x: 50, y: 50, z_index: 10,
+            x: 10, y: 5, z_index: 10,
         });
 
-        // 3. Allocate back-buffer
-        let mut back_buffer = alloc::vec![0u8; (pitch * height) as usize].into_boxed_slice();
-        let bb_ptr = back_buffer.as_mut_ptr();
+        // 3. Allocate back-buffer (u32 pixels)
+        let mut back_buffer = alloc::vec![0u32; (width * height) as usize].into_boxed_slice();
+        let bb_ptr = back_buffer.as_mut_ptr() as *mut u8;
 
         loop {
             // 4. Interaction & IPC
@@ -224,31 +222,21 @@ impl CompositorState {
             self.process_ipc();
 
             // 5. Render to Back-buffer
-            crate::zig_ffi::clear(bb_ptr, (pitch * height) as usize, 0xFF111111); // Gray
-            self.compose(bb_ptr, pitch);
-            self.draw_cursor(bb_ptr, pitch);
+            crate::zig_ffi::clear(bb_ptr, (pitch * height) as usize, 0xFF111111); // Dark Gray
+            self.compose(bb_ptr, pitch as u32);
+            
+            // Draw Cursor
+            let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
+            let cur_x = (mx * 80 / 1920) as u32;
+            let cur_y = (my * 25 / 1080) as u32;
+            crate::zig_ffi::fill_rect(bb_ptr, pitch as u32, cur_x, cur_y, 1, 1, 0xFFFFFFFF);
 
-            // 6. HARDWARE SYNC: Copy back-buffer to actual screen
-            crate::zig_ffi::memcpy(hw_ptr, bb_ptr, (pitch * height) as usize);
+            // 6. Present to Physical VGA Screen
+            present_to_vga(&back_buffer);
 
-            // 7. VSync delay
+            // 7. Loop delay
             crate::timer::sleep_ms(Pid(0), 16); 
         }
-    }
-
-    /// Render a native Axiq-IQ mouse cursor
-    fn draw_cursor(&self, target_fb: *mut u8, pitch: u32) {
-        let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
-        crate::zig_ffi::fill_rect(
-            target_fb,
-            pitch,
-            mx as u32,
-            my as u32,
-            12,
-            12,
-            0xFFFFFFFF, // White
-        );
-        crate::zig_ffi::draw_line(target_fb, pitch, mx as u32, my as u32, (mx+12) as u32, (my+12) as u32, 0xFF000000);
     }
 
     /// Poll for IPC messages from clients
@@ -288,11 +276,63 @@ impl CompositorState {
                     s.y = y;
                 }
             }
-            WlMessage::Commit { surface_id: _ } => {
-                // Redraw is continuous
+            WlMessage::Commit { surface_id: _ } => {}
+        }
+    }
+}
+
+// ── Downsampling Helpers ───────────────────────────────────────────────────
+
+fn present_to_vga(v_fb: &[u32]) {
+    let offset = crate::BOOT_INFO.lock()
+        .as_ref()
+        .map(|bi| bi.physical_memory_offset)
+        .unwrap_or(0);
+    let vga_ptr = (offset + 0xb8000) as *mut u16;
+    for y in 0..25 {
+        for x in 0..80 {
+            let val = v_fb[y * 80 + x];
+            let char_val = if val == 0 {
+                (b' ' as u16) | (0x00u16 << 8)
+            } else if (val & 0xFF000000) == 0xFF000000 {
+                let ascii = (val & 0xFF) as u8;
+                let fg = ((val >> 8) & 0xFF) as u8;
+                let bg = ((val >> 16) & 0xFF) as u8;
+                (ascii as u16) | ((((bg << 4) | fg) as u16) << 8)
+            } else {
+                let vga_color = get_closest_vga_color(val);
+                0xDBu16 | ((vga_color as u16) << 8)
+            };
+            unsafe {
+                core::ptr::write_volatile(vga_ptr.add(y * 80 + x), char_val);
             }
         }
     }
+}
+
+fn get_closest_vga_color(color: u32) -> u8 {
+    let vga_colors: [u32; 16] = [
+        0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
+        0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+        0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+        0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+    ];
+    let r = ((color >> 16) & 0xFF) as i32;
+    let g = ((color >> 8) & 0xFF) as i32;
+    let b = (color & 0xFF) as i32;
+    let mut best_idx = 0;
+    let mut min_dist = i32::MAX;
+    for (i, &vc) in vga_colors.iter().enumerate() {
+        let vr = ((vc >> 16) & 0xFF) as i32;
+        let vg = ((vc >> 8) & 0xFF) as i32;
+        let vb = (vc & 0xFF) as i32;
+        let dist = (r - vr) * (r - vr) + (g - vg) * (g - vg) + (b - vb) * (b - vb);
+        if dist < min_dist {
+            min_dist = dist;
+            best_idx = i;
+        }
+    }
+    best_idx as u8
 }
 
 pub fn start() -> ! {
