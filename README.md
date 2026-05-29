@@ -145,7 +145,7 @@ Following a comprehensive forensic audit, the project status has been updated to
 | **Scheduler** | **Functional** | Robust MLFQ scheduling with priority boosting, signal delivery, and context switching. |
 | **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. **SMEP (CR4.20), SMAP (CR4.21), UMIP (CR4.11)** enabled after CPUID detection with CR4 write-back verification. `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets. |
 | **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. |
-| **Memory** | **Hardening** | `copy_from_user` with page-table validation, demand paging placeholders, heap profiler. |
+| **Memory** | **Hardened** | 32MiB heap; `copy_from_user` with page-table validation, heap profiler, frame allocator. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
 | **eBPF VM** | **Experimental** | Bytecode verifier (kCFI) + interpreter; tracing and networking use cases. |
 | **Shell** | **Feature-rich** | Tab completion, arrow history, ANSI colors, 34 commands, autocomplete. |

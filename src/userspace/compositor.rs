@@ -127,7 +127,14 @@ impl CompositorState {
             (res.width, res.height, res.width * 4)
         };
 
-        // 2. Allocate a real back-buffer via DRM
+        // 2. Pre-register surface 1 for demo
+        self.surfaces.insert(1, Surface {
+            owner: Pid(0),
+            active_buffer: None,
+            x: 100, y: 100, z_index: 10,
+        });
+
+        // 3. Allocate a real back-buffer via DRM
         let mut back_buffer = alloc::vec![0u8; (width * height * 4) as usize].into_boxed_slice();
         let bb_ptr = back_buffer.as_mut_ptr();
 
