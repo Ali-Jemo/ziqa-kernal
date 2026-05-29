@@ -33,15 +33,16 @@ extern fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6
 pub fn main() void {
     const width: u32 = 400;
     const height: u32 = 300;
-    const compositor_chan: u64 = 1; // Well-known or passed via env
+    const compositor_chan: u64 = 1;
 
-    // 1. Create SHM Segment (400x300x4 bytes)
+    // 1. Create SHM Segment
     const shm_id = ziqa_syscall(ZIQA_SHM_CREATE, width * height * 4, 0, 0, 0, 0, 0);
+    const shm_ptr: [*]u32 = @ptrFromInt(ziqa_syscall(1011, shm_id, 0, 0, 0, 0, 0)); // ZIQA_SHM_ATTACH
 
     // 2. Register Buffer with Compositor
     var msg = WlMessage{
         .create_buffer = .{
-            .owner_pid = 0, // Current process
+            .owner_pid = 0,
             .shm_id = shm_id,
             .width = width,
             .height = height,
@@ -50,13 +51,22 @@ pub fn main() void {
     _ = ziqa_syscall(ZIQA_IPC_SEND, compositor_chan, @intFromPtr(&msg), @sizeOf(WlMessage), 0, 0, 0);
 
     // 3. High-performance rendering loop
-    var color: u32 = 0xFFFF0000; // Bright Red
+    var tick: u32 = 0;
     while (true) {
-        // High-speed Zig logic here (e.g., raycasting, particles)
-        // For demo: just cycle colors to show speed
-        color = color +% 1;
+        tick +%= 1;
         
-        // Signal compositor to refresh (Commit)
+        // Render ultra-fast color cycle directly in SHM
+        var i: usize = 0;
+        while (i < width * height) : (i += 1) {
+            const x = @as(u32, @intCast(i % width));
+            const y = @as(u32, @intCast(i / width));
+            const r = (x + tick) & 0xFF;
+            const g = (y + tick) & 0xFF;
+            const b = (x + y + tick) & 0xFF;
+            shm_ptr[i] = (r << 16) | (g << 8) | b;
+        }
+        
+        // Signal compositor (Attach/Commit)
         const commit_msg = WlMessage{ .attach = .{ .surface_id = 1, .buffer_id = 1 } };
         _ = ziqa_syscall(ZIQA_IPC_SEND, compositor_chan, @intFromPtr(&commit_msg), @sizeOf(WlMessage), 0, 0, 0);
     }
