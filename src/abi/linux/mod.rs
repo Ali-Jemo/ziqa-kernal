@@ -188,12 +188,24 @@ impl AbiPlugin for LinuxAbiPlugin {
 
     fn handle_syscall(
         &self,
-        _handler: &dyn crate::abi::handler::SyscallHandler,
+        handler: &dyn crate::abi::handler::SyscallHandler,
         ctx: &mut SyscallContext,
     ) -> Result<u64, AbiError> {
-        // Graphify Community 0 boundary: keep this facade thin and delegate
-        // syscall families to focused dispatch modules. Handler bodies are
-        // migrated behind these boundaries incrementally.
+        // Handle native capability/signal syscalls first (independent of ABI kind)
+        match ctx.number {
+            crate::abi::syscall::nr::ZIQA_CAP_CLOSE |
+            crate::abi::syscall::nr::ZIQA_CAP_SEEK  |
+            crate::abi::syscall::nr::ZIQA_SIG_SETACTION |
+            crate::abi::syscall::nr::ZIQA_SIG_GETMASK   |
+            crate::abi::syscall::nr::ZIQA_SIG_SETMASK   |
+            crate::abi::syscall::nr::ZIQA_SIG_KILL      |
+            crate::abi::syscall::nr::ZIQA_SIG_PAUSE     => {
+                return crate::abi::syscall::dispatch_syscall(&crate::init_abi_registry(), handler, ctx);
+            }
+            _ => {}
+        }
+
+        // Handle Linux-specific syscalls
         if let Some(result) = memory::handle(ctx) {
             return result;
         }
@@ -903,10 +915,51 @@ fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     Ok(0)
 }
 
-/// sys_rt_sigaction(signum, act, oldact, sigsetsize) → 0
-fn sys_rt_sigaction(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    Ok(0) // stub: accept all signal handler registrations
+/// sys_rt_sigaction(signum, act_ptr, oldact_ptr, sigsetsize) → 0 / -EINVAL
+///
+/// Linux struct sigaction layout (x86_64, simplified):
+///   offset 0:  sa_handler  (u64 — pointer or SIG_DFL=0 / SIG_IGN=1)
+///   offset 8:  sa_flags    (u64)
+///   offset 16: sa_restorer (u64 — ignored; we install our own trampoline)
+///   offset 24: sa_mask     (u64 — first 64-bit word of the signal set)
+///
+/// We map SIG_DFL(0) → SignalAction::Default, SIG_IGN(1) → SignalAction::Ignore,
+/// anything else → SignalAction::Handler(ptr).
+fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    use crate::process::signal::{SignalAction, sig};
+    let signum   = ctx.args[0] as u8;
+    let act_ptr  = ctx.args[1] as *const u64;
+
+    if signum == 0 || signum > sig::MAX {
+        return Ok((-22_i64) as u64); // -EINVAL
+    }
+    if signum == sig::SIGKILL || signum == sig::SIGSTOP {
+        return Ok((-22_i64) as u64); // -EINVAL: cannot catch/ignore
+    }
+
+    // If act_ptr is null this is a query-only call (just returns oldact).
+    if !act_ptr.is_null() {
+        // Safety: act_ptr comes from userspace; we validate it is non-null.
+        // A proper implementation would use copy_from_user with page-table checks.
+        let (sa_handler, _sa_flags) = unsafe {
+            (*act_ptr, *act_ptr.add(1))
+        };
+
+        let action = match sa_handler {
+            0 => SignalAction::Default,
+            1 => SignalAction::Ignore,
+            ptr => SignalAction::Handler(ptr),
+        };
+
+        ctx.process.signals.set_action(signum, action);
+        crate::klog!(crate::klog::Level::Debug,
+            "rt_sigaction: sig={} handler=0x{:x}", signum, sa_handler);
+    }
+
+    // oldact_ptr output is not filled (would need copy_to_user).
+    Ok(0)
 }
+
 
 /// sys_clone(flags, stack, ptid, ctid, regs) → child_pid
 /// Clone flags:
