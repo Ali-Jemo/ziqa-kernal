@@ -19,7 +19,7 @@
 ---
 
 ## 🔬 Executive Summary
-ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **Instant Capability Revocation**, **A-Tier Scalable Architecture**, **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF verifier + VM**, **io_uring**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
+ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **Instant Capability Revocation**, **A-Tier Scalable Architecture**, **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF "Obsidian-Tier" VM (Maps/Helpers/Stack)**, **io_uring**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
 
 **Key Architectural Insights (May 2026):**
 - **Instant Capability Revocation (A+ Tier)**: Implemented a recursive **Revocation Tree**. Parents can instantly "pull the plug" on delegated capabilities, severing access system-wide across all descendant processes in real-time.
@@ -152,7 +152,7 @@ Following a comprehensive forensic audit, the project status has been updated to
 | **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. |
 | **Memory** | **Hardened** | 32MiB heap; `copy_from_user` with page-table validation, heap profiler, frame allocator. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
-| **eBPF VM** | **Experimental** | Bytecode verifier (kCFI) + interpreter; tracing and networking use cases. |
+| **eBPF VM** | **Experimental** | Bytecode verifier (kCFI, bounded loops) + interpreter; tracing, networking, and bounded tail calls (up to 32 deep). Hash map support with linear probing. |
 | **Shell** | **Modernized** | Zero-alloc prompt, real parser (quotes/escapes/env expansion), 40+ builtins via command registry, job control (`bg`/`fg`/`jobs`), tab completion, arrow history, ANSI colors. |
 | **Graphics** | **Demos** | DOOM fire + Tetris on bare metal; DRM/KMS driver for future compositor support. |
 
@@ -204,8 +204,10 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 
 ### 1. Memory Model
 *   **4-Level Paging**: Standard x86_64 paging implementation.
-*   **Safe Access**: New `copy_from_user` routine validates all user-space memory access via page-table walkers.
-*   **Demand Paging**: Placeholder mechanism for ELF binary loading.
+*   **Per-Process Page Tables**: Each user process gets its own L4 page table with kernel entries (256–511) shared by pointer and user entries (0–255) cloned for COW fork.
+*   **Pre-Mapped ELF Segments**: `map_process_regions()` allocates physical frames and copies ELF binary data into new user pages at load time — no demand paging needed for initial code/data.
+*   **Safe Access**: `copy_from_user` routine validates all user-space memory access via page-table walkers.
+*   **Demand Paging**: Placeholder mechanism for lazy page allocation and COW resolution.
 *   **Frame Allocator**: BootInfo-based physical frame allocator.
 *   **Heap Profiler**: Tracks allocation rates, fragmentation, and usage.
 
@@ -306,8 +308,9 @@ A minimal Direct Rendering Manager / Kernel Mode Setting driver ([`src/drivers/d
 
 ### 13. eBPF Verifier + VM
 Extended Berkeley Packet Filter subsystem ([`src/ebpf/`](src/ebpf/)) for running safe, verified kernel-space programs:
-- **Verifier** — kCFI (Control-Flow Integrity) checks, loop detection, stack depth validation
-- **VM** — interpreter for verified eBPF bytecode with ALU ops, jumps, memory access, and function calls
+- **Verifier** — kCFI (Control-Flow Integrity) checks, bounded loop detection, stack depth validation
+- **VM** — interpreter for verified eBPF bytecode with ALU ops, jumps, memory access, function calls, and tail calls (max depth 32)
+- **Maps** — Array, Hash (linear probing), RingBuf, and ProgArray map types
 - **Use cases**: tracing, networking filters, security auditing
 
 ### 14. Performance Suite

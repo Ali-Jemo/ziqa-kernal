@@ -22,184 +22,201 @@ impl BpfVm {
     }
 
     /// Execute a verified program
-    pub fn execute(&mut self, program: &[BpfInstruction]) -> BpfResult {
-        let mut pc = 0;
-        let mut inst_count = 0;
-        const MAX_INSTRUCTIONS: usize = 1_000_000;
+    pub fn execute(&mut self, mut program: &[BpfInstruction]) -> BpfResult {
+        let mut tail_call_cnt = 0;
+        const MAX_TAIL_CALLS: usize = 32;
 
-        while pc < program.len() {
-            inst_count += 1;
-            if inst_count > MAX_INSTRUCTIONS {
-                return Err(BpfError::ExecutionError); // Limit reached
+        'exec: loop {
+            let mut pc = 0;
+            let mut inst_count = 0;
+            const MAX_INSTRUCTIONS: usize = 1_000_000;
+
+            while pc < program.len() {
+                inst_count += 1;
+                if inst_count > MAX_INSTRUCTIONS {
+                    return Err(BpfError::ExecutionError); // Limit reached
+                }
+
+                let insn = program[pc];
+                let dst = insn.dst_reg() as usize;
+
+                // Validate register boundaries to ensure memory safety
+                if dst >= 11 || insn.src_reg() >= 11 {
+                    return Err(BpfError::OutOfBounds);
+                }
+
+                match insn.code {
+                    op::LD_IMM_64 => {
+                        // LD_IMM_64 is a 16-byte instruction.
+                        // The next 8 bytes contain the upper 32 bits in their 'imm' field.
+                        if pc + 1 >= program.len() {
+                            return Err(BpfError::ExecutionError);
+                        }
+                        pc += 1;
+                        let next_insn = program[pc];
+                        let imm64 = (insn.imm as u32 as u64) | ((next_insn.imm as u64) << 32);
+                        self.registers[dst] = imm64;
+                    }
+                    op::MOV => {
+                        self.registers[dst] = insn.imm as u64;
+                    }
+                    op::MOV_X => {
+                        self.registers[dst] = self.registers[insn.src_reg() as usize];
+                    }
+                    op::ALU_ADD => {
+                        self.registers[dst] = self.registers[dst].wrapping_add(insn.imm as u64);
+                    }
+                    op::ALU_ADD_X => {
+                        self.registers[dst] = self.registers[dst].wrapping_add(self.registers[insn.src_reg() as usize]);
+                    }
+                    op::ALU_SUB => {
+                        self.registers[dst] = self.registers[dst].wrapping_sub(insn.imm as u64);
+                    }
+                    op::ALU_SUB_X => {
+                        self.registers[dst] = self.registers[dst].wrapping_sub(self.registers[insn.src_reg() as usize]);
+                    }
+                    op::ALU_MUL => {
+                        self.registers[dst] = self.registers[dst].wrapping_mul(insn.imm as u64);
+                    }
+                    op::ALU_MUL_X => {
+                        self.registers[dst] = self.registers[dst].wrapping_mul(self.registers[insn.src_reg() as usize]);
+                    }
+                    op::ALU_DIV => {
+                        if insn.imm == 0 {
+                            return Err(BpfError::ExecutionError);
+                        }
+                        self.registers[dst] /= insn.imm as u64;
+                    }
+                    op::ALU_DIV_X => {
+                        let src = self.registers[insn.src_reg() as usize];
+                        if src == 0 {
+                            return Err(BpfError::ExecutionError);
+                        }
+                        self.registers[dst] /= src;
+                    }
+                    op::ALU_AND => {
+                        self.registers[dst] &= insn.imm as u64;
+                    }
+                    op::ALU_AND_X => {
+                        self.registers[dst] &= self.registers[insn.src_reg() as usize];
+                    }
+                    op::ALU_OR => {
+                        self.registers[dst] |= insn.imm as u64;
+                    }
+                    op::ALU_OR_X => {
+                        self.registers[dst] |= self.registers[insn.src_reg() as usize];
+                    }
+                    op::ALU_XOR => {
+                        self.registers[dst] ^= insn.imm as u64;
+                    }
+                    op::ALU_XOR_X => {
+                        self.registers[dst] ^= self.registers[insn.src_reg() as usize];
+                    }
+                    op::ALU_LSH => {
+                        self.registers[dst] = self.registers[dst].wrapping_shl(insn.imm as u32);
+                    }
+                    op::ALU_LSH_X => {
+                        self.registers[dst] = self.registers[dst].wrapping_shl(self.registers[insn.src_reg() as usize] as u32);
+                    }
+                    op::ALU_RSH => {
+                        self.registers[dst] = self.registers[dst].wrapping_shr(insn.imm as u32);
+                    }
+                    op::ALU_RSH_X => {
+                        self.registers[dst] = self.registers[dst].wrapping_shr(self.registers[insn.src_reg() as usize] as u32);
+                    }
+                    op::JMP_JA => {
+                        pc = (pc as i32 + insn.off as i32) as usize;
+                    }
+                    op::JMP_JEQ => {
+                        if self.registers[dst] == insn.imm as u64 {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JEQ_X => {
+                        if self.registers[dst] == self.registers[insn.src_reg() as usize] {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JNE => {
+                        if self.registers[dst] != insn.imm as u64 {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JNE_X => {
+                        if self.registers[dst] != self.registers[insn.src_reg() as usize] {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JGT => {
+                        if self.registers[dst] > insn.imm as u64 {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JGT_X => {
+                        if self.registers[dst] > self.registers[insn.src_reg() as usize] {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JGE => {
+                        if self.registers[dst] >= insn.imm as u64 {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::JMP_JGE_X => {
+                        if self.registers[dst] >= self.registers[insn.src_reg() as usize] {
+                            pc = (pc as i32 + insn.off as i32) as usize;
+                        }
+                    }
+                    op::LDX_W => {
+                        let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
+                        self.registers[dst] = unsafe { *(addr as *const u32) } as u64;
+                    }
+                    op::LDX_DW => {
+                        let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
+                        self.registers[dst] = unsafe { *(addr as *const u64) };
+                    }
+                    op::STX_W => {
+                        let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        unsafe { *(addr as *mut u32) = self.registers[insn.src_reg() as usize] as u32 };
+                    }
+                    op::STX_DW => {
+                        let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        unsafe { *(addr as *mut u64) = self.registers[insn.src_reg() as usize] };
+                    }
+                    op::ST_W => {
+                        let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        unsafe { *(addr as *mut u32) = insn.imm as u32 };
+                    }
+                    op::ST_DW => {
+                        let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        unsafe { *(addr as *mut u64) = insn.imm as u64 };
+                    }
+                    op::CALL => {
+                        match self.call_helper(insn.imm) {
+                            Err(BpfError::TailCall(prog_ptr)) => {
+                                tail_call_cnt += 1;
+                                if tail_call_cnt > MAX_TAIL_CALLS {
+                                    return Err(BpfError::ExecutionError);
+                                }
+                                let next_prog = unsafe { &*(prog_ptr as *const crate::ebpf::attach::BpfProgram) };
+                                program = &next_prog.instructions;
+                                continue 'exec;
+                            }
+                            Ok(v) => self.registers[0] = v,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    op::RET => {
+                        return Ok(self.registers[0]);
+                    }
+                    _ => return Err(BpfError::ExecutionError),
+                }
+
+                pc += 1;
             }
 
-            let insn = program[pc];
-            let dst = insn.dst_reg() as usize;
-
-            // Validate register boundaries to ensure memory safety
-            if dst >= 11 || insn.src_reg() >= 11 {
-                return Err(BpfError::OutOfBounds);
-            }
-
-            match insn.code {
-                op::LD_IMM_64 => {
-                    // LD_IMM_64 is a 16-byte instruction.
-                    // The next 8 bytes contain the upper 32 bits in their 'imm' field.
-                    if pc + 1 >= program.len() {
-                        return Err(BpfError::ExecutionError);
-                    }
-                    pc += 1;
-                    let next_insn = program[pc];
-                    let imm64 = (insn.imm as u32 as u64) | ((next_insn.imm as u64) << 32);
-                    self.registers[dst] = imm64;
-                }
-                op::MOV => {
-                    self.registers[dst] = insn.imm as u64;
-                }
-                op::MOV_X => {
-                    self.registers[dst] = self.registers[insn.src_reg() as usize];
-                }
-                op::ALU_ADD => {
-                    self.registers[dst] = self.registers[dst].wrapping_add(insn.imm as u64);
-                }
-                op::ALU_ADD_X => {
-                    self.registers[dst] = self.registers[dst].wrapping_add(self.registers[insn.src_reg() as usize]);
-                }
-                op::ALU_SUB => {
-                    self.registers[dst] = self.registers[dst].wrapping_sub(insn.imm as u64);
-                }
-                op::ALU_SUB_X => {
-                    self.registers[dst] = self.registers[dst].wrapping_sub(self.registers[insn.src_reg() as usize]);
-                }
-                op::ALU_MUL => {
-                    self.registers[dst] = self.registers[dst].wrapping_mul(insn.imm as u64);
-                }
-                op::ALU_MUL_X => {
-                    self.registers[dst] = self.registers[dst].wrapping_mul(self.registers[insn.src_reg() as usize]);
-                }
-                op::ALU_DIV => {
-                    if insn.imm == 0 {
-                        return Err(BpfError::ExecutionError);
-                    }
-                    self.registers[dst] /= insn.imm as u64;
-                }
-                op::ALU_DIV_X => {
-                    let src = self.registers[insn.src_reg() as usize];
-                    if src == 0 {
-                        return Err(BpfError::ExecutionError);
-                    }
-                    self.registers[dst] /= src;
-                }
-                op::ALU_AND => {
-                    self.registers[dst] &= insn.imm as u64;
-                }
-                op::ALU_AND_X => {
-                    self.registers[dst] &= self.registers[insn.src_reg() as usize];
-                }
-                op::ALU_OR => {
-                    self.registers[dst] |= insn.imm as u64;
-                }
-                op::ALU_OR_X => {
-                    self.registers[dst] |= self.registers[insn.src_reg() as usize];
-                }
-                op::ALU_XOR => {
-                    self.registers[dst] ^= insn.imm as u64;
-                }
-                op::ALU_XOR_X => {
-                    self.registers[dst] ^= self.registers[insn.src_reg() as usize];
-                }
-                op::ALU_LSH => {
-                    self.registers[dst] = self.registers[dst].wrapping_shl(insn.imm as u32);
-                }
-                op::ALU_LSH_X => {
-                    self.registers[dst] = self.registers[dst].wrapping_shl(self.registers[insn.src_reg() as usize] as u32);
-                }
-                op::ALU_RSH => {
-                    self.registers[dst] = self.registers[dst].wrapping_shr(insn.imm as u32);
-                }
-                op::ALU_RSH_X => {
-                    self.registers[dst] = self.registers[dst].wrapping_shr(self.registers[insn.src_reg() as usize] as u32);
-                }
-                op::JMP_JA => {
-                    pc = (pc as i32 + insn.off as i32) as usize;
-                }
-                op::JMP_JEQ => {
-                    if self.registers[dst] == insn.imm as u64 {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JEQ_X => {
-                    if self.registers[dst] == self.registers[insn.src_reg() as usize] {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JNE => {
-                    if self.registers[dst] != insn.imm as u64 {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JNE_X => {
-                    if self.registers[dst] != self.registers[insn.src_reg() as usize] {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JGT => {
-                    if self.registers[dst] > insn.imm as u64 {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JGT_X => {
-                    if self.registers[dst] > self.registers[insn.src_reg() as usize] {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JGE => {
-                    if self.registers[dst] >= insn.imm as u64 {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::JMP_JGE_X => {
-                    if self.registers[dst] >= self.registers[insn.src_reg() as usize] {
-                        pc = (pc as i32 + insn.off as i32) as usize;
-                    }
-                }
-                op::LDX_W => {
-                    let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
-                    self.registers[dst] = unsafe { *(addr as *const u32) } as u64;
-                }
-                op::LDX_DW => {
-                    let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
-                    self.registers[dst] = unsafe { *(addr as *const u64) };
-                }
-                op::STX_W => {
-                    let addr = self.registers[dst].wrapping_add(insn.off as u64);
-                    unsafe { *(addr as *mut u32) = self.registers[insn.src_reg() as usize] as u32 };
-                }
-                op::STX_DW => {
-                    let addr = self.registers[dst].wrapping_add(insn.off as u64);
-                    unsafe { *(addr as *mut u64) = self.registers[insn.src_reg() as usize] };
-                }
-                op::ST_W => {
-                    let addr = self.registers[dst].wrapping_add(insn.off as u64);
-                    unsafe { *(addr as *mut u32) = insn.imm as u32 };
-                }
-                op::ST_DW => {
-                    let addr = self.registers[dst].wrapping_add(insn.off as u64);
-                    unsafe { *(addr as *mut u64) = insn.imm as u64 };
-                }
-                op::CALL => {
-                    self.registers[0] = self.call_helper(insn.imm)?;
-                }
-                op::RET => {
-                    return Ok(self.registers[0]);
-                }
-                _ => return Err(BpfError::ExecutionError),
-            }
-
-            pc += 1;
+            return Err(BpfError::ExecutionError);
         }
-
-        Err(BpfError::ExecutionError)
     }
 
     /// Execute a verified program with initial register values for tracing.
@@ -277,8 +294,21 @@ impl BpfVm {
                 Ok(per_cpu::current_cpu().cpu_id as u64)
             }
             helpers::GET_CURRENT_COMM => {
-                use crate::arch::x86_64::per_cpu;
-                Ok(per_cpu::current_cpu().current_pid().map_or(0, |p| p.0)) // FIXME: implement comm
+                let buf = self.registers[1] as *mut u8;
+                let size = self.registers[2] as usize;
+                // Currently processes don't have a comm name, so we use a dummy name.
+                let comm = b"ziqa-proc\0";
+                unsafe {
+                    let len = size.min(comm.len());
+                    core::ptr::copy_nonoverlapping(comm.as_ptr(), buf, len);
+                    // Null-terminate the rest if needed, though BPF programs usually assume null-termination
+                    if len < size {
+                        core::ptr::write_bytes(buf.add(len), 0, size - len);
+                    } else if size > 0 {
+                        *buf.add(size - 1) = 0;
+                    }
+                }
+                Ok(0)
             }
             helpers::PROBE_READ => {
                 let dst_ptr = self.registers[1] as *mut u8;
@@ -302,6 +332,27 @@ impl BpfVm {
                 let bytes = unsafe { core::slice::from_raw_parts(fmt_ptr, fmt_size.min(64)) };
                 if let Ok(s) = core::str::from_utf8(bytes) {
                     crate::println!("[eBPF TRACE] {}", s);
+                }
+                Ok(0)
+            }
+            helpers::TAIL_CALL => {
+                let map_id = self.registers[1] as usize;
+                let index_ptr = self.registers[2];
+                if let Some(map) = crate::ebpf::map::BPF_MAPS.get(map_id) {
+                    if map.map_type == crate::ebpf::map::BpfMapType::ProgArray {
+                        // We use index directly rather than a pointer for ProgArray tail calls?
+                        // Wait, lookup takes key_ptr, but tail call usually takes index directly in R2.
+                        // Let's assume R2 is the index directly. We need to synthesize a key_ptr.
+                        let index = index_ptr as u32;
+                        let key_ptr_synth = &index as *const u32 as u64;
+                        let ptr = map.lookup(key_ptr_synth)?;
+                        if ptr != 0 {
+                            let prog_handle = unsafe { *(ptr as *const u64) };
+                            if prog_handle != 0 {
+                                return Err(BpfError::TailCall(prog_handle));
+                            }
+                        }
+                    }
                 }
                 Ok(0)
             }
