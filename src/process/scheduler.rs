@@ -220,7 +220,7 @@ impl Scheduler {
         None
     }
 
-    pub fn waitpid(&self, parent: Pid, child_pid: i64) -> Option<(Pid, i64)> {
+    pub fn waitpid(&self, parent: Pid, child_pid: i64, _options: i32) -> Option<(Pid, i64)> {
         let table = self.process_table.read();
         for slot in table.tasks.iter() {
             if let Some(proc_arc) = slot {

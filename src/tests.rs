@@ -35,7 +35,7 @@ pub fn run_all() {
             let ok = pid.is_some();
             if let Some(p) = pid {
                 SCHEDULER.exit_process(p, 0);
-                SCHEDULER.waitpid(Pid(0), p.0 as i64);
+                SCHEDULER.waitpid(Pid(0), p.0 as i64, 0);
             }
             ok
         });
@@ -492,7 +492,7 @@ pub fn run_all() {
                 };
                 {
                     let sched = &SCHEDULER;
-                    sched.waitpid(crate::process::Pid(0), pid.0 as i64);
+                    sched.waitpid(crate::process::Pid(0), pid.0 as i64, 0);
                 }
                 ok
             } else {
@@ -534,7 +534,7 @@ pub fn run_all() {
                 };
                 {
                     let sched = &SCHEDULER;
-                    sched.waitpid(crate::process::Pid(0), pid.0 as i64);
+                    sched.waitpid(crate::process::Pid(0), pid.0 as i64, 0);
                 }
                 ok
             } else {

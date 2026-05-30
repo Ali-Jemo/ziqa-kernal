@@ -147,10 +147,10 @@ global_asm!(
         # The interrupt frame is 40 bytes higher up:
         #   rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 [gap] rip cs rflags rsp ss
         # This matches CpuState layout:
-        #   struct CpuState {
+        #   struct CpuState {{
         #       r15..rax (15 regs = 120 bytes),
         #       rip, cs, rflags, rsp, ss (5 regs = 40 bytes)
-        #   }
+        #   }}
         # But wait — we pushed in reverse order (rax last), which matches CpuState
         # where rax is at the highest offset within the GPR block:
         #   r15 (lowest addr), r14, ..., rax (highest addr)

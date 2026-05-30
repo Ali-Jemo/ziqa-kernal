@@ -838,11 +838,16 @@ fn sys_kill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// We map sys_waitpid (114) here; args[0]=pid, args[1]=wstatus_ptr.
 fn sys_waitpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let child_pid = ctx.args[0] as i64;
+    let status_ptr = ctx.args[1] as *mut i32;
+    let options = ctx.args[2] as i32;
     let parent = ctx.process.pid;
-    match crate::process::scheduler::SCHEDULER
-        .waitpid(parent, child_pid)
-    {
+    match crate::process::scheduler::SCHEDULER.waitpid(parent, child_pid, options) {
         Some((pid, code)) => {
+            if !status_ptr.is_null() {
+                unsafe {
+                    *status_ptr = (code as i32 & 0xFF) << 8;
+                }
+            }
             println!("[Linux ABI] waitpid → child {} exited with {}", pid.0, code);
             Ok(pid.0)
         }

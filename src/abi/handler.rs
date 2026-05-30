@@ -19,6 +19,6 @@ impl SyscallHandler for KernelSyscallHandler {
     }
 
     fn waitpid(&self, parent_pid: u64, child_pid: i64) -> Option<(u64, i64)> {
-        crate::process::scheduler::SCHEDULER.waitpid(crate::process::Pid(parent_pid), child_pid).map(|(p, code)| (p.0, code))
+        crate::process::scheduler::SCHEDULER.waitpid(crate::process::Pid(parent_pid), child_pid, 0).map(|(p, code)| (p.0, code))
     }
 }
