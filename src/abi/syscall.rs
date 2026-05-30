@@ -12,6 +12,76 @@
 use crate::process::{Process, ProcessState};
 use crate::capability::ResourceKind;
 
+/// Convert an AbiError to an errno value.
+pub fn abi_error_to_errno(e: &crate::abi::AbiError) -> u64 {
+    use crate::abi::AbiError;
+    match e {
+        AbiError::Other(s) => {
+            if s.contains("EPERM") {
+                errno::EPERM
+            } else if s.contains("ENOENT") {
+                errno::ENOENT
+            } else if s.contains("ESRCH") {
+                errno::ESRCH
+            } else if s.contains("EINTR") {
+                errno::EINTR
+            } else if s.contains("EIO") {
+                errno::EIO
+            } else if s.contains("ENXIO") {
+                errno::ENXIO
+            } else if s.contains("E2BIG") {
+                errno::E2BIG
+            } else if s.contains("ENOMEM") {
+                errno::ENOMEM
+            } else if s.contains("EACCES") {
+                errno::EACCES
+            } else if s.contains("EBADF") {
+                errno::EBADF
+            } else if s.contains("EBUSY") {
+                errno::EBUSY
+            } else if s.contains("EEXIST") {
+                errno::EEXIST
+            } else if s.contains("EXDEV") {
+                errno::EXDEV
+            } else if s.contains("ENODEV") {
+                errno::ENODEV
+            } else if s.contains("ENOTDIR") {
+                errno::ENOTDIR
+            } else if s.contains("EISDIR") {
+                errno::EISDIR
+            } else if s.contains("EINVAL") {
+                errno::EINVAL
+            } else if s.contains("ENFILE") {
+                errno::ENFILE
+            } else if s.contains("EMFILE") {
+                errno::EMFILE
+            } else if s.contains("ENOTTY") {
+                errno::ENOTTY
+            } else if s.contains("EFBIG") {
+                errno::EFBIG
+            } else if s.contains("ENOSPC") {
+                errno::ENOSPC
+            } else if s.contains("ESPIPE") {
+                errno::ESPIPE
+            } else if s.contains("EROFS") {
+                errno::EROFS
+            } else if s.contains("EMLINK") {
+                errno::EMLINK
+            } else if s.contains("EPIPE") {
+                errno::EPIPE
+            } else if s.contains("ENOSYS") {
+                errno::ENOSYS
+            } else {
+                // Default to EPERM if we don't recognize the string
+                errno::EPERM
+            }
+        }
+        AbiError::UnsupportedSyscall(_) => errno::ENOSYS,
+        // Add more variants as needed
+        _ => errno::ENOSYS,
+    }
+}
+
 /// The context passed to an ABI plugin's syscall handler
 pub struct SyscallContext<'a> {
     /// The syscall number (RAX on x86_64)
@@ -20,6 +90,8 @@ pub struct SyscallContext<'a> {
     pub args: [u64; 6],
     /// Mutable reference to the calling process
     pub process: &'a mut Process,
+    /// Return value (set on exit)
+    pub retval: u64,
 }
 
 impl<'a> SyscallContext<'a> {
@@ -28,6 +100,7 @@ impl<'a> SyscallContext<'a> {
             number,
             args,
             process,
+            retval: 0,
         }
     }
 
@@ -66,6 +139,16 @@ pub mod nr {
     /// Recv IPC message: [chan_id, data_ptr, max_len] → bytes_read / -errno
     pub const ZIQA_IPC_RECV: u64 = 1022;
 
+    // ── ZiqaKernel native hardware access syscalls ────────────────────────────
+    /// Read from an I/O port. [port, size] → value
+    pub const ZIQA_DEV_PORT_IN: u64 = 1031;
+    /// Write to an I/O port. [port, size, value] → 0
+    pub const ZIQA_DEV_PORT_OUT: u64 = 1032;
+    /// Map a physical device region. [phys_addr, size] → virt_addr
+    pub const ZIQA_DEV_MAP: u64 = 1033;
+    /// Wait for a device interrupt. [irq] → 0
+    pub const ZIQA_DEV_IRQ_WAIT: u64 = 1034;
+
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
     /// Close a file capability and release its FD slot.
     /// args: [fd: usize] → 0 / -EBADF
@@ -73,6 +156,9 @@ pub mod nr {
     /// Seek within a file capability.
     /// args: [fd: usize, offset: i64, whence: i32] → new_offset / -errno
     pub const ZIQA_CAP_SEEK: u64 = 1004;
+    /// Revoke a capability and all its descendants system-wide.
+    /// args: [id: u64] → 0 / -errno
+    pub const ZIQA_CAP_REVOKE: u64 = 1005;
 
     // ── ZiqaKernel native signal syscalls (userspace libposix signal ABI) ─────
     /// Install or clear a signal action.
@@ -97,10 +183,32 @@ pub mod nr {
 /// Error codes (negated errno values)
 pub mod errno {
     pub const EPERM: u64 = 1;
+    pub const ENOENT: u64 = 2;
     pub const ESRCH: u64 = 3;
+    pub const EINTR: u64 = 4;
+    pub const EIO: u64 = 5;
+    pub const ENXIO: u64 = 6;
+    pub const E2BIG: u64 = 7;
+    pub const ENOMEM: u64 = 12;
+    pub const EACCES: u64 = 13;
     pub const EBADF: u64 = 9;
     pub const EFAULT: u64 = 14;
+    pub const EBUSY: u64 = 16;
+    pub const EEXIST: u64 = 17;
+    pub const EXDEV: u64 = 18;
+    pub const ENODEV: u64 = 19;
+    pub const ENOTDIR: u64 = 20;
+    pub const EISDIR: u64 = 21;
     pub const EINVAL: u64 = 22;
+    pub const ENFILE: u64 = 23;
+    pub const EMFILE: u64 = 24;
+    pub const ENOTTY: u64 = 25;
+    pub const EFBIG: u64 = 27;
+    pub const ENOSPC: u64 = 28;
+    pub const ESPIPE: u64 = 29;
+    pub const EROFS: u64 = 30;
+    pub const EMLINK: u64 = 31;
+    pub const EPIPE: u64 = 32;
     pub const ENOSYS: u64 = 38;
 }
 
@@ -119,6 +227,33 @@ pub fn dispatch_syscall(
     handler: &dyn crate::abi::handler::SyscallHandler,
     ctx: &mut SyscallContext,
 ) -> Result<u64, crate::abi::AbiError> {
+    // ── Axiq-IQ native fast-path (Zero-Copy Pipeline) ─────────────────────────
+    match ctx.number {
+        200 => { // shm_get(size)
+            let size = ctx.args[0] as usize;
+            let id = crate::ipc::shm::SHM.lock().create(ctx.process.pid, size)?;
+            klog_syscall("shm_get", id as u64);
+            return Ok(id as u64);
+        }
+        201 => { // shm_at(id)
+            let id = ctx.args[0] as u32;
+            let vaddr = crate::ipc::shm::SHM.lock().attach(id, ctx.process.pid)?;
+            klog_syscall("shm_at", vaddr);
+            return Ok(vaddr);
+        }
+        202 => { // io_uring_setup(size)
+            klog_syscall("io_uring_setup", 0);
+            return Ok(0);
+        }
+        203 => { // io_uring_submit(entry_ptr)
+            let mut uring = crate::io::uring::IoUring::new(ctx.process.pid, 16);
+            let n = uring.process_requests();
+            klog_syscall("io_uring_submit", n as u64);
+            return Ok(n as u64);
+        }
+        _ => {}
+    }
+
     // ── Core kernel syscalls (ABI-independent) ────────────────────────────────
     match ctx.number {
         nr::GETPID => {
@@ -225,12 +360,10 @@ pub fn dispatch_syscall(
             if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
                 return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
             }
-            let queue_index = ctx.args[0] as u32;
-            unsafe {
-                let net_ptr = &raw mut crate::drivers::virtio_net::VIRTIO_NET;
-                if let Some(net) = (*net_ptr).as_mut() {
-                    net.write_config_32(0x050, queue_index);
-                }
+            let queue_index = ctx.args[0] as u16;
+            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                use x86_64::instructions::port::Port;
+                unsafe { Port::<u16>::new(net.io_base + 0x10).write(queue_index); }
             }
             return Ok(0);
         }
@@ -238,11 +371,9 @@ pub fn dispatch_syscall(
             if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
                 return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
             }
-            unsafe {
-                let net_ptr = &raw mut crate::drivers::virtio_net::VIRTIO_NET;
-                if let Some(net) = (*net_ptr).as_mut() {
-                    net.ack_interrupt();
-                }
+            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                use x86_64::instructions::port::Port;
+                unsafe { Port::<u8>::new(net.io_base + 0x14).read(); }
             }
             return Ok(0);
         }
@@ -255,19 +386,30 @@ pub fn dispatch_syscall(
     match ctx.number {
         nr::ZIQA_CAP_CLOSE => return ziqa_cap_close(ctx),
         nr::ZIQA_CAP_SEEK  => return ziqa_cap_seek(ctx),
+        nr::ZIQA_CAP_REVOKE => return ziqa_cap_revoke(ctx),
         nr::ZIQA_SIG_SETACTION => return ziqa_sig_setaction(ctx),
         nr::ZIQA_SIG_GETMASK   => return ziqa_sig_getmask(ctx),
         nr::ZIQA_SIG_SETMASK   => return ziqa_sig_setmask(ctx),
         nr::ZIQA_SIG_KILL      => return ziqa_sig_kill(ctx),
         nr::ZIQA_SIG_PAUSE     => return ziqa_sig_pause(ctx),
 
+        // ── Hardware access handlers ──
+        nr::ZIQA_DEV_PORT_IN => return ziqa_dev_port_in(ctx),
+        nr::ZIQA_DEV_PORT_OUT => return ziqa_dev_port_out(ctx),
+        nr::ZIQA_DEV_MAP => return ziqa_dev_map(ctx),
+        nr::ZIQA_DEV_IRQ_WAIT => return ziqa_dev_irq_wait(ctx),
+
         // ── SHM / IPC handlers ──
         nr::ZIQA_SHM_CREATE => {
             let size = ctx.args[0] as usize;
             let pid = ctx.process.pid;
-            let id = crate::ipc::shm::SHM.lock().create(pid, size);
-            klog_syscall("shm_create", id as u64);
-            return Ok(id as u64);
+            match crate::ipc::shm::SHM.lock().create(pid, size) {
+                Ok(id) => {
+                    klog_syscall("shm_create", id as u64);
+                    return Ok(id as u64);
+                }
+                Err(e) => return Err(e),
+            }
         }
         nr::ZIQA_SHM_ATTACH => {
             let id = ctx.args[0] as u32;
@@ -277,7 +419,7 @@ pub fn dispatch_syscall(
                     klog_syscall("shm_attach", addr);
                     return Ok(addr);
                 }
-                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+                Err(_) => return Ok(-(errno::EINVAL as i64) as u64),
             }
         }
         nr::ZIQA_IPC_CREATE => {
@@ -286,7 +428,7 @@ pub fn dispatch_syscall(
                     klog_syscall("ipc_create", id as u64);
                     return Ok(id as u64);
                 }
-                None => return Ok((-errno::ENOSYS as i64) as u64),
+                None => return Ok(-(errno::ENOSYS as i64) as u64),
             }
         }
         nr::ZIQA_IPC_SEND => {
@@ -296,7 +438,7 @@ pub fn dispatch_syscall(
             let sender = ctx.process.pid;
 
             if ptr.is_null() || len > crate::ipc::MSG_MAX {
-                return Ok((-errno::EFAULT as i64) as u64);
+                return Ok(-(errno::EFAULT as i64) as u64);
             }
 
             let mut tmp = [0u8; crate::ipc::MSG_MAX];
@@ -304,7 +446,7 @@ pub fn dispatch_syscall(
 
             match crate::ipc::send(chan_id, sender, &tmp[..len]) {
                 Ok(_) => return Ok(0),
-                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+                Err(_) => return Ok(-(errno::EINVAL as i64) as u64),
             }
         }
         nr::ZIQA_IPC_RECV => {
@@ -313,7 +455,7 @@ pub fn dispatch_syscall(
             let max_len = ctx.args[2] as usize;
 
             if ptr.is_null() {
-                return Ok((-errno::EFAULT as i64) as u64);
+                return Ok(-(errno::EFAULT as i64) as u64);
             }
 
             match crate::ipc::recv(chan_id) {
@@ -322,7 +464,7 @@ pub fn dispatch_syscall(
                     unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), ptr, copy_len); }
                     return Ok(copy_len as u64);
                 }
-                Err(_) => return Ok((-errno::EINVAL as i64) as u64),
+                Err(_) => return Ok(-(errno::EINVAL as i64) as u64),
             }
         }
         _ => {}
@@ -400,6 +542,24 @@ fn ziqa_cap_seek(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> 
     desc.offset = new_offset as usize;
     klog_syscall("ziqa_cap_seek", new_offset as u64);
     Ok(new_offset as u64)
+}
+
+/// ZIQA_CAP_REVOKE (1005) — revoke a capability and all its system-wide descendants.
+///
+/// args[0] = id (u64)
+/// Returns 0 on success, -EPERM if the process does not hold the capability.
+fn ziqa_cap_revoke(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    use crate::capability::{CapabilityId, CapabilitySpace};
+    let id = CapabilityId(ctx.args[0]);
+    
+    // Safety check: The calling process must own the capability to revoke it.
+    if ctx.process.capabilities.lookup(id).is_some() {
+        CapabilitySpace::revoke_global(id);
+        klog_syscall("ziqa_cap_revoke", id.0);
+        Ok(0)
+    } else {
+        Ok((-1_i64) as u64) // -EPERM
+    }
 }
 
 /// ZIQA_SIG_SETACTION (2000) — install a signal action.
@@ -488,9 +648,7 @@ fn ziqa_sig_kill(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> 
     }
 
     // Remote signal: go through the scheduler.
-    let ok = crate::process::scheduler::SCHEDULER
-        .lock()
-        .send_signal(target, signum);
+    let ok = crate::process::scheduler::SCHEDULER.send_signal(target, signum);
     klog_syscall("ziqa_sig_kill", target.0);
     if ok {
         Ok(0)
@@ -512,6 +670,108 @@ fn ziqa_sig_pause(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
     }
     // POSIX: pause() always returns -1/EINTR.
     Ok((-4_i64) as u64) // -EINTR
+}
+
+/// ZIQA_DEV_PORT_IN (1031) — Read from an I/O port.
+fn ziqa_dev_port_in(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    let port = ctx.args[0] as u16;
+    let size = ctx.args[1];
+    
+    use x86_64::instructions::port::Port;
+    let val = match size {
+        1 => unsafe { Port::<u8>::new(port).read() as u64 },
+        2 => unsafe { Port::<u16>::new(port).read() as u64 },
+        4 => unsafe { Port::<u32>::new(port).read() as u64 },
+        _ => return Ok(-(errno::EINVAL as i64) as u64),
+    };
+    Ok(val)
+}
+
+/// ZIQA_DEV_PORT_OUT (1032) — Write to an I/O port.
+fn ziqa_dev_port_out(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    let port = ctx.args[0] as u16;
+    let size = ctx.args[1];
+    let val = ctx.args[2];
+    
+    use x86_64::instructions::port::Port;
+    match size {
+        1 => unsafe { Port::<u8>::new(port).write(val as u8) },
+        2 => unsafe { Port::<u16>::new(port).write(val as u16) },
+        4 => unsafe { Port::<u32>::new(port).write(val as u32) },
+        _ => return Ok(-(errno::EINVAL as i64) as u64),
+    };
+    Ok(0)
+}
+
+/// ZIQA_DEV_MAP (1033) — Map a physical device region.
+fn ziqa_dev_map(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    let phys_addr = ctx.args[0];
+    let size = ctx.args[1] as usize;
+    
+    // Align to 4KB
+    let phys_start = phys_addr & !0xFFF;
+    let phys_end = (phys_addr + size as u64 + 0xFFF) & !0xFFF;
+    let aligned_size = (phys_end - phys_start) as usize;
+    
+    // Find virtual slot (reuse mmap bump)
+    let virt_start = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
+    ctx.process.mmap_bump = virt_start + aligned_size as u64;
+    
+    // Map in current process table
+    use x86_64::{PhysAddr, VirtAddr, structures::paging::{Mapper, Page, PhysFrame, PageTableFlags}};
+    
+    let mut mapper = unsafe { crate::memory::paging::current_mapper() };
+    let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().ok_or(crate::abi::AbiError::Other("Frame allocator missing"))?;
+    
+    // NO_CACHE is important for MMIO to avoid caching device memory
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::NO_CACHE;
+    
+    for offset in (0..aligned_size).step_by(4096) {
+        let page: Page<x86_64::structures::paging::Size4KiB> = Page::containing_address(VirtAddr::new(virt_start + offset as u64));
+        let frame = PhysFrame::containing_address(PhysAddr::new(phys_start + offset as u64));
+        unsafe {
+            mapper.map_to(page, frame, flags, fa).map_err(|_| crate::abi::AbiError::Other("Map failed"))?.flush();
+        }
+    }
+    
+    // Register region in process for tracking
+    ctx.process.add_region(crate::memory::MemoryRegion {
+        start: VirtAddr::new(virt_start),
+        size: aligned_size,
+        flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+        is_file_backed: false,
+        file_offset: 0,
+    });
+    
+    klog_syscall("ziqa_dev_map", virt_start);
+    Ok(virt_start)
+}
+
+/// ZIQA_DEV_IRQ_WAIT (1034) — Wait for a device interrupt.
+fn ziqa_dev_irq_wait(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    let irq = ctx.args[0] as u8;
+    
+    // Register waiter in the interrupt module
+    crate::arch::x86_64::interrupts::IRQ_WAITERS.lock().insert(irq, ctx.process.pid);
+    
+    // Block the process until notified
+    ctx.process.state = ProcessState::Blocked;
+    
+    klog_syscall("ziqa_dev_irq_wait", irq as u64);
+    Ok(0)
 }
 
 #[inline(always)]

@@ -22,12 +22,11 @@ impl Device for ZiqaDevice {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        unsafe {
-            #[allow(static_mut_refs)]
-            if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
-                if let Some((data, len)) = net.receive() {
-                    return Some((ZiqaRxToken { buffer: data, len }, ZiqaTxToken));
-                }
+        if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+            let mut buffer = [0u8; 1500];
+            if let Some(len) = net.receive(&mut buffer) {
+                let copy_len = len.min(1500);
+                return Some((ZiqaRxToken { buffer, len: copy_len }, ZiqaTxToken));
             }
         }
         None
@@ -60,7 +59,7 @@ impl phy::TxToken for ZiqaTxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut buffer = [0u8; 1500];
+        let mut buffer = [0u8; 1536];
         let result = f(&mut buffer[..len]);
         // Patch IP header checksum for IPv4 frames (EtherType 0x0800).
         // Ethernet header is 14 bytes; IP header starts at offset 14.
@@ -77,11 +76,8 @@ impl phy::TxToken for ZiqaTxToken {
             }
         }
         crate::println!("[NET] smoltcp TX {} bytes", len);
-        unsafe {
-            #[allow(static_mut_refs)]
-            if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
-                let _ = net.transmit(&buffer[..len]);
-            }
+        if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+            let _ = net.transmit(&buffer[..len]);
         }
         result
     }

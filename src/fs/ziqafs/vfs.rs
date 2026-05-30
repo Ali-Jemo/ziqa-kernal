@@ -87,7 +87,7 @@ pub fn mount_into_vfs(fs: &Arc<spin::Mutex<ZiqaFs>>) {
     let mut entries = Vec::new();
     enumerate_dir(fs, ROOT_INODE, "", &mut entries);
 
-    let mut vfs = VFS.lock();
+    let mut vfs = VFS.write();
     for (path, inode_id, _) in &entries {
         let inode = {
             let fs_lock = fs.lock();

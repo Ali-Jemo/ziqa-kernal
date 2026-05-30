@@ -5,7 +5,10 @@ pub mod pagecache;
 /// the kernel's filesystem.
 pub mod ramfs;
 pub mod vfs;
+#[cfg(feature = "ziqafs")]
 pub mod ziqafs; // now a directory module: src/fs/ziqafs/mod.rs
+#[cfg(feature = "fat32")]
+pub mod fat32;
 
 use crate::abi::AbiError;
 

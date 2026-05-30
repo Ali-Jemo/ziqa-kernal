@@ -23,6 +23,7 @@ pub mod elf_loader;
 mod fs;
 mod memory;
 mod misc;
+#[cfg(feature = "net")]
 mod net;
 mod process;
 mod time;
@@ -211,6 +212,7 @@ impl AbiPlugin for LinuxAbiPlugin {
         if let Some(result) = time::handle(ctx) {
             return result;
         }
+        #[cfg(feature = "net")]
         if let Some(result) = net::handle(ctx) {
             return result;
         }
@@ -340,7 +342,7 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             let mut tmp = [0u8; 4096];
             let to_read = count.min(4096);
             match crate::fs::vfs::VFS
-                .lock()
+                .read()
                 .read_raw(path_str, &mut tmp[..to_read], offset)
             {
                 Ok(n) => {
@@ -466,13 +468,17 @@ fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
 
     if fd < 3 {
-        // Cannot close stdin, stdout, stderr
         return Ok(0);
+    }
+
+    // Clean up socket state if this fd is a socket
+    #[cfg(feature = "net")]
+    if crate::net::socket::SOCKETS.lock().exists(fd) {
+        crate::net::socket::SOCKETS.lock().remove(fd);
     }
 
     let result = ctx.process.fds.close(fd);
     if result {
-        println!("[Linux ABI] close(fd={}) -> 0", fd);
         Ok(0)
     } else {
         Ok((-9_i64) as u64) // -EBADF
@@ -514,7 +520,7 @@ fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
             let mut buf = [0u8; 4096];
             let sz = crate::fs::vfs::VFS
-                .lock()
+                .read()
                 .read_raw(path_str, &mut buf, 0)
                 .unwrap_or(0);
             (0x81A4, sz as u64) // S_IFREG | 0644
@@ -550,6 +556,7 @@ fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
 
     // DRM ioctls
+    #[cfg(feature = "drm")]
     if (request & 0xFF00) == 0x6400 {
         return crate::drivers::drm::handle_ioctl(request, arg)
             .map(|v| v as u64)
@@ -639,7 +646,7 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     if is_known
         || crate::fs::vfs::VFS
-            .lock()
+            .read()
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
@@ -789,7 +796,6 @@ fn sys_kill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let target_pid = ctx.args[0];
     let signum = ctx.args[1] as u8;
     let ok = crate::process::scheduler::SCHEDULER
-        .lock()
         .send_signal(crate::process::Pid(target_pid), signum);
     if ok {
         println!("[Linux ABI] kill(pid={}, sig={}) → 0", target_pid, signum);
@@ -805,7 +811,6 @@ fn sys_waitpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let child_pid = ctx.args[0] as i64;
     let parent = ctx.process.pid;
     match crate::process::scheduler::SCHEDULER
-        .lock()
         .waitpid(parent, child_pid)
     {
         Some((pid, code)) => {
@@ -968,7 +973,7 @@ fn sys_clone(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         println!("[Linux ABI] clone(CLONE_VM) → thread (falling back to fork)");
     }
 
-    match crate::process::scheduler::SCHEDULER.lock().fork(parent_pid) {
+    match crate::process::scheduler::SCHEDULER.fork(parent_pid) {
         Some(child_pid) => Ok(child_pid.0),
         None => Ok((-11_i64) as u64), // -EAGAIN
     }
@@ -1062,7 +1067,7 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     if is_known
         || crate::fs::vfs::VFS
-            .lock()
+            .read()
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
@@ -1077,7 +1082,6 @@ fn sys_tgkill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let tid = ctx.args[1];
     let sig = ctx.args[2] as u8;
     let ok = crate::process::scheduler::SCHEDULER
-        .lock()
         .send_signal(crate::process::Pid(tid), sig);
     if ok {
         return Ok(0);
@@ -1177,27 +1181,82 @@ fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 }
 
 /// sys_socket(domain, type, protocol) → fd
-/// Returns a fake socket fd backed by a File entry.
+#[cfg(feature = "net")]
 fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
-    let _domain = ctx.args[0]; // AF_INET=2, AF_UNIX=1
-    let _socktype = ctx.args[1]; // SOCK_STREAM=1, SOCK_DGRAM=2
-                                 // Allocate a dummy fd tagged as a socket (reuse File slot with path "socket:")
-                                 // Note: args[2] is protocol, unused for now
+    let domain = ctx.args[0] as u32;
+    let socktype = ctx.args[1] as u32;
+    let protocol = ctx.args[2] as u32;
     let fd = ctx
         .process
         .fds
-        .alloc_file(b"socket:", ctx.args[1] as u32)
+        .alloc_file(b"socket:", socktype)
         .unwrap_or(3);
+    crate::net::socket::SOCKETS.lock().create(fd, domain, socktype, protocol);
     Ok(fd as u64)
 }
 
 /// sys_sendto(sockfd, buf, len, flags, dest_addr, addrlen) → bytes_sent
+#[cfg(feature = "net")]
 fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
-    let count = ctx.args[2];
-    // Stub: pretend we sent all bytes
-    Ok(count)
+    let fd = ctx.args[0] as usize;
+    let buf_addr = ctx.args[1] as *const u8;
+    let len = ctx.args[2] as usize;
+    let mut socks = crate::net::socket::SOCKETS.lock();
+    let entry = match socks.get_mut(fd) {
+        Some(e) if e.state != crate::net::socket::SocketState::Closed => e,
+        _ => return Ok((-9_i64) as u64), // -EBADF
+    };
+    if buf_addr.is_null() || len == 0 {
+        return Ok(0);
+    }
+    // Read data from userspace
+    let mut tmp = alloc::vec![0u8; len.min(4096)];
+    let copy_len = len.min(4096);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf_addr, tmp.as_mut_ptr(), copy_len);
+    }
+    entry.tx_buf.extend_from_slice(&tmp[..copy_len]);
+    // Forward to paired socket's rx buffer
+    if let Some(paired) = entry.paired {
+        if let Some(peer) = socks.get_mut(paired) {
+            peer.rx_buf.extend_from_slice(&tmp[..copy_len]);
+        }
+    }
+    Ok(copy_len as u64)
+}
+
+/// sys_recvfrom(sockfd, buf, len, flags, src_addr, addrlen) → bytes_read
+#[cfg(feature = "net")]
+fn sys_recvfrom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
+    let fd = ctx.args[0] as usize;
+    let buf_addr = ctx.args[1] as *mut u8;
+    let len = ctx.args[2] as usize;
+    if buf_addr.is_null() || len == 0 {
+        return Ok(0);
+    }
+    let mut socks = crate::net::socket::SOCKETS.lock();
+    let entry = match socks.get_mut(fd) {
+        Some(e) if e.state != crate::net::socket::SocketState::Closed => e,
+        _ => return Ok((-9_i64) as u64),
+    };
+    let avail = entry.rx_buf.len() - entry.rx_pos;
+    if avail == 0 {
+        return Ok((-11_i64) as u64); // -EAGAIN
+    }
+    let to_read = len.min(avail);
+    unsafe {
+        core::ptr::copy_nonoverlapping(entry.rx_buf.as_ptr().add(entry.rx_pos), buf_addr, to_read);
+    }
+    entry.rx_pos += to_read;
+    // Compact buffer when fully consumed
+    if entry.rx_pos >= entry.rx_buf.len() {
+        entry.rx_buf.clear();
+        entry.rx_pos = 0;
+    }
+    Ok(to_read as u64)
 }
 
 /// sys_readlink(path, buf, bufsiz) → bytes_written
@@ -1273,11 +1332,11 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
     let path = core::str::from_utf8(path_bytes.unwrap()).unwrap_or("/");
 
-    if !crate::fs::vfs::VFS.lock().is_dir(path) {
+    if !crate::fs::vfs::VFS.read().is_dir(path) {
         return Ok((-20_i64) as u64); // -ENOTDIR
     }
 
-    let entries = crate::fs::vfs::VFS.lock().list_dir(path);
+    let entries = crate::fs::vfs::VFS.read().list_dir(path);
     let mut written: usize = 0;
     // Always emit "." and ".." first
     let special = [b".".as_slice(), b"..".as_slice()];
@@ -1324,9 +1383,10 @@ fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if path_str.is_empty() {
         return Ok((-22_i64) as u64); // -EINVAL
     }
-    crate::fs::vfs::VFS.lock().mkdir(path_str);
+    crate::fs::vfs::VFS.write().mkdir(path_str);
     Ok(0)
-}
+    }
+
 
 /// sys_rmdir(pathname) → 0 / -ENOENT
 fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
@@ -1340,7 +1400,7 @@ fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    match crate::fs::vfs::VFS.lock().remove(path_str) {
+    match crate::fs::vfs::VFS.write().remove(path_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
     }
@@ -1358,7 +1418,7 @@ fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    match crate::fs::vfs::VFS.lock().remove(path_str) {
+    match crate::fs::vfs::VFS.write().remove(path_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
     }
@@ -1383,7 +1443,7 @@ fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
     let old_str = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
     let new_str = core::str::from_utf8(&new_tmp[..nn]).unwrap_or("");
-    match crate::fs::vfs::VFS.lock().rename(old_str, new_str) {
+    match crate::fs::vfs::VFS.write().rename(old_str, new_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
     }
@@ -1403,9 +1463,12 @@ fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    let exists = crate::fs::vfs::VFS.lock().exists(path_str);
-    if !exists {
-        crate::fs::vfs::VFS.lock().create(path_str);
+    {
+        let mut vfs = crate::fs::vfs::VFS.write();
+        let exists = vfs.exists(path_str);
+        if !exists {
+            vfs.create(path_str);
+        }
     }
     let fd = ctx.process.fds.alloc_file(&tmp[..n], 0x0041).unwrap_or(3); // O_CREAT|O_WRONLY
     Ok(fd as u64)
@@ -1434,7 +1497,7 @@ fn sys_newfstatat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    let exists = crate::fs::vfs::VFS.lock().exists(path_str);
+    let exists = crate::fs::vfs::VFS.read().exists(path_str);
     if !exists {
         return Ok((-2_i64) as u64);
     } // -ENOENT
@@ -1449,7 +1512,7 @@ fn sys_newfstatat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         *(statbuf.add(3) as *mut u32).add(2) = 0; // st_gid
         *statbuf.add(5) = 0; // st_rdev
                              // st_size at offset 48 = u64 index 6
-        if let Some(sz) = crate::fs::vfs::VFS.lock().file_size(path_str) {
+        if let Some(sz) = crate::fs::vfs::VFS.read().file_size(path_str) {
             *statbuf.add(6) = sz as u64; // st_size
         }
         *statbuf.add(7) = 4096; // st_blksize
@@ -1503,7 +1566,7 @@ fn sys_chmod(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    if crate::fs::vfs::VFS.lock().exists(path_str) {
+    if crate::fs::vfs::VFS.read().exists(path_str) {
         Ok(0) // pretend we changed the mode
     } else {
         Ok((-2_i64) as u64) // -ENOENT
@@ -1528,7 +1591,7 @@ fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
     }
     let old_str = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
-    if crate::fs::vfs::VFS.lock().exists(old_str) {
+    if crate::fs::vfs::VFS.read().exists(old_str) {
         Ok(0) // pretend link succeeded
     } else {
         Ok((-2_i64) as u64) // -ENOENT
@@ -1557,9 +1620,9 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
     let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    let exists = crate::fs::vfs::VFS.lock().exists(path_str);
+    let exists = crate::fs::vfs::VFS.read().exists(path_str);
     if !exists {
-        if !crate::fs::vfs::VFS.lock().is_dir(path_str) {
+        if !crate::fs::vfs::VFS.read().is_dir(path_str) {
             return Ok((-2_i64) as u64); // -ENOENT
         }
     }

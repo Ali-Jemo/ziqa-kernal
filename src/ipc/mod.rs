@@ -6,7 +6,8 @@ pub mod shm;
 pub mod signal;
 
 use crate::process::Pid;
-use spin::Mutex;
+use spin::{Mutex, RwLock};
+use alloc::sync::Arc;
 
 /// Maximum bytes in a single IPC message
 pub const MSG_MAX: usize = 256;
@@ -44,9 +45,8 @@ pub enum IpcError {
     InvalidChannel,
 }
 
-/// A fixed-capacity ring-buffer channel
-pub struct Channel {
-    pub id: u32,
+/// Internal state of a channel, protected by a per-channel Mutex
+struct ChannelInner {
     ring: [Option<Message>; RING_CAP],
     head: usize,
     tail: usize,
@@ -55,10 +55,9 @@ pub struct Channel {
 
 const NONE_MSG: Option<Message> = None;
 
-impl Channel {
-    pub const fn new(id: u32) -> Self {
+impl ChannelInner {
+    pub const fn new() -> Self {
         Self {
-            id,
             ring: [NONE_MSG; RING_CAP],
             head: 0,
             tail: 0,
@@ -85,24 +84,40 @@ impl Channel {
         self.count -= 1;
         Ok(msg)
     }
+}
 
-    pub fn is_empty(&self) -> bool {
-        self.count == 0
+/// A thread-safe IPC channel
+pub struct Channel {
+    pub id: u32,
+    inner: Mutex<ChannelInner>,
+}
+
+impl Channel {
+    pub fn new(id: u32) -> Self {
+        Self {
+            id,
+            inner: Mutex::new(ChannelInner::new()),
+        }
     }
-    pub fn is_full(&self) -> bool {
-        self.count >= RING_CAP
+
+    pub fn send(&self, msg: Message) -> Result<(), IpcError> {
+        self.inner.lock().send(msg)
+    }
+
+    pub fn recv(&self) -> Result<Message, IpcError> {
+        self.inner.lock().recv()
     }
 }
 
-/// Global channel table
+/// Global channel table with fine-grained locking
 pub struct ChannelTable {
-    channels: [Option<Channel>; MAX_CHANNELS],
+    channels: [Option<Arc<Channel>>; MAX_CHANNELS],
     next_id: u32,
 }
 
 impl ChannelTable {
     pub const fn new() -> Self {
-        const NONE_CHAN: Option<Channel> = None;
+        const NONE_CHAN: Option<Arc<Channel>> = None;
         Self {
             channels: [NONE_CHAN; MAX_CHANNELS],
             next_id: 1,
@@ -115,17 +130,17 @@ impl ChannelTable {
             if slot.is_none() {
                 let id = self.next_id;
                 self.next_id += 1;
-                *slot = Some(Channel::new(id));
+                *slot = Some(Arc::new(Channel::new(id)));
                 return Some(id);
             }
         }
         None
     }
 
-    pub fn get_mut(&mut self, id: u32) -> Option<&mut Channel> {
+    pub fn get(&self, id: u32) -> Option<Arc<Channel>> {
         self.channels
-            .iter_mut()
-            .filter_map(|s| s.as_mut())
+            .iter()
+            .filter_map(|s| s.as_ref().cloned())
             .find(|c| c.id == id)
     }
 
@@ -140,23 +155,22 @@ impl ChannelTable {
     }
 }
 
-pub static IPC: Mutex<ChannelTable> = Mutex::new(ChannelTable::new());
+pub static IPC: RwLock<ChannelTable> = RwLock::new(ChannelTable::new());
 
 /// Convenience wrappers
 pub fn create_channel() -> Option<u32> {
-    IPC.lock().create()
+    IPC.write().create()
 }
 
 pub fn send(channel_id: u32, sender: Pid, data: &[u8]) -> Result<(), IpcError> {
-    IPC.lock()
-        .get_mut(channel_id)
-        .ok_or(IpcError::InvalidChannel)?
-        .send(Message::new(sender, data))
+    // Read-lock the table to find the channel, then perform per-channel locked send
+    let chan = IPC.read().get(channel_id).ok_or(IpcError::InvalidChannel)?;
+    chan.send(Message::new(sender, data))
 }
 
 pub fn recv(channel_id: u32) -> Result<Message, IpcError> {
-    IPC.lock()
-        .get_mut(channel_id)
-        .ok_or(IpcError::InvalidChannel)?
-        .recv()
+    // Read-lock the table to find the channel, then perform per-channel locked recv
+    let chan = IPC.read().get(channel_id).ok_or(IpcError::InvalidChannel)?;
+    chan.recv()
 }
+

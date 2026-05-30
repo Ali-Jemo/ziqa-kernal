@@ -7,7 +7,7 @@ binary = "ziqa-kernel"
 
 # The runner command for executing the boot image with QEMU
 # This matches the run-command in Cargo.toml's [package.metadata.bootimage]
-runner = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "format=raw,file=disk.img", "-serial", "stdio", "-display", "none", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]
+runner = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "file=disk.img,if=none,format=raw,id=hdr0", "-device", "virtio-blk-pci,drive=hdr0", "-serial", "stdio", "-display", "none", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]
 
 # Target architecture
 target = "x86_64-unknown-none"

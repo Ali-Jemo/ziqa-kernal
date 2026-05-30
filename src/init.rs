@@ -7,6 +7,7 @@
 //! `main.rs`; subsystem implementations remain under their owning modules.
 
 use crate::{abi, arch, drivers, memory, process, BOOT_INFO};
+use alloc::boxed::Box;
 
 /// Initialize hardware, memory, scheduler, and core registries needed before
 /// higher-level startup/demo code runs.
@@ -57,16 +58,20 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     memory::paging::init_kernel_mapper(VirtAddr::new(boot_info.physical_memory_offset));
 
     // Device/scheduler init.
-    // ARCH: [init→framebuffer] Initialize LFB if provided by bootloader
-    if let Some(fb) = boot_info.framebuffer.as_ref() {
-        let addr = fb.buffer().as_ptr() as u64;
-        let info = fb.info();
-        crate::drivers::framebuffer::init_xrgb(addr, info.width, info.height);
-        crate::klog!(crate::klog::Level::Info, "LFB: {}x{} @ 0x{:x}", info.width, info.height, addr);
-    } else {
-        crate::klog!(crate::klog::Level::Warn, "No LFB provided by bootloader, falling back to text mode");
-    }
-
+    drivers::pci::init();
+    drivers::device_manager::init();
+    
+    // Register drivers
+    #[cfg(feature = "net")]
+    drivers::virtio_net::register();
+    drivers::device_manager::DEVICE_MANAGER.lock().register_driver(Box::new(crate::drivers::virtio_block_new::VirtioBlockDriverNew));
+    drivers::virtio_block::register();
+    drivers::ata::register();
+    
+    drivers::device_manager::DEVICE_MANAGER.lock().scan_and_match();
+    
+    drivers::acpi::init();
+    #[cfg(feature = "drm")]
     drivers::drm::init();
     process::scheduler::init();
 
@@ -80,6 +85,7 @@ pub fn init_abi_registry() -> abi::AbiRegistry {
     let mut registry = abi::AbiRegistry::new();
 
     registry.register(&abi::linux::LINUX_PLUGIN).ok();
+    #[cfg(feature = "wasm")]
     registry.register(&abi::wasm::WASM_PLUGIN).ok();
 
     registry

@@ -666,15 +666,11 @@ fn execute_function(
                 let status = args[0] as i64;
                 println!("[WASM Runtime] proc_exit called with status {}", status);
                 let current_pid = x86_64::instructions::interrupts::without_interrupts(|| {
-                    crate::process::scheduler::SCHEDULER
-                        .lock()
-                        .current_task()
-                        .map(|t| t.pid)
+                    crate::process::scheduler::current_task().map(|t| t.lock().pid)
                 });
                 if let Some(pid) = current_pid {
                     x86_64::instructions::interrupts::without_interrupts(|| {
                         crate::process::scheduler::SCHEDULER
-                            .lock()
                             .exit_process(pid, status);
                     });
                 }
@@ -955,10 +951,9 @@ fn execute_function(
 
 // ─── Entry Point Helper ─────────────────────────────────────────────────────
 pub extern "C" fn wasm_interpreter_entry() {
-    let binary_opt = x86_64::instructions::interrupts::without_interrupts(|| {
-        let sched = crate::process::scheduler::SCHEDULER.lock();
-        if let Some(proc) = sched.current_task() {
-            Some(proc.binary_data.clone())
+    let binary_opt: Option<alloc::vec::Vec<u8>> = x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
+            Some(proc_arc.lock().binary_data.clone())
         } else {
             None
         }
@@ -1004,8 +999,8 @@ pub extern "C" fn wasm_interpreter_entry() {
 
     // Terminate process
     x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut sched = crate::process::scheduler::SCHEDULER.lock();
-        let current_pid = sched.current_task().map(|t| t.pid);
+        let sched = &crate::process::scheduler::SCHEDULER;
+        let current_pid = crate::process::scheduler::current_task_mut().map(|t| t.lock().pid);
         if let Some(pid) = current_pid {
             sched.exit_process(pid, exit_code);
         }

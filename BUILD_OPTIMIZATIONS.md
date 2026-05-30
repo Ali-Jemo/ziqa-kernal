@@ -37,6 +37,18 @@
 9. **Heap Profiler** - Memory allocation tracking
 10. **Performance Suite** - Benchmarking utilities
 
+### FAT32 Development Disk
+ZiqaKernel now supports mounting a host-editable FAT32 partition at `/fat` when the boot disk contains an MBR FAT32 partition. Create one with:
+
+```bash
+make fat-disk
+make run
+```
+
+Notes:
+- The active in-kernel FAT32 path is a no_std read-only VFS bridge in `src/fs/fat32.rs`.
+- `fatfs` is tracked as an optional upstream crate candidate, but its current no_std path depends on the old `core_io` crate, which is not compatible with this nightly toolchain. We keep the architecture ready for it while using the kernel-native driver for now.
+
 ### Build Configuration
 ```toml
 [profile.dev]

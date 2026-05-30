@@ -4,12 +4,32 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::paging::{FrameAllocator, Mapper};
+#[cfg(feature = "ebpf")]
+use crate::ebpf::attach::{EBPF_ATTACHMENTS, TracepointType};
+use crate::abi::syscall::abi_error_to_errno;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 pub static PICS: Mutex<ChainedPics> =
     Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+
+// ── User-Mode IRQ Redirection ────────────────────────────────────────────────
+
+lazy_static! {
+    /// Tracks which process is waiting for which IRQ vector.
+    pub static ref IRQ_WAITERS: Mutex<BTreeMap<u8, crate::process::Pid>> = Mutex::new(BTreeMap::new());
+}
+
+use alloc::collections::BTreeMap;
+
+/// Wake up any process waiting for this IRQ.
+fn notify_irq(vector: u8) {
+    let mut waiters = IRQ_WAITERS.lock();
+    if let Some(pid) = waiters.remove(&vector) {
+        crate::process::scheduler::wake_sleeping(1 << pid.0);
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -90,9 +110,8 @@ extern "x86-interrupt" fn page_fault_handler(
     );
 
     // Handle demand paging
-    let scheduler = crate::process::scheduler::SCHEDULER.lock();
-    let current_proc = scheduler.current_task();
-    if let Some(proc) = current_proc {
+    if let Some(proc_arc) = crate::process::scheduler::current_task() {
+        let proc = proc_arc.lock();
         println!("[MM] Current process {} found", proc.pid.0);
         // Check if fault address is within any of the process's memory regions
         let has_region = proc.regions.iter().any(|opt_region| {
@@ -111,15 +130,13 @@ extern "x86-interrupt" fn page_fault_handler(
             println!("[MM] No region found for address {:?}", fault_addr);
         }
     }
-    drop(scheduler); // Release lock before potentially blocking or performing complex operations
 
     if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
         // Check if this is a COW page — allocate a private copy and remap writable
         let cow_handled = {
-            let scheduler = crate::process::scheduler::SCHEDULER.lock();
-            let is_cow = scheduler
-                .current_task()
-                .map(|proc| {
+            let is_cow = crate::process::scheduler::current_task()
+                .map(|proc_arc| {
+                    let proc = proc_arc.lock();
                     proc.regions.iter().any(|opt| {
                         opt.as_ref()
                             .map(|r| {
@@ -133,7 +150,6 @@ extern "x86-interrupt" fn page_fault_handler(
                     })
                 })
                 .unwrap_or(false);
-            drop(scheduler);
             if is_cow {
                 crate::memory::paging::handle_cow_fault(fault_addr)
             } else {
@@ -155,8 +171,8 @@ extern "x86-interrupt" fn page_fault_handler(
         // Extract region + binary data info while holding the scheduler lock,
         // then drop it before taking memory locks to avoid deadlocks.
         let demand_info = {
-            let scheduler = crate::process::scheduler::SCHEDULER.lock();
-            if let Some(proc) = scheduler.current_task() {
+            if let Some(proc_arc) = crate::process::scheduler::current_task() {
+                let proc = proc_arc.lock();
                 let region_entry = proc.regions.iter().find(|opt_region| {
                     opt_region
                         .as_ref()
@@ -250,9 +266,12 @@ extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _code
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", frame);
 }
 
+extern crate alloc;
+
 // ── Hardware interrupt handlers ──
 
 extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
+    notify_irq(InterruptIndex::Timer as u8);
     crate::process::scheduler::tick();
     crate::timer::tick();
     unsafe {
@@ -262,6 +281,7 @@ extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
+    notify_irq(InterruptIndex::Keyboard as u8);
     use x86_64::instructions::port::Port;
 
     let mut port: Port<u8> = Port::new(0x60);
@@ -274,6 +294,7 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
+    notify_irq(InterruptIndex::Mouse as u8);
     crate::drivers::ps2_mouse::on_interrupt();
     unsafe {
         PICS.lock()
@@ -286,9 +307,8 @@ extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
 
 /// Called when `int 0x80` is executed.
 /// Reads registers directly via inline asm (first statement before any clobbering)
-/// and dispatches through the ABI-aware syscall dispatch.
-/// Return value is lost (RAX is restored by x86-interrupt epilogue); for testing
-/// the test binary doesn't check return values.
+/// and dispatches through the ABI-aware syscall handler.
+/// Return value is set in RAX.
 extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
     let num: u64;
     let mut args: [u64; 6] = [0; 6];
@@ -313,11 +333,41 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
     }
 
     let registry = crate::init_abi_registry();
-    let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(proc) = scheduler.current_task_mut() {
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
+    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
+        let mut proc = proc_arc.lock();
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, &mut proc);
+
+        // Run entry tracepoints
+        #[cfg(feature = "ebpf")]
+        EBPF_ATTACHMENTS.run(TracepointType::SyscallEntry, &mut ctx);
+
         let handler = crate::abi::handler::KernelSyscallHandler;
-        match crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx) {
+        let res = crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx);
+
+        // Convert the result to the value that should be in RAX
+        let retval = match &res {
+            Ok(v) => *v,
+            Err(e) => {
+                // Convert AbiError to errno and then to the returned value (negative errno)
+                let errno = abi_error_to_errno(e);
+                (errno as i64).wrapping_neg() as u64
+            }
+        };
+
+        // Set RAX to the return value
+        unsafe {
+            core::arch::asm!("mov {}, rax", in(reg) retval, options(preserves_flags));
+        }
+
+        // Update the context with the return value for exit tracepoints
+        ctx.retval = retval;
+
+        // Run exit tracepoints
+        #[cfg(feature = "ebpf")]
+        EBPF_ATTACHMENTS.run(TracepointType::SyscallExit, &mut ctx);
+
+        // Log the result (optional)
+        match &res {
             Ok(v) => {
                 println!("[ZIQA] syscall {} -> OK({})", num, v);
             }
@@ -327,11 +377,12 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
         }
     } else {
         println!("[ZIQA] int 0x80 but no current process");
+        // No EOI needed — software interrupt, not PIC-sourced.
     }
-    // No EOI needed — software interrupt, not PIC-sourced.
 }
 
 extern "x86-interrupt" fn ata1_handler(_frame: InterruptStackFrame) {
+    notify_irq(InterruptIndex::Ata1 as u8);
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Ata1 as u8)
@@ -339,6 +390,7 @@ extern "x86-interrupt" fn ata1_handler(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn ata2_handler(_frame: InterruptStackFrame) {
+    notify_irq(InterruptIndex::Ata2 as u8);
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Ata2 as u8)

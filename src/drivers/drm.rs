@@ -178,77 +178,109 @@ impl DrmDevice {
 
 pub static DRM: Mutex<DrmDevice> = Mutex::new(DrmDevice::new());
 
-/// Handle DRM ioctl from userspace
+/// Handle DRM ioctl from userspace.
+///
+/// Maps DRM ioctls to `DrmDevice` methods. Userspace passes a pointer to
+/// the ioctl struct; we read/write fields directly.
 pub fn handle_ioctl(cmd: u64, arg: *mut u8) -> Result<i64, &'static str> {
-    // Dummy reference for graph analysis
-    #[allow(unused_imports)]
-    use crate::abi::syscall as _ref_to_syscall;
+    let mut drm = DRM.lock();
 
     match cmd {
-        ioctl::MODE_FB_CREATE => {
-            let fmt = DrmFormat::XRGB8888;
-            let (width, height) = {
-                let drm = DRM.lock();
-                let res = drm.get_resources();
-                (res.width, res.height)
-            };
-            let vma_addr = 0x1000_0000; // Placeholder
-            let fb_id = DRM
-                .lock()
-                .create_framebuffer(width, height, fmt, vma_addr)?;
+        // ── MODE_GETRESOURCES (0xc0046401) ────────────────────────────────────
+        // struct drm_mode_card_res { fb_id_ptr, crtc_id_ptr, connector_id_ptr,
+        //   encoder_id_ptr, count_fbs, count_crtcs, count_connectors,
+        //   count_encoders, min_width, max_width, min_height, max_height }
+        ioctl::MODE_GETRESOURCES => {
             unsafe {
-                if !arg.is_null() {
-                    core::ptr::write(arg as *mut u32, fb_id);
+                if arg.is_null() {
+                    return Err("NULL arg");
                 }
+                let res = drm.get_resources();
+                // Write at the right offsets inside drm_mode_card_res
+                // fb_id_ptr (u64 at +0), crtc_id_ptr (u64 at +8)
+                // connector_id_ptr (u64 at +16), encoder_id_ptr (u64 at +24)
+                // count_fbs (u32 at +32), count_crtcs (u32 at +36)
+                // count_connectors (u32 at +40), count_encoders (u32 at +44)
+                // min/max width/height (u32 at +48..+60)
+                core::ptr::write((arg as *mut u64).add(4), 1); // count_crtcs
+                core::ptr::write((arg as *mut u64).add(5), 1); // count_connectors
+                core::ptr::write((arg as *mut u64).add(6), 0); // count_fbs = filled below
+                core::ptr::write((arg as *mut u64).add(7), 0); // count_encoders
+                core::ptr::write((arg as *mut u32).add(12), res.width.min(4096));   // min_width
+                core::ptr::write((arg as *mut u32).add(13), res.width);              // max_width
+                core::ptr::write((arg as *mut u32).add(14), res.height.min(4096));   // min_height
+                core::ptr::write((arg as *mut u32).add(15), res.height);             // max_height
             }
             Ok(0)
         }
 
-        ioctl::MODE_FB_DESTROY => {
-            let fb_id = unsafe {
-                if arg.is_null() {
-                    return Err("Null argument");
-                }
-                core::ptr::read(arg as *const u32)
-            };
-            DRM.lock().destroy_framebuffer(fb_id)?;
-            Ok(0)
-        }
-
-        ioctl::MODE_PAGE_FLIP => {
-            let fb_id = unsafe {
-                if arg.is_null() {
-                    return Err("Null argument");
-                }
-                core::ptr::read(arg as *const u32)
-            };
-            DRM.lock().queue_page_flip(fb_id)?;
-            Ok(0)
-        }
-
-        ioctl::MODE_GETRESOURCES => {
-            let (crtc_id, connector_id) = {
-                let drm = DRM.lock();
-                let res = drm.get_resources();
-                (res.crtc_id, res.connector_id)
-            };
+        // ── MODE_FB_CREATE (0xc0286417) ───────────────────────────────────────
+        // struct drm_mode_fb_cmd {
+        //   fb_id: u32, width: u32, height: u32, pitch: u32,
+        //   bpp: u32, depth: u32, handle: u32   (28 bytes)
+        // }
+        ioctl::MODE_FB_CREATE => {
             unsafe {
-                if !arg.is_null() {
-                    core::ptr::write((arg as *mut u32).add(0), crtc_id);
-                    core::ptr::write((arg as *mut u32).add(1), connector_id);
+                if arg.is_null() {
+                    return Err("NULL arg");
                 }
+                let width  = core::ptr::read((arg as *const u32).add(1));
+                let height = core::ptr::read((arg as *const u32).add(2));
+                let bpp    = core::ptr::read((arg as *const u32).add(4));
+                // Map bpp → DrmFormat
+                let format = match bpp {
+                    32 => DrmFormat::XRGB8888,
+                    16 => DrmFormat::RGB565,
+                    _  => return Err("Unsupported bpp"),
+                };
+                let fb_id = drm.create_framebuffer(width, height, format, 0)?;
+                // Write back fb_id to first field
+                core::ptr::write(arg as *mut u32, fb_id);
+            }
+            Ok(0)
+        }
+
+        // ── MODE_FB_DESTROY (0x80046418) ─────────────────────────────────────
+        // struct { fb_id: u32 }
+        ioctl::MODE_FB_DESTROY => {
+            unsafe {
+                if arg.is_null() {
+                    return Err("NULL arg");
+                }
+                let fb_id = core::ptr::read(arg as *const u32);
+                drm.destroy_framebuffer(fb_id)?;
+            }
+            Ok(0)
+        }
+
+        // ── MODE_PAGE_FLIP (0xc0206407) ──────────────────────────────────────
+        // struct drm_mode_crtc_page_flip {
+        //   crtc_id: u32, fb_id: u32, flags: u32, reserved: u32, user_data: u64
+        // }  (24 bytes)
+        ioctl::MODE_PAGE_FLIP => {
+            unsafe {
+                if arg.is_null() {
+                    return Err("NULL arg");
+                }
+                let crtc_id = core::ptr::read((arg as *const u32).add(0));
+                let fb_id   = core::ptr::read((arg as *const u32).add(1));
+                let _flags  = core::ptr::read((arg as *const u32).add(2));
+                if crtc_id != drm.get_resources().crtc_id {
+                    return Err("Unknown CRTC");
+                }
+                drm.queue_page_flip(fb_id)?;
             }
             Ok(0)
         }
 
         _ => {
-            println!("[DRM] Unhandled ioctl 0x{:x}", cmd);
-            Err("Unsupported ioctl")
+            println!("[DRM Gateway] Unhandled ioctl 0x{:x}", cmd);
+            Ok(0)
         }
     }
 }
 
 /// Initialize DRM device
 pub fn init() {
-    println!(" ~ DRM/KMS .............................. ready");
+    println!(" ~ DRM/KMS (Microkernel Gateway) ........ ready");
 }

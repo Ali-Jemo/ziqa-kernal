@@ -5,6 +5,22 @@ name = "ziqa-kernel"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["full"]
+full = ["shell", "vfs", "ziqafs", "fat32", "net", "ebpf", "drm", "games", "wasm", "zig-hotpaths"]
+fast-dev = ["shell", "vfs"]
+shell = ["vfs"]
+vfs = []
+ziqafs = ["vfs"]
+fat32 = ["vfs"]
+fatfs-crate = ["dep:fatfs"]
+net = ["dep:smoltcp"]
+ebpf = []
+drm = []
+games = []
+wasm = []
+zig-hotpaths = []
+
 [dependencies]
 bootloader = { version = "0.9.23", features = ["map_physical_memory"] }
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
@@ -16,7 +32,13 @@ uart_16550 = "0.3.0"
 volatile = "0.2.7"
 embedded-cli = "0.2.1"
 x86_64 = { version = "0.14.12", features = ["nightly", "instructions"] }
-smoltcp = { version = "0.11", default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-icmp", "socket-dns", "alloc"] }
+smoltcp = { version = "0.11", optional = true, default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-icmp", "socket-dns", "socket-dhcpv4", "alloc"] }
+pci_types = "0.10"
+acpi = { version = "4.0", default-features = false }
+fatfs = { version = "0.3.6", optional = true, default-features = false, features = ["alloc", "core_io"] }
+virtio-drivers = { version = "0.7.1", default-features = false, features = ["alloc"] }
+
+
 
 [profile.dev]
 opt-level = 1
@@ -31,12 +53,5 @@ opt-level = 0
 opt-level = 3
 panic = "abort"
 
-[package.metadata.bootloader]
-# Enable high-resolution graphical framebuffer (XRGB8888)
-# This will provide a linear framebuffer address in BootInfo
-map-physical-memory = true
-minimum-framebuffer-width = 1024
-minimum-framebuffer-height = 768
-
 [package.metadata.bootimage]
-run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "format=raw,file=disk.img", "-serial", "stdio", "-display", "gtk", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]
+run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "file=disk.img,if=none,format=raw,id=hdr0", "-device", "virtio-blk-pci,drive=hdr0", "-serial", "stdio", "-display", "none", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]

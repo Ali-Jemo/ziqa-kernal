@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use spin::Mutex;
-use ziqa_kernel::drivers::ata::AtaBlock;
+use ziqa_kernel::drivers::block_registry;
 use ziqa_kernel::drivers::vga;
 use ziqa_kernel::drivers::vga::Color;
 use ziqa_kernel::fs::ramfs::RamFile;
@@ -66,6 +66,7 @@ fn print_banner() {
     set_fg(Color::LightCyan);
     println!("║        ▓ 23 modules   ▓ 100+ syscalls  ▓ MLFQ sched   ▓ eBPF VM              ║");
     println!("║        ▓ DRM/KMS      ▓ io_uring       ▓ IPC/SHM       ▓ Capability sec       ║");
+    println!("║        ▓ Userspace Drv ▓ Ring 3 DRM    ▓ Microkernel   ▓ Hardware Cap         ║");
     set_fg(Color::White);
     println!("║                                                                              ║");
     set_fg(Color::LightCyan);
@@ -75,8 +76,8 @@ fn print_banner() {
 
 fn init_subsystems() {
     set_fg(Color::LightGreen);
+    #[cfg(feature = "net")]
     ziqa_kernel::net::init();
-    ziqa_kernel::drivers::virtio_net::init().ok();
     ziqa_kernel::drivers::ps2_mouse::init();
     set_fg(Color::White);
     section("Self-tests");
@@ -87,7 +88,7 @@ fn init_services() {
     section("Services");
     // VFS & RamFS Setup
     {
-        let mut vfs = VFS.lock();
+        let mut vfs = VFS.write();
         let demo_file = Arc::new(Mutex::new(RamFile::new()));
         {
             let mut file = demo_file.lock();
@@ -95,16 +96,67 @@ fn init_services() {
         }
         vfs.mount("/etc/motd", demo_file);
         vfs.mount("/bin/test", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../assets/test_elf.bin")))));
+        #[cfg(feature = "wasm")]
         vfs.mount("/bin/hello.wasm", Arc::new(Mutex::new(RamFile::from_bytes(ziqa_kernel::abi::wasm::TEST_WASM))));
     }
-    
-    // ZiqaFS
+
+    // Disk filesystems
     {
-        let ata_disk = Arc::new(AtaBlock::new().expect("Failed to initialize AtaBlock"));
-        let _ziqafs = ZiqaFs::mount(ata_disk.clone())
-            .unwrap_or_else(|_| ZiqaFs::format(ata_disk.clone()).expect("Failed to format ZiqaFS"));
-        println!(" ~ ZiqaFS ............................. mounted");
+        block_registry::print_devices();
+
+        if let Some(entry) = block_registry::first() {
+            let disk = entry.device.clone();
+            println!(" ~ root disk .......................... /dev/{} ({})", entry.name, entry.driver);
+
+            // Prefer host-editable FAT32 when present. This avoids formatting a
+            // FAT32 development disk as ZiqaFS before we get a chance to mount it.
+            #[cfg(feature = "fat32")]
+            let fat32_mounted = {
+                use ziqa_kernel::fs::fat32;
+                if let Some((start, _size)) = fat32::find_fat32_partition(&*disk) {
+                    println!(" ~ FAT32 partition found at sector {}", start);
+                    match fat32::mount_fat32(disk.clone(), start, "/fat") {
+                        Ok(()) => {
+                            ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/fat", "fat32");
+                            println!(" ~ FAT32 ............................. mounted at /fat");
+                            true
+                        }
+                        Err(e) => {
+                            println!(" ~ FAT32 mount failed: {}", e);
+                            false
+                        }
+                    }
+                } else {
+                    false
+                }
+            };
+            #[cfg(not(feature = "fat32"))]
+            let fat32_mounted = false;
+
+            if !fat32_mounted {
+                let ziqafs = ZiqaFs::mount(disk.clone())
+                    .unwrap_or_else(|_| ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS"));
+                ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
+                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                println!(" ~ ZiqaFS ............................. mounted");
+            }
+        } else {
+            println!(" ~ block devices ...................... none found; skipping disk FS");
+        }
     }
+
+    // Microkernel Transition: Grant Hardware Access Capability
+    if let Some(proc) = ziqa_kernel::process::scheduler::current_task() {
+        let mut p = proc.lock();
+        p.capabilities.grant(
+            ziqa_kernel::capability::ResourceKind::DeviceIo,
+            ziqa_kernel::capability::Permissions::full(),
+            0,
+            None,
+        );
+        println!(" ~ DeviceIo Capability ................ granted to init");
+    }
+
     set_fg(Color::White);
 }
 

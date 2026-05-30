@@ -117,8 +117,8 @@ impl Editor {
         let n = min(bytes.len(), 255);
         ed.path[..n].copy_from_slice(&bytes[..n]);
         ed.path_len = n;
-        let mut tmp = [0u8; 32768];
-        if let Ok(n) = VFS.lock().read_raw(path, &mut tmp, 0) {
+        let mut tmp = [0u8; 65536];
+        if let Ok(n) = VFS.read().read_raw(path, &mut tmp, 0) {
             ed.buf = tmp[..n].to_vec();
         }
         ed.build_lines();
@@ -605,28 +605,35 @@ impl Editor {
 
     fn save(&mut self) {
         let path = self.path_str();
-        let mut vfs = VFS.lock();
+        let mut vfs = VFS.write();
         if !vfs.exists(path) {
             if path.starts_with("/disk/") {
-                let name = path.trim_start_matches("/disk/");
-                let fs_guard = crate::fs::ziqafs::ZIQAFS.lock();
-                if let Some(ref fs) = *fs_guard {
-                    let mut fs_lock = fs.lock();
-                    let (parent_id, file_name) = if let Some(idx) = name.rfind('/') {
-                        let dir = &name[..idx];
-                        let fname = &name[idx + 1..];
-                        let pid = crate::fs::ziqafs::ZiqaFs::root_lookup(
-                            &mut fs_lock, &alloc::format!("/disk/{}", dir)).unwrap_or(0);
-                        (pid, fname)
-                    } else {
-                        (crate::fs::ziqafs::ROOT_INODE, name)
-                    };
-                    if let Ok(id) = crate::fs::ziqafs::ZiqaFs::create_file(&mut fs_lock, parent_id, file_name) {
-                        if let Ok(ino) = crate::fs::ziqafs::ZiqaFs::get_inode(&mut fs_lock, id) {
-                            let file = crate::fs::ziqafs::ZiqaFsFile { fs: fs.clone(), inode_id: id, inode: ino };
-                            vfs.mount(path, alloc::sync::Arc::new(spin::Mutex::new(file)));
+                #[cfg(feature = "ziqafs")]
+                {
+                    let name = path.trim_start_matches("/disk/");
+                    let fs_guard = crate::fs::ziqafs::ZIQAFS.lock();
+                    if let Some(ref fs) = *fs_guard {
+                        let mut fs_lock = fs.lock();
+                        let (parent_id, file_name) = if let Some(idx) = name.rfind('/') {
+                            let dir = &name[..idx];
+                            let fname = &name[idx + 1..];
+                            let pid = crate::fs::ziqafs::ZiqaFs::root_lookup(
+                                &mut fs_lock, &alloc::format!("/disk/{}", dir)).unwrap_or(0);
+                            (pid, fname)
+                        } else {
+                            (crate::fs::ziqafs::ROOT_INODE, name)
+                        };
+                        if let Ok(id) = crate::fs::ziqafs::ZiqaFs::create_file(&mut fs_lock, parent_id, file_name) {
+                            if let Ok(ino) = crate::fs::ziqafs::ZiqaFs::get_inode(&mut fs_lock, id) {
+                                let file = crate::fs::ziqafs::ZiqaFsFile { fs: fs.clone(), inode_id: id, inode: ino };
+                                vfs.mount(path, alloc::sync::Arc::new(spin::Mutex::new(file)));
+                            }
                         }
                     }
+                }
+                #[cfg(not(feature = "ziqafs"))]
+                {
+                    vfs.create(path);
                 }
             } else {
                 vfs.create(path);

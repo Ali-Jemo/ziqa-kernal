@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::collections::BTreeMap;
+use core::fmt::Write;
 use crate::{print, println};
-use crate::process::{AbiKind, Pid};
+use crate::process::Pid;
 use crate::fs::vfs::VFS;
-use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
-use x86_64::VirtAddr;
+#[cfg(feature = "ziqafs")]
+use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE, BLOCK_SIZE};
 
 /// Represents a background job
 #[derive(Debug)]
@@ -47,34 +48,48 @@ const C_YELLOW: &str = "\x1b[33m";
 const C_BLUE: &str = "\x1b[34m";
 const C_CYAN: &str = "\x1b[36m";
 
+/// A parsed command with redirection and background info
+#[derive(Clone)]
+pub struct ParsedCmd {
+    pub args: Vec<String>,
+    pub stdin_file: Option<String>,
+    pub stdout_file: Option<String>,
+    pub stdout_append: bool,
+    pub background: bool,
+}
+
+/// Signature for all builtin commands
+pub type BuiltinFn = fn(&mut Shell, &[String]) -> i32;
+
 pub struct Shell {
     input_buf: [u8; 256],
     cursor: usize,
-    history: Vec<[u8; 256]>,
+    history: Vec<String>,
     history_pos: isize,
-    cwd: [u8; 256],
-    cwd_len: usize,
-    prev_cwd: [u8; 256],
-    prev_cwd_len: usize,
+    cwd: String,
+    prev_cwd: String,
     last_exit_status: i32,
     aliases: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
-    /// Job control
     jobs: Vec<Job>,
-    fg_job: Option<usize>, // index in jobs vector of foreground job
+    fg_job: Option<usize>,
+}
+
+impl Default for Shell {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Shell {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             input_buf: [0; 256],
             cursor: 0,
             history: Vec::new(),
             history_pos: -1,
-            cwd: [0; 256],
-            cwd_len: 0,
-            prev_cwd: [0; 256],
-            prev_cwd_len: 0,
+            cwd: String::new(),
+            prev_cwd: String::new(),
             last_exit_status: 0,
             aliases: BTreeMap::new(),
             env: BTreeMap::new(),
@@ -83,19 +98,11 @@ impl Shell {
         }
     }
 
-    fn set_exit_status(&mut self, status: i32) {
-        self.last_exit_status = status;
-    }
-
     fn cwd_str(&self) -> &str {
-        if self.cwd_len == 0 {
-            "/"
-        } else {
-            core::str::from_utf8(&self.cwd[..self.cwd_len]).unwrap_or("/")
-        }
+        if self.cwd.is_empty() { "/" } else { &self.cwd }
     }
 
-    fn resolve_path(&self, path: &str) -> alloc::string::String {
+    fn resolve_path(&self, path: &str) -> String {
         if path.is_empty() {
             return self.cwd_str().to_string();
         }
@@ -111,7 +118,7 @@ impl Shell {
         }
     }
 
-    fn normalize(path: &str) -> alloc::string::String {
+    fn normalize(path: &str) -> String {
         let mut parts: Vec<&str> = Vec::new();
         for seg in path.split('/') {
             match seg {
@@ -127,8 +134,272 @@ impl Shell {
         }
     }
 
+    fn skip_ws(input: &str, pos: &mut usize) {
+        while *pos < input.len() && input.as_bytes()[*pos].is_ascii_whitespace() {
+            *pos += 1;
+        }
+    }
+
+    fn read_word<'a>(input: &'a str, pos: &mut usize) -> Result<String, &'a str> {
+        let mut word = String::new();
+        let bytes = input.as_bytes();
+        while *pos < bytes.len() {
+            let b = bytes[*pos];
+            if b == b' ' || b == b'\t' {
+                break;
+            }
+            if b == b'\\' && *pos + 1 < bytes.len() {
+                *pos += 1;
+                word.push(bytes[*pos] as char);
+                *pos += 1;
+                continue;
+            }
+            if b == b'"' || b == b'\'' {
+                let quote = b;
+                *pos += 1;
+                loop {
+                    if *pos >= bytes.len() {
+                        return Err("unclosed quote");
+                    }
+                    if bytes[*pos] == quote {
+                        break;
+                    }
+                    if quote == b'"' && bytes[*pos] == b'\\' && *pos + 1 < bytes.len() {
+                        *pos += 1;
+                        word.push(bytes[*pos] as char);
+                        *pos += 1;
+                        continue;
+                    }
+                    word.push(bytes[*pos] as char);
+                    *pos += 1;
+                }
+                *pos += 1;
+                continue;
+            }
+            if b == b'|' || b == b'>' || b == b'<' || b == b'&' {
+                if !word.is_empty() {
+                    break;
+                }
+                word.push(b as char);
+                *pos += 1;
+                if (b == b'>' || b == b'&') && *pos < bytes.len() && bytes[*pos] == b {
+                    word.push(b as char);
+                    *pos += 1;
+                }
+                break;
+            }
+            word.push(b as char);
+            *pos += 1;
+        }
+        if word.is_empty() {
+            return Err("empty word");
+        }
+        Ok(word)
+    }
+
+    fn expand_vars(s: &str, env: &BTreeMap<String, String>, last_exit: i32, shell_pid: u64) -> String {
+        let mut out = String::new();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'$' && i + 1 < bytes.len() {
+                match bytes[i + 1] {
+                    b'$' => { write!(out, "{}", shell_pid).ok(); i += 2; continue; }
+                    b'?' => { write!(out, "{}", last_exit).ok(); i += 2; continue; }
+                    b'{' => {
+                        if let Some(end) = s[i+2..].find('}').map(|p| i + 2 + p) {
+                            let var = &s[i+2..end];
+                            let val = env.get(var).map(|s| s.as_str()).unwrap_or("");
+                            out.push_str(val);
+                            i = end + 1;
+                            continue;
+                        }
+                    }
+                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                        let start = i + 1;
+                        let mut end = start;
+                        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                            end += 1;
+                        }
+                        let var = &s[start..end];
+                        let val = env.get(var).map(|s| s.as_str()).unwrap_or("");
+                        out.push_str(val);
+                        i = end;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        out
+    }
+
+    fn parse_line(input: &str) -> Result<ParsedCmd, &str> {
+        let input = input.trim();
+        let mut pos = 0;
+        Self::skip_ws(input, &mut pos);
+
+        let mut args = Vec::new();
+        let mut stdin_file = None;
+        let mut stdout_file = None;
+        let mut stdout_append = false;
+        let mut background = false;
+
+        while pos < input.len() {
+            let word = Self::read_word(input, &mut pos)?;
+            match word.as_str() {
+                "<" => {
+                    Self::skip_ws(input, &mut pos);
+                    stdin_file = Some(Self::read_word(input, &mut pos)?);
+                }
+                ">" => {
+                    Self::skip_ws(input, &mut pos);
+                    stdout_file = Some(Self::read_word(input, &mut pos)?);
+                    stdout_append = false;
+                }
+                ">>" => {
+                    Self::skip_ws(input, &mut pos);
+                    stdout_file = Some(Self::read_word(input, &mut pos)?);
+                    stdout_append = true;
+                }
+                "&" => {
+                    background = true;
+                }
+                _ => args.push(word),
+            }
+            Self::skip_ws(input, &mut pos);
+        }
+
+        if args.is_empty() {
+            return Err("empty command");
+        }
+
+        Ok(ParsedCmd { args, stdin_file, stdout_file, stdout_append, background })
+    }
+
+    fn find_builtin(name: &str) -> Option<BuiltinFn> {
+        match name {
+            "help"      => Some(Self::cmd_help),
+            "uptime"    => Some(Self::cmd_uptime),
+            "ps"        => Some(Self::cmd_ps),
+            "kill"      => Some(Self::cmd_kill),
+            "sleep"     => Some(Self::cmd_sleep),
+            "meminfo"   => Some(Self::cmd_meminfo),
+            "lsblk"     => Some(Self::cmd_lsblk),
+            "blkinfo"   => Some(Self::cmd_blkinfo),
+            "mount"     => Some(Self::cmd_mount),
+            #[cfg(feature = "ziqafs")]
+            "diskinfo"  => Some(Self::cmd_diskinfo),
+            #[cfg(feature = "net")]
+            "netstat"   => Some(Self::cmd_netstat),
+            "klog"      => Some(Self::cmd_klog),
+            #[cfg(feature = "games")]
+            "doom"      => Some(Self::cmd_doom),
+            #[cfg(feature = "games")]
+            "tetris"    => Some(Self::cmd_tetris),
+            "reboot"    => Some(Self::cmd_reboot),
+            "echo"      => Some(Self::cmd_echo),
+            "clear"     => Some(Self::cmd_clear),
+            "edit"      => Some(Self::cmd_edit),
+            "ls"        => Some(Self::cmd_ls),
+            "cd"        => Some(Self::cmd_cd),
+            "pwd"       => Some(Self::cmd_pwd),
+            "mkdir"     => Some(Self::cmd_mkdir),
+            "dir"       => Some(Self::cmd_dir),
+            "rm"        => Some(Self::cmd_rm),
+            "rmdir"     => Some(Self::cmd_rmdir),
+            "cat"       => Some(Self::cmd_cat),
+            #[cfg(feature = "net")]
+            "ping"      => Some(Self::cmd_ping),
+            #[cfg(feature = "net")]
+            "wget"      => Some(Self::cmd_wget),
+            #[cfg(feature = "net")]
+            "ifconfig"  => Some(Self::cmd_ifconfig),
+            "mv"        => Some(Self::cmd_mv),
+            #[cfg(feature = "ziqafs")]
+            "cp"        => Some(Self::cmd_cp),
+            "touch"     => Some(Self::cmd_touch),
+            #[cfg(feature = "ziqafs")]
+            "stat"      => Some(Self::cmd_stat),
+            #[cfg(feature = "ziqafs")]
+            "du"        => Some(Self::cmd_du),
+            "history"   => Some(Self::cmd_history),
+            "alias"     => Some(Self::cmd_alias),
+            "export"    => Some(Self::cmd_export),
+            "jobs"      => Some(Self::cmd_jobs),
+            "bg"        => Some(Self::cmd_bg),
+            "fg"        => Some(Self::cmd_fg),
+            "dashboard" | "top" => Some(Self::cmd_dashboard),
+            "spawn"     => Some(Self::cmd_spawn),
+            "spawnelf"  => Some(Self::cmd_spawn_elf),
+            "exec"      => Some(Self::cmd_exec),
+            #[cfg(feature = "games")]
+            "nwm-test"  => Some(Self::cmd_nwm_test),
+            "bench"     => Some(Self::cmd_bench),
+            "test"      => Some(Self::cmd_test),
+            _ => None,
+        }
+    }
+
+    fn poll_jobs(&mut self) {
+        let pids = crate::process::scheduler::list_pids();
+        let mut i = 0;
+        while i < self.jobs.len() {
+            if !pids.contains(&self.jobs[i].pid) {
+                let done = self.jobs.remove(i);
+                println!("[{}] Done  {}", i + 1, done.command);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    fn execute_cmd(&mut self, parsed: &ParsedCmd) -> i32 {
+        if parsed.args.is_empty() {
+            return 0;
+        }
+        let name = &parsed.args[0];
+        let args = &parsed.args[1..];
+
+        if let Some(func) = Self::find_builtin(name) {
+            func(self, args)
+        } else {
+            // Try spawning as ELF
+            let resolved = self.resolve_path(name);
+            let mut buf = [0u8; 65536];
+            match VFS.read().read_raw(&resolved, &mut buf, 0) {
+                Ok(n) if n > 0 => {
+                    match crate::process::scheduler::spawn_elf(&buf[..n]) {
+                        Some(pid) => {
+                            println!("Spawned PID={} from '{}'", pid.0, resolved);
+                            if parsed.background {
+                                self.jobs.push(Job {
+                                    pid,
+                                    command: parsed.args.join(" "),
+                                    state: JobState::Running,
+                                });
+                            }
+                            0
+                        }
+                        None => { println!("Failed to spawn '{}'", resolved); 1 }
+                    }
+                }
+                _ => {
+                    let suggestion = self.find_similar_command(name);
+                    if let Some(s) = suggestion {
+                        println!("Unknown command: {}. Did you mean '{}'?", name, s);
+                    } else {
+                        println!("Unknown command: {}. Type 'help'.", name);
+                    }
+                    1
+                }
+            }
+        }
+    }
+
     pub fn run(&mut self) -> ! {
-        // ── Welcome banner ──
         let ms = crate::timer::uptime_ms();
         println!("\x1b[36m\x1b[1m  ⚡ ZiqaKernel v0.1 ⚡\x1b[0m");
         println!("\x1b[2m  ─────────────────────────────────────────────\x1b[0m");
@@ -140,28 +411,64 @@ impl Shell {
         self.update_status_bar();
 
         loop {
-            // Poll network stack for incoming/outgoing packets
             crate::net::stack::poll_network();
+            self.poll_jobs();
 
+            // ── Zero-alloc prompt ──
             let cwd = self.cwd_str();
-            // Enhanced prompt with colors and exit status
-            let exit_status = if self.last_exit_status != 0 { 
-                alloc::format!("{}", self.last_exit_status) 
-            } else {
-                String::new()
-            };
-            let time = crate::timer::uptime_ms() / 1000; // seconds since boot
-            let prompt = if cwd == "/" {
-                alloc::format!("\x1b[36mziqa\x1b[0m\x1b[33m[\x1b[0m{}{}\x1b[33m]\x1b[0m \x1b[32m>\x1b[0m ", 
-                    if exit_status.is_empty() { "" } else { &exit_status }, 
-                    time)
-            } else {
-                alloc::format!("\x1b[36mziqa\x1b[0m\x1b[33m[\x1b[0m{}{}\x1b[0m \x1b[33m{}\x1b[33m]\x1b[0m \x1b[32m>\x1b[0m ", 
-                    if exit_status.is_empty() { "" } else { &exit_status }, 
-                    time, cwd)
-            };
+            let time = crate::timer::uptime_ms() / 1000;
+            let mut buf = [0u8; 128];
+            let mut pos = 0;
+
+            let header = "\x1b[36mziqa\x1b[0m\x1b[33m[\x1b[0m";
+            let hb = header.as_bytes();
+            buf[pos..pos + hb.len()].copy_from_slice(hb);
+            pos += hb.len();
+
+            if self.last_exit_status != 0 {
+                let mut tmp = [0u8; 12];
+                let mut tp = 0;
+                let mut n = self.last_exit_status;
+                if n < 0 { tmp[tp] = b'-'; tp += 1; n = -n; }
+                let start = tp;
+                loop {
+                    tmp[tp] = b'0' + (n % 10) as u8;
+                    tp += 1;
+                    n /= 10;
+                    if n == 0 { break; }
+                }
+                tmp[start..tp].reverse();
+                buf[pos..pos + (tp - start)].copy_from_slice(&tmp[start..tp]);
+                pos += tp - start;
+            }
+
+            let time_str = alloc::format!("{}", time);
+            let tb = time_str.as_bytes();
+            let remaining = buf.len() - pos;
+            let tc = tb.len().min(remaining);
+            buf[pos..pos + tc].copy_from_slice(&tb[..tc]);
+            pos += tc;
+
+            if cwd != "/" {
+                let space = b" ";
+                buf[pos] = space[0]; pos += 1;
+                let cb = cwd.as_bytes();
+                let remaining = buf.len() - pos;
+                let cc = cb.len().min(remaining);
+                buf[pos..pos + cc].copy_from_slice(&cb[..cc]);
+                pos += cc;
+            }
+
+            let tail = "\x1b[33m]\x1b[0m \x1b[32m>\x1b[0m ";
+            let tl = tail.as_bytes();
+            let remaining = buf.len() - pos;
+            let tc2 = tl.len().min(remaining);
+            buf[pos..pos + tc2].copy_from_slice(&tl[..tc2]);
+            pos += tc2;
+
+            let prompt = core::str::from_utf8(&buf[..pos]).unwrap_or("> ");
             print!("{}", prompt);
-            
+
             self.read_line();
 
             let has_input = self.input_buf[..self.cursor].iter().any(|&b| b != b' ' && b != b'\t' && b != b'\r' && b != b'\n');
@@ -169,129 +476,53 @@ impl Shell {
                 self.push_history();
                 let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
                 let trimmed = input.trim();
-                let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
-                let mut cmd = parts[0].to_string();
-                
-                // Alias expansion
-                if let Some(expanded) = self.aliases.get(&cmd) {
-                    cmd = expanded.clone();
-                }
 
-                let arg1 = parts.get(1).copied().map(String::from);
-                let arg2 = parts.get(2).copied().map(String::from);
-                match cmd.as_str() {
-                     "help"    => {
-                         self.cmd_help();
-                         self.set_exit_status(0);
-                     },
-                     "uptime"  => {
-                         self.cmd_uptime();
-                         self.set_exit_status(0);
-                     },
-                     "klog"    => {
-                         self.cmd_klog(arg1.as_deref().unwrap_or("info"));
-                         self.set_exit_status(0);
-                     },
-                     "spawn"   => {
-                         self.cmd_spawn(arg1.as_deref());
-                         self.set_exit_status(0);
-                     },
-                     "spawnelf" => {
-                         self.cmd_spawn_elf(arg1.as_deref());
-                         self.set_exit_status(0);
-                     },
-                     "exec"    => {
-                         self.cmd_exec(arg1.as_deref());
-                         self.set_exit_status(0);
-                     },
-                     "ps"      => {
-                         self.cmd_ps();
-                         self.set_exit_status(0);
-                     },
-                     "kill"    => self.cmd_kill(arg1.as_deref(), arg2.as_deref()),
-                    "sleep"   => self.cmd_sleep(arg1.as_deref()),
-                    "meminfo" => self.cmd_meminfo(),
-                    "diskinfo" => self.cmd_diskinfo(),
-                    "netstat" => self.cmd_netstat(),
-                    "doom"    => self.cmd_doom(arg1.as_deref()),
-                    "tetris"  => self.cmd_tetris(),
-                    "nwm-test" => {
-                        self.cmd_nwm_test();
-                        self.set_exit_status(0);
-                    },
-                    "dashboard" | "top" => self.cmd_dashboard(),
-                    "reboot"  => self.cmd_reboot(),
-                    "edit"    => self.cmd_edit(arg1.as_deref()),
-                    "ls"      => self.cmd_ls(arg1.as_deref()),
-                    "cd"      => self.cmd_cd(arg1.as_deref()),
-                    "pwd"     => self.cmd_pwd(),
-                    "mkdir"   => self.cmd_mkdir(arg1.as_deref()),
-                    "dir"     => self.cmd_dir(arg1.as_deref()),
-                    "rm"      => self.cmd_rm(arg1.as_deref()),
-                    "rmdir"   => self.cmd_rm(arg1.as_deref()),
-                    "cat"     => self.cmd_cat(arg1.as_deref()),
-                    "mv"      => self.cmd_mv(arg1.as_deref(), arg2.as_deref()),
-                    "cp"      => self.cmd_cp(arg1.as_deref(), arg2.as_deref()),
-                    "touch"   => self.cmd_touch(arg1.as_deref()),
-                    "stat"    => self.cmd_stat(arg1.as_deref()),
-                    "du"      => self.cmd_du(arg1.as_deref()),
-                     "clear"   => {
-                         self.cmd_clear();
-                         self.set_exit_status(0);
-                     },
-                    "echo"    => println!("{}", trimmed.trim_start_matches("echo").trim_start()),
-                    "ping"     => self.cmd_ping(trimmed.trim_start_matches("ping").trim_start()),
-                    "wget"     => self.cmd_wget(trimmed.trim_start_matches("wget").trim_start()),
-                     "ifconfig" => {
-                         self.cmd_ifconfig();
-                         self.set_exit_status(0);
-                     },
-                     "history"  => {
-                         self.cmd_history();
-                         self.set_exit_status(0);
-                     },
-                     "jobs"     => {
-                         self.cmd_jobs();
-                         self.set_exit_status(0);
-                     },
-                     "bg"       => {
-                         self.cmd_bg(arg1.as_deref());
-                         self.set_exit_status(0);
-                     },
-                     "fg"       => {
-                         self.cmd_fg(arg1.as_deref());
-                         self.set_exit_status(0);
-                     },
-                    "alias"    => self.cmd_alias(arg1.as_deref(), arg2.as_deref()),
-                    "export"   => self.cmd_export(arg1.as_deref()),
-                     _         => {
-                         let suggestion = self.find_similar_command(&cmd);
-                         if let Some(s) = suggestion {
-                             println!("Unknown command: {}. Did you mean '{}'?", cmd, s);
-                         } else {
-                             println!("Unknown command: {}. Type 'help'.", cmd);
-                         }
-                         self.set_exit_status(1);
-                     }
+                // Alias expansion
+                let expanded_input = if let Some(idx) = trimmed.find(char::is_whitespace) {
+                    let first = &trimmed[..idx];
+                    let rest = &trimmed[idx..];
+                    if let Some(alias) = self.aliases.get(first) {
+                        let mut s = alias.clone();
+                        s.push_str(rest);
+                        s
+                    } else {
+                        trimmed.to_string()
+                    }
+                } else if let Some(alias) = self.aliases.get(trimmed) {
+                    alias.clone()
+                } else {
+                    trimmed.to_string()
+                };
+
+                // Environment variable expansion
+                let expanded = Self::expand_vars(&expanded_input, &self.env, self.last_exit_status, 0);
+
+                match Self::parse_line(&expanded) {
+                    Ok(cmd) => {
+                        self.last_exit_status = self.execute_cmd(&cmd);
+                    }
+                    Err(e) => {
+                        println!("{}", e);
+                        self.last_exit_status = 1;
+                    }
                 }
-                 self.update_status_bar();
-                 // Add visual separator after command output
-                 println!("\x1b[2m──────────────────────────────────────────────────────────────────────\x1b[0m");
-             }
-             self.history_pos = -1;
-             self.cursor = 0;
-         }
+            }
+            self.update_status_bar();
+            println!("\x1b[2m──────────────────────────────────────────────────────────────────────\x1b[0m");
+            self.history_pos = -1;
+            self.cursor = 0;
+        }
     }
 
     fn push_history(&mut self) {
-        let last = self.history.last().map(|e| *e == self.input_buf).unwrap_or(false);
+        let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
+        if input.is_empty() { return; }
+        let last = self.history.last().map(|e| e.as_str() == input).unwrap_or(false);
         if !last {
             if self.history.len() >= MAX_HISTORY {
                 self.history.remove(0);
             }
-            let mut entry = [0u8; 256];
-            entry[..self.cursor].copy_from_slice(&self.input_buf[..self.cursor]);
-            self.history.push(entry);
+            self.history.push(input.to_string());
         }
     }
 
@@ -300,16 +531,16 @@ impl Shell {
         if cwd == "/" {
             "ziqa > ".chars().count()
         } else {
-            alloc::format!("ziqa {} > ", cwd).chars().count()
+            ("ziqa ".to_string() + cwd + " > ").chars().count()
         }
     }
 
     fn refresh_line(&self, idx: usize) {
         let cwd = self.cwd_str();
         let prompt = if cwd == "/" {
-            alloc::format!("ziqa > ")
+            "ziqa > ".to_string()
         } else {
-            alloc::format!("ziqa {} > ", cwd)
+            "ziqa ".to_string() + cwd + " > "
         };
         print!("\r");
         for _ in 0..79 {
@@ -327,8 +558,10 @@ impl Shell {
 
     fn load_history(&mut self, idx: &mut usize) {
         let entry = &self.history[self.history_pos as usize];
-        let len = entry.iter().position(|&b| b == 0).unwrap_or(256);
-        self.input_buf[..len].copy_from_slice(&entry[..len]);
+        let bytes = entry.as_bytes();
+        let len = bytes.len().min(255);
+        self.input_buf[..len].copy_from_slice(&bytes[..len]);
+        if len < 256 { self.input_buf[len] = 0; }
         *idx = len;
         self.refresh_line(*idx);
     }
@@ -382,7 +615,7 @@ impl Shell {
                         print!("{}{}{}  ", C_GREEN, c, C_RESET);
                     } else if c.parse::<u64>().is_ok() {
                         print!("{}{}{}  ", C_YELLOW, c, C_RESET);
-                    } else if VFS.lock().is_dir(c) {
+                    } else if VFS.read().is_dir(c) {
                         print!("{}{}{}  ", C_BLUE, c, C_RESET);
                     } else {
                         print!("{}  ", c);
@@ -396,7 +629,7 @@ impl Shell {
 
     fn complete_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
         if matches!(cmd, "ls" | "cd" | "edit" | "rm" | "cat" | "mkdir" | "dir" | "spawnelf" | "spawn") {
-            let vfs = VFS.lock();
+            let vfs = VFS.read();
             let all = vfs.list();
             let cwd = self.cwd_str();
             let search_prefix = if prefix.starts_with('/') {
@@ -540,7 +773,7 @@ impl Shell {
                         self.refresh_line(idx);
                     }
                     0x0C => {
-                        self.cmd_clear();
+                        self.cmd_clear(&[]);
                         self.refresh_line(idx);
                     }
                     0x04 => {
@@ -568,7 +801,9 @@ impl Shell {
         }
     }
 
-    fn cmd_alias(&mut self, arg1: Option<&str>, arg2: Option<&str>) {
+    fn cmd_alias(&mut self, args: &[String]) -> i32 {
+        let arg1 = args.first().map(|s| s.as_str());
+        let arg2 = args.get(1).map(|s| s.as_str());
         match (arg1, arg2) {
             (Some(name), Some(value)) => {
                 self.aliases.insert(name.to_string(), value.to_string());
@@ -588,10 +823,11 @@ impl Shell {
                 }
             }
         }
+        0
     }
 
-    fn cmd_export(&mut self, arg1: Option<&str>) {
-        match arg1 {
+    fn cmd_export(&mut self, args: &[String]) -> i32 {
+        match args.first().map(|s| s.as_str()) {
             Some(arg) => {
                 if let Some((name, value)) = arg.split_once('=') {
                     self.env.insert(name.to_string(), value.to_string());
@@ -607,9 +843,10 @@ impl Shell {
                 }
             }
         }
+        0
     }
 
-    fn cmd_help(&self) {
+    fn cmd_help(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  ⚡ ZiqaKernel Shell ⚡{}", C_CYAN, C_BOLD, C_RESET);
         println!("{}  ─────────────────────────────────────{}", C_DIM, C_RESET);
         println!("");
@@ -624,9 +861,12 @@ impl Shell {
                 ("rm <path>",        "remove a file"),
                 ("cat [-n] <path>",  "display file (-n for line numbers)"),
                 ("mv <src> <dst>",   "move/rename a file"),
+                #[cfg(feature = "ziqafs")]
                 ("cp <src> <dst>",   "copy a file"),
                 ("touch <path>",     "create file or update mtime"),
+                #[cfg(feature = "ziqafs")]
                 ("stat <path>",      "show inode details"),
+                #[cfg(feature = "ziqafs")]
                 ("du [path]",        "disk usage in blocks"),
                 ("edit <path>",      "nano-like text editor"),
             ]),
@@ -642,6 +882,10 @@ impl Shell {
                 ("help",             "show this message"),
                 ("uptime",           "kernel uptime + system summary"),
                 ("meminfo",          "heap memory statistics"),
+                ("lsblk",            "list registered block devices"),
+                ("blkinfo <dev>",    "show details of a block device"),
+                ("mount",            "list mounted filesystems"),
+                #[cfg(feature = "ziqafs")]
                 ("diskinfo",         "ZiqaFS disk usage + fsck"),
                 ("klog [lvl] [-N]",  "kernel log (debug/info/error, -N last N)"),
                 ("dashboard",        "real-time system dashboard"),
@@ -652,12 +896,14 @@ impl Shell {
                 ("alias [n=v]",      "define or list aliases"),
                 ("export N=V",       "set environment variable"),
             ]),
+            #[cfg(feature = "net")]
             ("Network", &[
                 ("netstat",          "network device statistics"),
                 ("ifconfig",         "interface addresses and stats"),
                 ("ping [-c N] <ip>", "ICMP echo with RTT stats"),
                 ("wget [-O f] <url>","HTTP GET, saves to /tmp/"),
             ]),
+            #[cfg(feature = "games")]
             ("Entertainment", &[
                 ("doom [steps]",     "DOOM fire demo (SPACE=blow, T=tornado)"),
                 ("tetris",           "graphical Tetris on VGA console"),
@@ -672,25 +918,24 @@ impl Shell {
             }
             println!("");
         }
+        0
     }
 
-    fn cmd_history(&self) {
+    fn cmd_history(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  HISTORY {} {}", C_YELLOW, C_BOLD, C_RESET, C_DIM);
         for (i, entry) in self.history.iter().enumerate() {
-            let len = entry.iter().position(|&b| b == 0).unwrap_or(256);
-            if let Ok(s) = core::str::from_utf8(&entry[..len]) {
-                println!("  {:>3}: {}", i, s);
-            }
+            println!("  {:>3}: {}", i, entry);
         }
+        0
     }
 
-    fn cmd_uptime(&self) {
+    fn cmd_uptime(&mut self, _args: &[String]) -> i32 {
         let ms = crate::timer::uptime_ms();
         let secs = ms / 1000;
         let mins = secs / 60;
         let hrs = mins / 60;
         let days = hrs / 24;
-        let proc_count = crate::process::scheduler::SCHEDULER.lock().get_pid_list().len();
+        let proc_count = crate::process::scheduler::list_pids().len();
         let stats = crate::memory::heapstats::get_stats();
         let mem_pct = (stats.current_usage_bytes() * 100) / crate::memory::heap::HEAP_SIZE as u64;
         println!("{}{}  UPTIME{}", C_YELLOW, C_BOLD, C_RESET);
@@ -702,9 +947,11 @@ impl Shell {
                 hrs, mins % 60, secs % 60, proc_count, mem_pct);
         }
         println!("  {}ticks: {}  raw: {}ms{}", C_DIM, crate::timer::uptime_ticks(), ms, C_RESET);
+        0
     }
 
-    fn cmd_klog(&self, level_str: &str) {
+    fn cmd_klog(&mut self, args: &[String]) -> i32 {
+        let level_str = args.join(" ");
         use crate::klog::Level;
         // Parse: klog [level] [-n count]
         let mut level = Level::Info;
@@ -723,7 +970,7 @@ impl Shell {
         }
         let klog = crate::klog::KLOG.lock();
         let total = klog.count();
-        let skip = if total > limit { total - limit } else { 0 };
+        let skip = total.saturating_sub(limit);
         let mut shown = 0;
         for (i, entry) in klog.iter().enumerate() {
             if i < skip { continue; }
@@ -746,32 +993,21 @@ impl Shell {
         } else {
             println!("{}-- {} entries shown --{}", C_DIM, shown, C_RESET);
         }
+        0
     }
 
-    fn cmd_spawn(&self, path: Option<&str>) {
-        if let Some(p) = path {
-            self.cmd_spawn_elf(Some(p))
-        } else {
-            let pid = crate::process::scheduler::spawn(
-                AbiKind::LinuxElf,
-                VirtAddr::new(0x400000),
-                VirtAddr::new(0x7fff_ffff_000),
-            );
-            match pid {
-                Some(p) => println!("Spawned PID={} (skeleton)", p.0),
-                None    => println!("spawn: no free slots"),
-            }
-        }
+    fn cmd_spawn(&mut self, args: &[String]) -> i32 {
+        self.cmd_spawn_elf(args)
     }
 
-    fn cmd_spawn_elf(&self, path: Option<&str>) {
-        let p = match path {
+    fn cmd_spawn_elf(&mut self, args: &[String]) -> i32 {
+        let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
-            None => { println!("Usage: spawnelf <path>"); return; }
+            None => { println!("Usage: spawnelf <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
         let mut buf = [0u8; 65536];
-        match crate::fs::vfs::VFS.lock().read_raw(&resolved, &mut buf, 0) {
+        match crate::fs::vfs::VFS.read().read_raw(&resolved, &mut buf, 0) {
             Ok(n) if n > 0 => {
                 let data = &buf[..n];
                 match crate::process::scheduler::spawn_elf(data) {
@@ -781,44 +1017,45 @@ impl Shell {
             }
             _ => println!("spawnelf: file '{}' not found in VFS", resolved),
         }
+        0
     }
 
-    fn cmd_exec(&self, pid_str: Option<&str>) {
-        let pid_val = match pid_str.and_then(|s| s.parse::<u64>().ok()) {
+    fn cmd_exec(&mut self, args: &[String]) -> i32 {
+        let pid_val = match args.first().and_then(|s| s.parse::<u64>().ok()) {
             Some(v) => v,
-            None => { println!("Usage: exec <pid>"); return; }
+            None => { println!("Usage: exec <pid>"); return 1; }
         };
         let pid = crate::process::Pid(pid_val);
+        use crate::process::scheduler::SCHEDULER;
 
         let _entry_vaddr = {
-            let mut sched = crate::process::scheduler::SCHEDULER.lock();
-            if !sched.set_current(pid) {
+            if !SCHEDULER.set_current(pid) {
                 println!("exec: no process with PID {}", pid_val);
-                return;
+                return 1;
             }
-            let proc = sched.current_task().unwrap();
+            let proc_arc = SCHEDULER.get_process(pid).unwrap();
+            let proc = proc_arc.lock();
             let entry = proc.entry_point.as_u64();
             println!("[EXEC] Switching to PID {} entry=0x{:x}", pid_val, entry);
             entry
         };
 
-        let mut sched = crate::process::scheduler::SCHEDULER.lock();
-        if let Some(proc) = sched.get_process_mut(pid) {
-            proc.state = crate::process::ProcessState::Ready;
+        if let Some(proc_arc) = SCHEDULER.get_process(pid) {
+            proc_arc.lock().state = crate::process::ProcessState::Ready;
         }
-        drop(sched);
         
         crate::process::scheduler::yield_now();
+        0
     }
 
-    fn cmd_ps(&self) {
+    fn cmd_ps(&mut self, _args: &[String]) -> i32 {
         use crate::process::scheduler::SCHEDULER;
         let rows: alloc::vec::Vec<(u64, crate::process::ProcessState, u8, u64, crate::process::AbiKind, u64)> = {
-            let sched = SCHEDULER.lock();
-            sched.get_pid_list().into_iter().filter_map(|pid| {
-                sched.get_process(pid).map(|p| (
-                    p.pid.0, p.state, p.priority, p.parent, p.abi, p.entry_point.as_u64(),
-                ))
+            SCHEDULER.list_pids().into_iter().filter_map(|pid| {
+                SCHEDULER.get_process(pid).map(|p_arc| {
+                    let p = p_arc.lock();
+                    (p.pid.0, p.state, p.priority, p.parent, p.abi, p.entry_point.as_u64())
+                })
             }).collect()
         };
         println!("{}{}  PROCESSES  ({} total){}", C_YELLOW, C_BOLD, rows.len(), C_RESET);
@@ -842,12 +1079,15 @@ impl Shell {
                 pid, sc, ss, C_RESET, pri, parent, abi_s, entry);
         }
         println!("  └──────┴──────────────┴──────┴────────┴──────────┴────────────────┘");
+        0
     }
 
-    fn cmd_kill(&self, pid_str: Option<&str>, sig_str: Option<&str>) {
+    fn cmd_kill(&mut self, args: &[String]) -> i32 {
+        let pid_str = args.first().map(|s| s.as_str());
+        let sig_str = args.get(1).map(|s| s.as_str());
         let pid_val = match pid_str.and_then(|s| s.parse::<u64>().ok()) {
             Some(v) => v,
-            None => { println!("Usage: kill <pid> [signal]\n  Signals: SIGTERM(15) SIGKILL(9) SIGINT(2) SIGHUP(1) SIGUSR1(10) SIGUSR2(12)"); return; }
+            None => { println!("Usage: kill <pid> [signal]\n  Signals: SIGTERM(15) SIGKILL(9) SIGINT(2) SIGHUP(1) SIGUSR1(10) SIGUSR2(12)"); return 1; }
         };
         let signum: u8 = match sig_str {
             None => 15,
@@ -867,32 +1107,34 @@ impl Shell {
             1 => "SIGHUP", 2 => "SIGINT", 9 => "SIGKILL", 10 => "SIGUSR1",
             12 => "SIGUSR2", 15 => "SIGTERM", 18 => "SIGCONT", 19 => "SIGSTOP", _ => "SIG",
         };
-        let ok = crate::process::scheduler::SCHEDULER.lock()
+        let ok = crate::process::scheduler::SCHEDULER
             .send_signal(crate::process::Pid(pid_val), signum);
         if ok {
             println!("Sent {}({}) to PID {}", sig_name, signum, pid_val);
         } else {
             println!("kill: ({}) - No such process", pid_val);
         }
+        0
     }
 
-    fn cmd_sleep(&self, ms_str: Option<&str>) {
-        let arg = match ms_str {
+    fn cmd_sleep(&mut self, args: &[String]) -> i32 {
+        let arg = match args.first().map(|s| s.as_str()) {
             Some(v) => v,
-            None => { println!("Usage: sleep <ms>  or  sleep <N>s"); return; }
+            None => { println!("Usage: sleep <ms>  or  sleep <N>s"); return 1; }
         };
         let ms: u64 = if let Some(s) = arg.strip_suffix('s') {
             s.parse::<u64>().unwrap_or(0) * 1000
         } else {
             arg.parse().unwrap_or(0)
         };
-        if ms == 0 { println!("sleep: invalid duration '{}'", arg); return; }
+        if ms == 0 { println!("sleep: invalid duration '{}'", arg); return 1; }
         crate::timer::sleep_ms(crate::process::Pid(0), ms);
         if ms >= 1000 { println!("Slept {}.{}s", ms / 1000, (ms % 1000) / 100); }
         else { println!("Slept {}ms", ms); }
+        0
     }
 
-    fn cmd_meminfo(&self) {
+    fn cmd_meminfo(&mut self, _args: &[String]) -> i32 {
         let stats = crate::memory::heapstats::get_stats();
         let heap_size = crate::memory::heap::HEAP_SIZE;
         let heap_kib = heap_size / 1024;
@@ -928,10 +1170,235 @@ impl Shell {
             used / 1024, heap_kib, peak / 1024, peak_pct);
         println!("  Allocs: {}  Frees: {}  Live blocks: {}",
             stats.total_allocations, stats.total_frees, stats.current_blocks);
+        0
     }
 
-    fn cmd_diskinfo(&self) {
-        use crate::fs::ziqafs::ZIQAFS;
+    fn cmd_bench(&mut self, _args: &[String]) -> i32 {
+        use crate::memory::heapstats::get_stats;
+        use core::arch::x86_64::_rdtsc;
+
+        println!("{}{}  BENCHMARK{}", C_YELLOW, C_BOLD, C_RESET);
+
+        // ── Heap Stats ──
+        let stats = get_stats();
+        println!("  Heap:  {} allocs  {} frees  {} live blocks  {} B current  {} B peak",
+            stats.total_allocations, stats.total_frees, stats.current_blocks,
+            stats.current_usage_bytes(), stats.peak_usage_bytes);
+
+        // ── parse_line throughput ──
+        let inputs = [
+            "ls -la /home",
+            "cat /var/log/messages | grep error",
+            "echo hello world > /tmp/out.txt",
+            "ping -c 4 192.168.1.1",
+            "cc -O2 -Wall -I/usr/include -L/usr/lib main.c -o main",
+            "find /usr -name '*.rs' -type f 2>/dev/null",
+        ];
+        const PARSE_ITERS: u64 = 1000;
+        let mut parse_total = 0u64;
+        let mut parse_min = u64::MAX;
+        let mut parse_max = 0u64;
+        for _ in 0..PARSE_ITERS {
+            for inp in &inputs {
+                let start = unsafe { _rdtsc() };
+                let _ = Self::parse_line(inp);
+                let end = unsafe { _rdtsc() };
+                let cycles = end.wrapping_sub(start);
+                parse_total += cycles;
+                parse_min = parse_min.min(cycles);
+                parse_max = parse_max.max(cycles);
+            }
+        }
+        let n_parses = PARSE_ITERS * inputs.len() as u64;
+        println!("  parse_line:  {} iters  avg={} cyc  min={} cyc  max={} cyc",
+            n_parses, parse_total / n_parses, parse_min, parse_max);
+
+        // ── normalize path ──
+        let paths = [
+            "/usr/local/bin/../lib/./gcc",
+            "/home/user/../../etc/passwd",
+            "///usr//local//",
+            "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p",
+            "./relative/path/with/./dots/../here",
+        ];
+        const NORM_ITERS: u64 = 2000;
+        let mut norm_total = 0u64;
+        for _ in 0..NORM_ITERS {
+            for p in &paths {
+                let start = unsafe { _rdtsc() };
+                let _ = Shell::normalize(p);
+                let end = unsafe { _rdtsc() };
+                norm_total += end.wrapping_sub(start);
+            }
+        }
+        let n_norms = NORM_ITERS * paths.len() as u64;
+        println!("  normalize:   {} iters  avg={} cyc",
+            n_norms, norm_total / n_norms);
+
+        // ── find_builtin dispatch ──
+        let cmd_names = [
+            "help", "uptime", "ps", "kill", "sleep",
+            "meminfo", "diskinfo", "netstat", "klog", "doom",
+            "tetris", "reboot", "echo", "clear", "edit",
+            "ls", "cd", "pwd", "mkdir", "dir",
+            "rm", "rmdir", "cat", "ping", "wget",
+            "ifconfig", "mv", "cp", "touch", "stat",
+            "du", "alias", "export", "jobs", "bg", "fg",
+            "spawn", "spawnelf", "exec", "nonexistent",
+        ];
+        const DISPATCH_ITERS: u64 = 5000;
+        let mut dispatch_total = 0u64;
+        for _ in 0..DISPATCH_ITERS {
+            for name in &cmd_names {
+                let start = unsafe { _rdtsc() };
+                let _ = Self::find_builtin(name);
+                let end = unsafe { _rdtsc() };
+                dispatch_total += end.wrapping_sub(start);
+            }
+        }
+        let n_dispatches = DISPATCH_ITERS * cmd_names.len() as u64;
+        println!("  find_builtin: {} iters  avg={} cyc",
+            n_dispatches, dispatch_total / n_dispatches);
+
+        // ── prompt_len ──
+        self.cwd = "/".to_string();
+        const PROMPT_ITERS: u64 = 5000;
+        let mut prompt_total = 0u64;
+        for _ in 0..PROMPT_ITERS {
+            let start = unsafe { _rdtsc() };
+            let _ = self.prompt_len();
+            let end = unsafe { _rdtsc() };
+            prompt_total += end.wrapping_sub(start);
+        }
+        println!("  prompt_len:  {} iters  avg={} cyc",
+            PROMPT_ITERS, prompt_total / PROMPT_ITERS);
+        self.cwd = "/home/user/projects/ziqakernel/src".to_string();
+        prompt_total = 0;
+        for _ in 0..PROMPT_ITERS {
+            let start = unsafe { _rdtsc() };
+            let _ = self.prompt_len();
+            let end = unsafe { _rdtsc() };
+            prompt_total += end.wrapping_sub(start);
+        }
+        println!("  prompt_len (long cwd): {} iters  avg={} cyc",
+            PROMPT_ITERS, prompt_total / PROMPT_ITERS);
+        self.cwd = String::new();
+
+        // ── expand_vars ──
+        let env = BTreeMap::from([
+            ("HOME".to_string(), "/root".to_string()),
+            ("USER".to_string(), "root".to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin:/sbin".to_string()),
+            ("SHELL".to_string(), "/bin/zsh".to_string()),
+        ]);
+        let var_inputs = [
+            "echo $HOME/$USER",
+            "echo ${PATH}:$HOME/bin",
+            "exit code: $?  pid: $$",
+            "$HOME/${USER}${SHELL}",
+            "no variables here",
+        ];
+        const EXPAND_ITERS: u64 = 1000;
+        let mut expand_total = 0u64;
+        for _ in 0..EXPAND_ITERS {
+            for inp in &var_inputs {
+                let start = unsafe { _rdtsc() };
+                let _ = Self::expand_vars(inp, &env, 0, 42);
+                let end = unsafe { _rdtsc() };
+                expand_total += end.wrapping_sub(start);
+            }
+        }
+        let n_expands = EXPAND_ITERS * var_inputs.len() as u64;
+        println!("  expand_vars: {} iters  avg={} cyc",
+            n_expands, expand_total / n_expands);
+
+        println!("{}{}  END BENCHMARK{}", C_GREEN, C_BOLD, C_RESET);
+        0
+    }
+
+    fn cmd_test(&mut self, _args: &[String]) -> i32 {
+        println!("{}{}  SHELL UNIT TESTS{}", C_YELLOW, C_BOLD, C_RESET);
+        let mut passed = 0u32;
+        let mut failed = 0u32;
+
+        macro_rules! test {
+            ($name:expr, $body:expr) => {{
+                if $body {
+                    passed += 1;
+                } else {
+                    failed += 1;
+                    println!("  {}{}FAIL{}  {}", C_RED, C_BOLD, C_RESET, $name);
+                }
+            }};
+        }
+
+        // ── parse_line ──
+        let r = Shell::parse_line("ls -la /home").unwrap();
+        test!("parse: simple", r.args == ["ls", "-la", "/home"]);
+        test!("parse: no redirect", r.stdout_file.is_none());
+        test!("parse: no bg", !r.background);
+
+        let r = Shell::parse_line("echo hello > /tmp/out").unwrap();
+        test!("parse: redirect", r.stdout_file == Some("/tmp/out".to_string()));
+        test!("parse: redirect args", r.args == ["echo", "hello"]);
+
+        let r = Shell::parse_line("cat < input.txt").unwrap();
+        test!("parse: stdin", r.stdin_file == Some("input.txt".to_string()));
+
+        let r = Shell::parse_line("cc -o main main.c &").unwrap();
+        test!("parse: bg", r.background);
+        test!("parse: bg args", r.args == ["cc", "-o", "main", "main.c"]);
+
+        let r = Shell::parse_line("echo 'hello world'").unwrap();
+        test!("parse: single quotes", r.args.len() == 2 && r.args[1] == "hello world");
+
+        let r = Shell::parse_line("echo \"hello world\"").unwrap();
+        test!("parse: double quotes", r.args.len() == 2 && r.args[1] == "hello world");
+
+        test!("parse: unclosed quote", Shell::parse_line("echo \"hello").is_err());
+        test!("parse: empty", Shell::parse_line("").is_err());
+        test!("parse: whitespace", Shell::parse_line("   ").is_err());
+
+        // ── normalize ──
+        test!("norm: simple", Shell::normalize("/usr/bin") == "/usr/bin");
+        test!("norm: trailing slash", Shell::normalize("/usr/bin/") == "/usr/bin");
+        test!("norm: double slash", Shell::normalize("/usr//bin") == "/usr/bin");
+        test!("norm: .. parent", Shell::normalize("/usr/bin/..") == "/usr");
+        test!("norm: . current", Shell::normalize("/usr/./bin") == "/usr/bin");
+        test!("norm: root ..", Shell::normalize("/..") == "/");
+        test!("norm: root .", Shell::normalize("/.") == "/");
+        test!("norm: complex", Shell::normalize("/usr/local/../bin/./gcc") == "/usr/bin/gcc");
+        test!("norm: empty", Shell::normalize("") == "/");
+        test!("norm: triple /", Shell::normalize("///usr//local///") == "/usr/local");
+
+        // ── expand_vars ──
+        let env = BTreeMap::from([
+            ("HOME".to_string(), "/root".to_string()),
+            ("USER".to_string(), "joe".to_string()),
+        ]);
+        test!("expand: simple", Shell::expand_vars("echo $HOME", &env, 0, 0) == "echo /root");
+        test!("expand: two vars", Shell::expand_vars("$HOME/$USER", &env, 0, 0) == "/root/joe");
+        test!("expand: dollar dollar", Shell::expand_vars("pid=$$", &env, 0, 42) == "pid=42");
+        test!("expand: dollar quest", Shell::expand_vars("code=$?", &env, 5, 0) == "code=5");
+        test!("expand: braces", Shell::expand_vars("${HOME}/x", &env, 0, 0) == "/root/x");
+        test!("expand: unknown", Shell::expand_vars("$NOTHING", &env, 0, 0) == "");
+        test!("expand: no var", Shell::expand_vars("hello world", &env, 0, 0) == "hello world");
+
+        // ── find_builtin ──
+        test!("dispatch: known", Self::find_builtin("ls").is_some());
+        test!("dispatch: unknown", Self::find_builtin("foobar42").is_none());
+        test!("dispatch: alias", Self::find_builtin("alias").is_some());
+        test!("dispatch: bg", Self::find_builtin("bg").is_some());
+
+        let total = passed + failed;
+        println!("  {}{}  {}/{} passed{}",
+            if failed == 0 { C_GREEN } else { C_RED },
+            C_BOLD, passed, total, C_RESET);
+        if failed > 0 { 1 } else { 0 }
+    }
+
+    #[cfg(feature = "ziqafs")]
+    fn cmd_diskinfo(&mut self, _args: &[String]) -> i32 {
         let guard = ZIQAFS.lock();
         if let Some(fs_arc) = guard.as_ref() {
             let mut fs = fs_arc.lock();
@@ -939,7 +1406,7 @@ impl Shell {
             let total_kib = st.total_blocks as u64 * st.block_size as u64 / 1024;
             let free_kib  = st.free_blocks  as u64 * st.block_size as u64 / 1024;
             let used_kib  = total_kib - free_kib;
-            let pct = if total_kib > 0 { used_kib * 100 / total_kib } else { 0 } as usize;
+            let pct = used_kib.saturating_mul(100).checked_div(total_kib).unwrap_or(0) as usize;
 
             println!("{}{}  DISK (ZiqaFS){}", C_YELLOW, C_BOLD, C_RESET);
             println!("  Block size: {} B   Total: {} KiB   Used: {} KiB   Free: {} KiB",
@@ -947,7 +1414,6 @@ impl Shell {
             println!("  Inodes: {}/{} used", st.total_inodes - st.free_inodes, st.total_inodes);
             println!("");
 
-            // Disk bar
             let bar_width = 40usize;
             let filled = pct * bar_width / 100;
             print!("  [");
@@ -971,20 +1437,122 @@ impl Shell {
         } else {
             println!("diskinfo: ZiqaFS not mounted");
         }
+        0
     }
 
-    fn cmd_netstat(&self) {
+    fn cmd_lsblk(&mut self, _args: &[String]) -> i32 {
+        let devices = crate::drivers::block_registry::BLOCK_DEVICES.lock();
+        if devices.is_empty() {
+            println!("No block devices found.");
+            return 0;
+        }
+        println!("{}{}  BLOCK DEVICES {}", C_YELLOW, C_BOLD, C_RESET);
+        println!("  ┌──────────┬──────────────┬──────────────┬──────────────┐");
+        println!("  │ {}Name     │ {}Driver       │ {}Sectors      │ {}Size         {}│", C_CYAN, C_GREEN, C_CYAN, C_GREEN, C_RESET);
+        println!("  ├──────────┼──────────────┼──────────────┼──────────────┤");
+        for d in devices.iter() {
+            let total_sec = d.device.total_sectors();
+            let size_mb = total_sec * 512 / 1024 / 1024;
+            println!("  │ /dev/{:<3} │ {:<12} │ {:>12} │ {:>8} MB   │",
+                d.name, d.driver, total_sec, size_mb);
+        }
+        println!("  └──────────┴──────────────┴──────────────┴──────────────┘");
+        0
+    }
+
+    fn cmd_blkinfo(&mut self, args: &[String]) -> i32 {
+        if args.is_empty() {
+            println!("Usage: blkinfo <device_name> (e.g. vda)");
+            return 1;
+        }
+        let dev_name = args[0].trim_start_matches("/dev/");
+        let devices = crate::drivers::block_registry::BLOCK_DEVICES.lock();
+        let entry = match devices.iter().find(|d| d.name == dev_name) {
+            Some(e) => e,
+            None => {
+                println!("Error: block device '/dev/{}' not found", dev_name);
+                return 1;
+            }
+        };
+
+        let total_sec = entry.device.total_sectors();
+        let size_bytes = total_sec * 512;
+        let size_mb = size_bytes / 1024 / 1024;
+
+        println!("{}{}  DEVICE INFO: /dev/{} {}", C_YELLOW, C_BOLD, dev_name, C_RESET);
+        println!("  Driver:       {}", entry.driver);
+        println!("  Sectors:      {}", total_sec);
+        println!("  Capacity:     {} MB ({} bytes)", size_mb, size_bytes);
+        println!("  Sector Size:  512 bytes");
+
+        let mut first_sector = [0u8; 512];
+        if entry.device.read_sectors(0, 1, &mut first_sector).is_ok() {
+            let boot_sig = u16::from_le_bytes([first_sector[510], first_sector[511]]);
+            if boot_sig == 0xAA55 {
+                println!("  Partition Table: MBR detected");
+                for i in 0..4 {
+                    let off = 446 + i * 16;
+                    let p_type = first_sector[off + 4];
+                    if p_type != 0 {
+                        let start = u32::from_le_bytes([
+                            first_sector[off + 8],
+                            first_sector[off + 9],
+                            first_sector[off + 10],
+                            first_sector[off + 11],
+                        ]);
+                        let size = u32::from_le_bytes([
+                            first_sector[off + 12],
+                            first_sector[off + 13],
+                            first_sector[off + 14],
+                            first_sector[off + 15],
+                        ]);
+                        let type_str = match p_type {
+                            0x0B | 0x0C => "FAT32",
+                            0x83 => "Linux",
+                            0x7F => "ZiqaFS",
+                            _t => "Unknown",
+                        };
+                        println!("    Partition {}: Type=0x{:02X} ({}) Start={} Size={} ({} MB)",
+                            i + 1, p_type, type_str, start, size, size as u64 * 512 / 1024 / 1024);
+                    }
+                }
+            } else {
+                println!("  Partition Table: None / Raw Disk (No 0xAA55 boot signature)");
+            }
+        } else {
+            println!("  Partition Table: Could not read sector 0");
+        }
+        0
+    }
+
+    fn cmd_mount(&mut self, _args: &[String]) -> i32 {
+        let mounts = crate::fs::vfs::MOUNT_REGISTRY.lock();
+        if mounts.is_empty() {
+            println!("No filesystems mounted.");
+            return 0;
+        }
+        println!("{}{}  MOUNTED FILESYSTEMS {}", C_YELLOW, C_BOLD, C_RESET);
+        println!("  ┌──────────────┬──────────────┬──────────────┐");
+        println!("  │ {}Device         │ {}Mount Point  │ {}Type         {}│", C_CYAN, C_GREEN, C_CYAN, C_RESET);
+        println!("  ├──────────────┼──────────────┼──────────────┤");
+        for m in mounts.iter() {
+            println!("  │ {:<12} │ {:<12} │ {:<12} │", m.source, m.target, m.fstype);
+        }
+        println!("  └──────────────┴──────────────┴──────────────┘");
+        0
+    }
+
+    #[cfg(feature = "net")]
+    fn cmd_netstat(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  NETWORK INTERFACES {}", C_YELLOW, C_BOLD, C_RESET);
         println!("  ┌──────┬──────────────┬──────────────┬──────────────┬──────────────┐");
         println!("  │ {}Dev  │ {}TX pkts     │ {}RX pkts     │ {}TX bytes    │ {}RX bytes    {}│", C_CYAN, C_GREEN, C_CYAN, C_GREEN, C_CYAN, C_RESET);
         println!("  ├──────┼──────────────┼──────────────┼──────────────┼──────────────┤");
         {
             let guard = crate::net::NET.lock();
-            for slot in guard.devices.iter() {
-                if let Some(dev) = slot {
-                    println!("  │ {:<4} │ {:>12} │ {:>12} │ {:>12} │ {:>12} │",
-                        dev.name, dev.tx_packets, dev.rx_packets, dev.tx_bytes, dev.rx_bytes);
-                }
+            for dev in guard.devices.iter().flatten() {
+                println!("  │ {:<4} │ {:>12} │ {:>12} │ {:>12} │ {:>12} │",
+                    dev.name, dev.tx_packets, dev.rx_packets, dev.tx_bytes, dev.rx_bytes);
             }
         }
         println!("  └──────┴──────────────┴──────────────┴──────────────┴──────────────┘");
@@ -997,9 +1565,10 @@ impl Shell {
             }
         }
         println!("  lo    inet 127.0.0.1/8  loopback");
+        0
     }
 
-    fn cmd_reboot(&self) {
+    fn cmd_reboot(&mut self, _args: &[String]) -> i32 {
         println!("Rebooting...");
         unsafe {
             use x86_64::instructions::port::Port;
@@ -1009,7 +1578,7 @@ impl Shell {
         loop { x86_64::instructions::hlt(); }
     }
 
-    fn cmd_dashboard(&self) {
+    fn cmd_dashboard(&mut self, _args: &[String]) -> i32 {
         crate::drivers::vga::clear_screen();
         let ms = crate::timer::uptime_ms();
         let secs = ms / 1000;
@@ -1050,9 +1619,11 @@ impl Shell {
         println!("\n\x1b[33m  ▸ PROCESSES\x1b[0m");
         use crate::process::scheduler::SCHEDULER;
         let proc_rows: alloc::vec::Vec<(u64, crate::process::ProcessState, u8)> = {
-            let sched = SCHEDULER.lock();
-            sched.get_pid_list().into_iter().filter_map(|pid| {
-                sched.get_process(pid).map(|p| (p.pid.0, p.state, p.priority))
+            SCHEDULER.list_pids().into_iter().filter_map(|pid| {
+                SCHEDULER.get_process(pid).map(|p_arc| {
+                    let p = p_arc.lock();
+                    (p.pid.0, p.state, p.priority)
+                })
             }).collect()
         };
         println!("    Total: \x1b[32m{}\x1b[0m", proc_rows.len());
@@ -1069,35 +1640,41 @@ impl Shell {
         if !proc_rows.is_empty() { println!(); }
 
         // ── Network ──
-        println!("\n\x1b[33m  ▸ NETWORK\x1b[0m");
+        #[cfg(feature = "net")]
         {
+            println!("\n\x1b[33m  ▸ NETWORK\x1b[0m");
             let guard = crate::net::NET.lock();
-            for slot in guard.devices.iter() {
-                if let Some(dev) = slot {
-                    println!("    {:<6}  TX: {:>6} pkts {:>8} B   RX: {:>6} pkts {:>8} B",
-                        dev.name, dev.tx_packets, dev.tx_bytes, dev.rx_packets, dev.rx_bytes);
-                }
+            for dev in guard.devices.iter().flatten() {
+                println!("    {:<6}  TX: {:>6} pkts {:>8} B   RX: {:>6} pkts {:>8} B",
+                    dev.name, dev.tx_packets, dev.tx_bytes, dev.rx_packets, dev.rx_bytes);
             }
         }
 
         // ── Storage ──
         println!("\n\x1b[33m  ▸ STORAGE\x1b[0m");
-        use crate::fs::ziqafs::ZIQAFS;
-        let guard = ZIQAFS.lock();
-        if let Some(fs_arc) = guard.as_ref() {
-            let fs = fs_arc.lock();
-            let st = crate::fs::ziqafs::ZiqaFs::statfs(&fs);
-            let total_kib = st.total_blocks as u64 * st.block_size as u64 / 1024;
-            let free_kib  = st.free_blocks  as u64 * st.block_size as u64 / 1024;
-            let used_kib  = total_kib - free_kib;
-            let dpct = if total_kib > 0 { used_kib * 100 / total_kib } else { 0 } as usize;
-            let dfilled = dpct * 30 / 100;
-            let dc = if dpct > 80 { "\x1b[31m" } else if dpct > 50 { "\x1b[33m" } else { "\x1b[32m" };
-            print!("    ZiqaFS   [");
-            for i in 0..30usize { if i < dfilled { print!("{}█\x1b[0m", dc); } else { print!("░"); } }
-            println!("] {}%  ({}/{} KiB)", dpct, used_kib, total_kib);
-            println!("    Inodes:  {}/{} used", st.total_inodes - st.free_inodes, st.total_inodes);
-        } else {
+        #[cfg(feature = "ziqafs")]
+        {
+            use crate::fs::ziqafs::ZIQAFS;
+            let guard = ZIQAFS.lock();
+            if let Some(fs_arc) = guard.as_ref() {
+                let fs = fs_arc.lock();
+                let st = crate::fs::ziqafs::ZiqaFs::statfs(&fs);
+                let total_kib = st.total_blocks as u64 * st.block_size as u64 / 1024;
+                let free_kib  = st.free_blocks  as u64 * st.block_size as u64 / 1024;
+                let used_kib  = total_kib - free_kib;
+                let dpct = used_kib.saturating_mul(100).checked_div(total_kib).unwrap_or(0) as usize;
+                let dfilled = dpct * 30 / 100;
+                let dc = if dpct > 80 { "\x1b[31m" } else if dpct > 50 { "\x1b[33m" } else { "\x1b[32m" };
+                print!("    ZiqaFS   [");
+                for i in 0..30usize { if i < dfilled { print!("{}█\x1b[0m", dc); } else { print!("░"); } }
+                println!("] {}%  ({}/{} KiB)", dpct, used_kib, total_kib);
+                println!("    Inodes:  {}/{} used", st.total_inodes - st.free_inodes, st.total_inodes);
+            } else {
+                println!("    ZiqaFS: \x1b[2mnot mounted\x1b[0m");
+            }
+        }
+        #[cfg(not(feature = "ziqafs"))]
+        {
             println!("    ZiqaFS: \x1b[2mnot mounted\x1b[0m");
         }
 
@@ -1109,36 +1686,25 @@ impl Shell {
             x86_64::instructions::hlt();
         }
         crate::drivers::vga::clear_screen();
+        0
     }
 
-    fn cmd_doom(&self, steps_str: Option<&str>) {
-        let steps: usize = steps_str.and_then(|s| s.parse().ok()).unwrap_or(60);
+    #[cfg(feature = "games")]
+    fn cmd_doom(&mut self, args: &[String]) -> i32 {
+        let steps: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(60);
         crate::doom::run(steps);
+        0
     }
 
-    fn cmd_nwm_test(&self) {
-        println!("{}{}  🚀 LAUNCHING NATIVE COMPOSITOR (NWCC) ...{}", C_CYAN, C_BOLD, C_RESET);
-        println!("  - Spawning Compositor Task...");
-        
-        // Spawn Compositor as a separate task
-        crate::process::scheduler::SCHEDULER.lock().spawn_kthread(|| {
-            crate::userspace::compositor::start();
-        });
-
-        // Small delay to let compositor create its IPC channel
-        crate::timer::sleep_ms(crate::process::Pid(0), 100);
-
-        println!("  - Spawning Zig-accelerated Demo Client...");
-        
-        // Spawn Zig Client as a separate task
-        crate::process::scheduler::SCHEDULER.lock().spawn_kthread(|| {
-            unsafe { crate::zig_ffi::zig_demo_client_main(); }
-        });
-
-        println!("\n  {}GUI Active. Use mouse to drag windows.{}", C_GREEN, C_RESET);
+    #[cfg(feature = "games")]
+    fn cmd_nwm_test(&mut self, _args: &[String]) -> i32 {
+        println!("{}  Launching NWM desktop demo...{}", C_CYAN, C_RESET);
+        crate::userspace::nwm_demo::run();
+        println!("{}  NWM desktop exited.{}", C_GREEN, C_RESET);
+        0
     }
 
-    fn cmd_clear(&self) {
+    fn cmd_clear(&mut self, _args: &[String]) -> i32 {
         crate::drivers::vga::clear_screen();
         if crate::drivers::vga::is_scrolled() {
             crate::drivers::vga::restore_terminal();
@@ -1147,27 +1713,32 @@ impl Shell {
         use core::fmt::Write;
         let mut serial = crate::drivers::uart::SERIAL1.lock();
         write!(serial, "\x1b[2J\x1b[H").ok();
+        0
     }
 
-    fn cmd_tetris(&self) {
+    #[cfg(feature = "games")]
+    fn cmd_tetris(&mut self, _args: &[String]) -> i32 {
         crate::tetris::run();
+        0
     }
 
-    fn cmd_edit(&self, path: Option<&str>) {
-        let p = match path {
+    fn cmd_edit(&mut self, args: &[String]) -> i32 {
+        let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
-            None => { println!("Usage: edit <path>"); return; }
+            None => { println!("Usage: edit <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
         crate::edit::edit_file(&resolved);
+        0
     }
 
-    fn cmd_ls(&self, target: Option<&str>) {
+    fn cmd_ls(&mut self, args: &[String]) -> i32 {
+        let target = args.first().map(|s| s.as_str());
         let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
-        let vfs = VFS.lock();
+        let vfs = VFS.read();
         if !vfs.is_dir(&dir) {
             println!("{}ls{}: {}: {}No such directory{}", C_RED, C_RESET, dir, C_DIM, C_RESET);
-            return;
+            return 1;
         }
         let entries = vfs.list_dir(&dir);
 
@@ -1200,90 +1771,93 @@ impl Shell {
                 }
             }
         }
+        0
     }
 
-    fn cmd_cd(&mut self, target: Option<&str>) {
-        let raw = target.unwrap_or("/");
+    fn cmd_cd(&mut self, args: &[String]) -> i32 {
+        let raw = args.first().map(|s| s.as_str()).unwrap_or("/");
         let resolved = if raw == "-" {
-            if self.prev_cwd_len == 0 {
+            if self.prev_cwd.is_empty() {
                 println!("{}cd{}: {}no previous directory{}", C_RED, C_RESET, C_DIM, C_RESET);
-                return;
+                return 1;
             }
-            core::str::from_utf8(&self.prev_cwd[..self.prev_cwd_len]).unwrap_or("/").to_string()
+            self.prev_cwd.clone()
         } else {
             self.resolve_path(raw)
         };
-        let vfs = VFS.lock();
+        let vfs = VFS.read();
         if !vfs.is_dir(&resolved) {
             println!("{}cd{}: {}: {}No such directory{}", C_RED, C_RESET, resolved, C_DIM, C_RESET);
-            return;
+            return 1;
         }
-        // Save current as previous before changing
-        let cur = alloc::string::String::from(self.cwd_str());
-        let prev_bytes = cur.as_bytes();
-        let pn = prev_bytes.len().min(255);
-        self.prev_cwd[..pn].copy_from_slice(&prev_bytes[..pn]);
-        self.prev_cwd_len = pn;
-
-        let bytes = resolved.as_bytes();
-        let n = bytes.len().min(255);
-        self.cwd[..n].copy_from_slice(&bytes[..n]);
-        self.cwd_len = n;
-
+        self.prev_cwd = self.cwd.clone();
+        self.cwd = resolved;
         println!("{}▸ {}{}", C_GREEN, self.cwd_str(), C_RESET);
+        0
     }
 
-    fn cmd_pwd(&self) {
+    fn cmd_pwd(&mut self, _args: &[String]) -> i32 {
         println!("{}", self.cwd_str());
+        0
     }
 
-    fn cmd_mkdir(&self, target: Option<&str>) {
-        let p = match target {
+    fn cmd_mkdir(&mut self, args: &[String]) -> i32 {
+        let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
-            None => { println!("Usage: mkdir <path>"); return; }
+            None => { println!("Usage: mkdir <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
-        let mut vfs = VFS.lock();
+        let mut vfs = VFS.write();
         if vfs.exists(&resolved) {
             println!("mkdir: {}: File exists", resolved);
-            return;
+            return 1;
         }
         if resolved.starts_with("/disk/") {
-            let name = resolved.trim_start_matches("/disk/");
-            let fs_guard = ZIQAFS.lock();
-            if let Some(ref fs) = *fs_guard {
-                let parent_id = if let Some(idx) = name.rfind('/') {
-                    let dir_part = &name[..idx];
+            #[cfg(feature = "ziqafs")]
+            {
+                let name = resolved.trim_start_matches("/disk/");
+                let fs_guard = ZIQAFS.lock();
+                if let Some(ref fs) = *fs_guard {
+                    let parent_id = if let Some(idx) = name.rfind('/') {
+                        let dir_part = &name[..idx];
+                        let mut fsl = fs.lock();
+                        ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
+                    } else {
+                        ROOT_INODE
+                    };
+                    let leaf_name = name.rsplit('/').next().unwrap_or(name);
                     let mut fsl = fs.lock();
-                    ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
-                } else {
-                    ROOT_INODE
-                };
-                let leaf_name = name.rsplit('/').next().unwrap_or(name);
-                let mut fsl = fs.lock();
-                match ZiqaFs::create_dir(&mut fsl, parent_id, leaf_name) {
-                    Ok(_) => {
-                        vfs.mkdir(&resolved);
-                        println!("mkdir: created {} (ziqafs)", resolved);
-                        return;
-                    }
-                    Err(e) => {
-                        println!("mkdir: {}: {:?}", resolved, e);
-                        return;
+                    match ZiqaFs::create_dir(&mut fsl, parent_id, leaf_name) {
+                        Ok(_) => {
+                            vfs.mkdir(&resolved);
+                            println!("mkdir: created {} (ziqafs)", resolved);
+                            return 0;
+                        }
+                        Err(e) => {
+                            println!("mkdir: {}: {:?}", resolved, e);
+                            return 1;
+                        }
                     }
                 }
+            }
+            #[cfg(not(feature = "ziqafs"))]
+            {
+                println!("mkdir: /disk/ requires ZiqaFS feature");
+                return 1;
             }
         }
         vfs.mkdir(&resolved);
         println!("mkdir: created {}", resolved);
+        0
     }
 
-    fn cmd_dir(&self, target: Option<&str>) {
+    fn cmd_dir(&mut self, args: &[String]) -> i32 {
+        let target = args.first().map(|s| s.as_str());
         let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
-        let vfs = VFS.lock();
+        let vfs = VFS.read();
         if !vfs.is_dir(&dir) {
             println!("dir: {}: No such directory", dir);
-            return;
+            return 1;
         }
         let entries = vfs.list_dir(&dir);
         println!(" Directory of {}", dir);
@@ -1301,43 +1875,48 @@ impl Shell {
         }
         println!("");
         println!("  {} file(s)  {} bytes total", entries.len(), total);
+        0
     }
 
-    fn cmd_rm(&self, target: Option<&str>) {
-        let p = match target {
+    fn cmd_rm(&mut self, args: &[String]) -> i32 {
+        let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
-            None => { println!("Usage: rm <path>"); return; }
+            None => { println!("Usage: rm <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
         if resolved.starts_with("/disk/") {
-            let name = resolved.trim_start_matches("/disk/");
-            let fs_guard = ZIQAFS.lock();
-            if let Some(ref fs) = *fs_guard {
-                let parent_id = if let Some(idx) = name.rfind('/') {
-                    let dir_part = &name[..idx];
+            #[cfg(feature = "ziqafs")]
+            {
+                let name = resolved.trim_start_matches("/disk/");
+                let fs_guard = ZIQAFS.lock();
+                if let Some(ref fs) = *fs_guard {
+                    let parent_id = if let Some(idx) = name.rfind('/') {
+                        let dir_part = &name[..idx];
+                        let mut fsl = fs.lock();
+                        ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
+                    } else {
+                        ROOT_INODE
+                    };
+                    let leaf_name = name.rsplit('/').next().unwrap_or(name);
                     let mut fsl = fs.lock();
-                    ZiqaFs::root_lookup(&mut fsl, &alloc::format!("/disk/{}", dir_part)).unwrap_or(ROOT_INODE)
-                } else {
-                    ROOT_INODE
-                };
-                let leaf_name = name.rsplit('/').next().unwrap_or(name);
-                let mut fsl = fs.lock();
-                let _ = ZiqaFs::unlink(&mut fsl, parent_id, leaf_name);
+                    let _ = ZiqaFs::unlink(&mut fsl, parent_id, leaf_name);
+                }
             }
         }
-        match VFS.lock().remove(&resolved) {
+        match VFS.write().remove(&resolved) {
             Ok(_) => println!("rm: removed {}", resolved),
             Err(_) => println!("rm: {}: No such file", resolved),
         }
+        0
     }
 
-    fn cmd_cat(&self, target: Option<&str>) {
-        let p = match target {
+    fn cmd_cat(&mut self, args: &[String]) -> i32 {
+        let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
-            None => { println!("Usage: cat [-n] <path>"); return; }
+            None => { println!("Usage: cat [-n] <path>"); return 1; }
         };
         let (line_numbers, path) = if p == "-n" {
-            println!("Usage: cat [-n] <path>"); return;
+            println!("Usage: cat [-n] <path>"); return 1;
         } else if let Some(rest) = p.strip_prefix("-n ") {
             (true, rest)
         } else {
@@ -1345,7 +1924,7 @@ impl Shell {
         };
         let resolved = self.resolve_path(path);
         let mut buf = [0u8; 65536];
-        match VFS.lock().read_raw(&resolved, &mut buf, 0) {
+        match VFS.read().read_raw(&resolved, &mut buf, 0) {
             Ok(0) | Err(_) => println!("cat: {}: No such file or directory", resolved),
             Ok(n) => {
                 if let Ok(s) = core::str::from_utf8(&buf[..n]) {
@@ -1369,13 +1948,15 @@ impl Shell {
                 }
             }
         }
+        0
     }
 
-    fn cmd_ping(&self, args: &str) {
-        // Parse: ping [-c count] <host>
+    #[cfg(feature = "net")]
+    fn cmd_ping(&mut self, args: &[String]) -> i32 {
+        let joined = args.join(" ");
         let mut count: usize = 4;
         let mut host = "";
-        let parts: alloc::vec::Vec<&str> = args.split_whitespace().collect();
+        let parts: alloc::vec::Vec<&str> = joined.split_whitespace().collect();
         let mut i = 0;
         while i < parts.len() {
             match parts[i] {
@@ -1390,7 +1971,7 @@ impl Shell {
         if host.is_empty() {
             println!("Usage: ping [-c count] <ip>");
             println!("  Note: only IPv4 literals supported (e.g. ping 10.0.2.2)");
-            return;
+            return 1;
         }
 
         let ip = match crate::net::dns::resolve(host) {
@@ -1398,7 +1979,7 @@ impl Shell {
             None => {
                 println!("ping: {}: Name or service not known", host);
                 println!("  Hint: use an IPv4 address (e.g. 10.0.2.2 for gateway)");
-                return;
+                return 1;
             }
         };
 
@@ -1435,7 +2016,7 @@ impl Shell {
                         seq_no: seq,
                         data: b"ziqa-ping-payload-56bytes-padding-here-1234567890ab",
                     };
-                    if let Some(payload) = socket.send(repr.buffer_len(), IpAddress::Ipv4(ip)).ok() {
+                    if let Ok(payload) = socket.send(repr.buffer_len(), IpAddress::Ipv4(ip)) {
                         let mut pkt = Icmpv4Packet::new_unchecked(payload);
                         repr.emit(&mut pkt, &smoltcp::phy::ChecksumCapabilities::default());
                     }
@@ -1447,7 +2028,7 @@ impl Shell {
                     let serviced = stack.poll();
                     let socket = stack.sockets.get_mut::<icmp::Socket>(handle);
                     if socket.can_recv() {
-                        if let Ok(_) = socket.recv() {
+                        if socket.recv().is_ok() {
                             let rtt = crate::timer::uptime_ms() - start;
                             println!("64 bytes from {}: icmp_seq={} ttl=64 time={} ms", ip, seq, rtt);
                             rtt_min = rtt_min.min(rtt);
@@ -1491,13 +2072,15 @@ impl Shell {
         } else {
             println!("ping: network stack not initialized");
         }
+        0
     }
 
-    fn cmd_wget(&self, args: &str) {
-        // Parse: wget [-O output] <url>
+    #[cfg(feature = "net")]
+    fn cmd_wget(&mut self, args: &[String]) -> i32 {
+        let joined = args.join(" ");
         let mut output_name: Option<&str> = None;
         let mut url_arg = "";
-        let parts: alloc::vec::Vec<&str> = args.split_whitespace().collect();
+        let parts: alloc::vec::Vec<&str> = joined.split_whitespace().collect();
         let mut i = 0;
         while i < parts.len() {
             match parts[i] {
@@ -1510,7 +2093,7 @@ impl Shell {
             println!("Usage: wget [-O filename] <url>");
             println!("  Example: wget http://10.0.2.2/index.html");
             println!("  Note: only http:// and IPv4 hosts supported");
-            return;
+            return 1;
         }
 
         let url = url_arg.strip_prefix("http://").unwrap_or(url_arg);
@@ -1528,7 +2111,7 @@ impl Shell {
             None => {
                 println!("wget: {}: Name or service not known", host);
                 println!("  Hint: use an IPv4 address as hostname");
-                return;
+                return 1;
             }
         };
 
@@ -1569,13 +2152,13 @@ impl Shell {
                     final_response = Some(resp);
                     break;
                 }
-                Err(e) => { println!("wget: {}", e); return; }
+                Err(e) => { println!("wget: {}", e); return 1; }
             }
         }
 
         let response = match final_response {
             Some(r) => r,
-            None => { println!("wget: too many redirects"); return; }
+            None => { println!("wget: too many redirects"); return 1; }
         };
 
         // Print status and key headers
@@ -1592,7 +2175,7 @@ impl Shell {
                 let preview = if text.len() > 256 { &text[..256] } else { text };
                 println!("{}", preview);
             }
-            return;
+            return 1;
         }
 
         // Print body if small
@@ -1616,11 +2199,13 @@ impl Shell {
         use crate::fs::ramfs::RamFile;
         use alloc::sync::Arc;
         let file = Arc::new(spin::Mutex::new(RamFile::from_bytes(&response.body)));
-        VFS.lock().mount(&filepath, file);
+        VFS.write().mount(&filepath, file);
         println!("Saved to '{}' [{} bytes]", filepath, response.body.len());
+        0
     }
 
-    fn cmd_ifconfig(&self) {
+    #[cfg(feature = "net")]
+    fn cmd_ifconfig(&mut self, _args: &[String]) -> i32 {
         let stack_guard = crate::net::stack::TCPIP.lock();
         if let Some(stack) = stack_guard.as_ref() {
             let mac = stack.mac();
@@ -1644,26 +2229,28 @@ impl Shell {
         println!("lo: flags=UP,LOOPBACK,RUNNING  mtu 65536");
         println!("        inet 127.0.0.1  netmask 8");
         println!("        loop  txqueuelen 1000  (Local Loopback)");
+        0
     }
 
-    fn cmd_mv(&self, src: Option<&str>, dst: Option<&str>) {
-        let (src, dst) = match (src, dst) {
-            (Some(s), Some(d)) => (s, d),
-            _ => { println!("Usage: mv <src> <dst>"); return; }
+    fn cmd_mv(&mut self, args: &[String]) -> i32 {
+        let (src, dst) = match (args.first(), args.get(1)) {
+            (Some(s), Some(d)) => (s.as_str(), d.as_str()),
+            _ => { println!("Usage: mv <src> <dst>"); return 1; }
         };
         let src_path = self.resolve_path(src);
         let dst_path = self.resolve_path(dst);
-        match VFS.lock().rename(&src_path, &dst_path) {
+        match VFS.write().rename(&src_path, &dst_path) {
             Ok(_) => println!("mv: {} -> {}", src_path, dst_path),
             Err(_) => println!("mv: {}: No such file", src_path),
         }
+        0
     }
 
-    fn cmd_cp(&self, src: Option<&str>, dst: Option<&str>) {
-        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE};
-        let (src, dst) = match (src, dst) {
-            (Some(s), Some(d)) => (s, d),
-            _ => { println!("Usage: cp <src> <dst>"); return; }
+    #[cfg(feature = "ziqafs")]
+    fn cmd_cp(&mut self, args: &[String]) -> i32 {
+        let (src, dst) = match (args.first(), args.get(1)) {
+            (Some(s), Some(d)) => (s.as_str(), d.as_str()),
+            _ => { println!("Usage: cp <src> <dst>"); return 1; }
         };
         let src_path = self.resolve_path(src);
         let dst_path = self.resolve_path(dst);
@@ -1672,7 +2259,7 @@ impl Shell {
             let mut fs = fs_arc.lock();
             let src_id = match ZiqaFs::root_lookup(&mut fs, &src_path) {
                 Ok(id) => id,
-                Err(_) => { println!("cp: {}: No such file", src_path); return; }
+                Err(_) => { println!("cp: {}: No such file", src_path); return 1; }
             };
             let dst_name = dst_path.rsplit('/').next().unwrap_or(&dst_path);
             match ZiqaFs::copy_file(&mut fs, src_id, ROOT_INODE, dst_name) {
@@ -1682,30 +2269,31 @@ impl Shell {
         } else {
             println!("cp: ZiqaFS not mounted");
         }
+        0
     }
 
-    fn cmd_touch(&self, path: Option<&str>) {
-        let p = match path {
-            Some(s) => s,
-            None => { println!("Usage: touch <path>"); return; }
+    fn cmd_touch(&mut self, args: &[String]) -> i32 {
+        let p = match args.first() {
+            Some(s) => s.as_str(),
+            None => { println!("Usage: touch <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
-        let mut vfs = VFS.lock();
+        let mut vfs = VFS.write();
         if !vfs.exists(&resolved) {
             vfs.create(&resolved);
             println!("touch: created {}", resolved);
         } else {
-            // File exists — just update mtime via a zero-byte write
             let _ = vfs.write_raw(&resolved, &[], 0);
             println!("touch: updated {}", resolved);
         }
+        0
     }
 
-    fn cmd_stat(&self, path: Option<&str>) {
-        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs};
-        let p = match path {
-            Some(s) => s,
-            None => { println!("Usage: stat <path>"); return; }
+    #[cfg(feature = "ziqafs")]
+    fn cmd_stat(&mut self, args: &[String]) -> i32 {
+        let p = match args.first() {
+            Some(s) => s.as_str(),
+            None => { println!("Usage: stat <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
         let guard = ZIQAFS.lock();
@@ -1728,8 +2316,7 @@ impl Shell {
                 Err(_) => println!("stat: {}: No such file", resolved),
             }
         } else {
-            // Fallback to VFS size
-            let vfs = VFS.lock();
+            let vfs = VFS.read();
             if let Some(size) = vfs.file_size(&resolved) {
                 println!("  File:  {}", resolved);
                 println!("  Size:  {} bytes", size);
@@ -1737,29 +2324,24 @@ impl Shell {
                 println!("stat: {}: No such file", resolved);
             }
         }
+        0
     }
 
-    fn cmd_du(&self, path: Option<&str>) {
-        // Try ZiqaFS first
-        use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, BLOCK_SIZE};
-        let p = path.map(|s| self.resolve_path(s)).unwrap_or_else(|| self.cwd_str().to_string());
+    #[cfg(feature = "ziqafs")]
+    fn cmd_du(&mut self, args: &[String]) -> i32 {
+        let p = args.first().map(|s| self.resolve_path(s)).unwrap_or_else(|| self.cwd_str().to_string());
         let guard = ZIQAFS.lock();
         if let Some(fs_arc) = guard.as_ref() {
             let mut fs = fs_arc.lock();
-            match ZiqaFs::root_lookup(&mut fs, &p) {
-                Ok(inode_id) => {
-                    let blocks = ZiqaFs::du(&mut fs, inode_id);
-                    println!("{}\t{} ({} KiB)", blocks, p, blocks as usize * BLOCK_SIZE / 1024);
-                    return;
-                }
-                Err(_) => {}
+            if let Ok(inode_id) = ZiqaFs::root_lookup(&mut fs, &p) {
+                let blocks = ZiqaFs::du(&mut fs, inode_id);
+                println!("{}\t{} ({} KiB)", blocks, p, blocks as usize * BLOCK_SIZE / 1024);
+                return 0;
             }
         }
-        
-        // Fallback to VFS for basic file size
-        let vfs = VFS.lock();
+
+        let vfs = VFS.read();
         if vfs.is_dir(&p) {
-            // For directories, we can't easily get size without ZiqaFS
             let entries = vfs.list_dir(&p);
             let mut total_size: u64 = 0;
             for entry in &entries {
@@ -1775,12 +2357,22 @@ impl Shell {
         } else {
             println!("du: {}: No such file", p);
         }
+        0
     }
 
-    fn cmd_jobs(&self) {
+    fn cmd_echo(&mut self, args: &[String]) -> i32 {
+        println!("{}", args.join(" "));
+        0
+    }
+
+    fn cmd_rmdir(&mut self, args: &[String]) -> i32 {
+        self.cmd_rm(args)
+    }
+
+    fn cmd_jobs(&mut self, _args: &[String]) -> i32 {
         if self.jobs.is_empty() {
             println!("No background jobs.");
-            return;
+            return 0;
         }
         println!("{}{}  JOBS {} {}", C_YELLOW, C_BOLD, C_RESET, C_DIM);
         for (i, job) in self.jobs.iter().enumerate() {
@@ -1791,36 +2383,37 @@ impl Shell {
             };
             println!("  [{}] {} {}", i + 1, state_str, job.command);
         }
+        0
     }
 
-    fn cmd_bg(&mut self, arg: Option<&str>) {
-        let job_num = match arg.and_then(|s| s.parse::<usize>().ok()) {
+    fn cmd_bg(&mut self, args: &[String]) -> i32 {
+        let job_num = match args.first().and_then(|s| s.parse::<usize>().ok()) {
             Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
             _ => {
                 println!("Usage: bg <%job-number>");
-                return;
+                return 1;
             }
         };
 
-        let is_stopped = self.jobs[job_num].state == JobState::Stopped;
-        if is_stopped {
+        if self.jobs[job_num].state == JobState::Stopped {
             let pid = self.jobs[job_num].pid;
             let cmd = self.jobs[job_num].command.clone();
-            crate::process::scheduler::SCHEDULER.lock()
+            crate::process::scheduler::SCHEDULER
                 .send_signal(pid, crate::process::signal::sig::SIGCONT);
             self.jobs[job_num].state = JobState::Running;
             println!("{} [{}] &", cmd, job_num + 1);
         } else {
             println!("bg: job {} is not stopped", job_num + 1);
         }
+        0
     }
 
-    fn cmd_fg(&mut self, arg: Option<&str>) {
-        let job_num = match arg.and_then(|s| s.parse::<usize>().ok()) {
+    fn cmd_fg(&mut self, args: &[String]) -> i32 {
+        let job_num = match args.first().and_then(|s| s.parse::<usize>().ok()) {
             Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
             _ => {
                 println!("Usage: fg <%job-number>");
-                return;
+                return 1;
             }
         };
 
@@ -1829,7 +2422,7 @@ impl Shell {
             self.fg_job = Some(job_num);
             if job_state == JobState::Stopped {
                 let pid = self.jobs[job_num].pid;
-                crate::process::scheduler::SCHEDULER.lock()
+                crate::process::scheduler::SCHEDULER
                     .send_signal(pid, crate::process::signal::sig::SIGCONT);
             }
             self.jobs[job_num].state = JobState::Running;
@@ -1837,6 +2430,7 @@ impl Shell {
         } else {
             println!("fg: job {} is not in a valid state", job_num + 1);
         }
+        0
     }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

@@ -5,6 +5,7 @@
 extern crate alloc;
 
 use crate::abi::AbiError;
+#[cfg(feature = "zig-hotpaths")]
 use crate::zig_kernel_ops;
 use spin::Mutex;
 
@@ -65,7 +66,10 @@ impl PageCache {
         for entry in self.entries.iter_mut() {
             if let Some(e) = entry {
                 if e.key == key {
+                    #[cfg(feature = "zig-hotpaths")]
                     zig_kernel_ops::block_copy(&mut e.data[..data.len()], data);
+                    #[cfg(not(feature = "zig-hotpaths"))]
+                    e.data[..data.len()].copy_from_slice(data);
                     e.size = data.len();
                     e.access_count = self.access_epoch;
                     e.dirty = true;
@@ -99,7 +103,10 @@ impl PageCache {
                 access_count: self.access_epoch,
                 dirty: true,
             };
+            #[cfg(feature = "zig-hotpaths")]
             zig_kernel_ops::block_copy(&mut new_entry.data[..data.len()], data);
+            #[cfg(not(feature = "zig-hotpaths"))]
+            new_entry.data[..data.len()].copy_from_slice(data);
             self.entries[idx] = Some(new_entry);
             Ok(())
         } else {

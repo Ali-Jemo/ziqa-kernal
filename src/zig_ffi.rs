@@ -145,9 +145,9 @@ extern "C" {
 /// through the same dispatcher as user-mode processes.
 #[no_mangle]
 pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
-    let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(proc) = scheduler.current_task_mut() {
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, [a1, a2, a3, a4, a5, a6], proc);
+    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
+        let mut proc = proc_arc.lock();
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, [a1, a2, a3, a4, a5, a6], &mut proc);
         let registry = crate::init_abi_registry();
         let handler = crate::abi::handler::KernelSyscallHandler;
         match crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx) {
@@ -165,12 +165,12 @@ pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
 ///
 /// # Safety
 /// `fb` must point to a valid framebuffer of at least `pitch * (y + h)` bytes.
-pub fn fill_rect(fb: *mut u8, pitch: u32, x: u32, y: u32, w: u32, h: u32, color: u32) {
+pub unsafe fn fill_rect(fb: *mut u8, pitch: u32, x: u32, y: u32, w: u32, h: u32, color: u32) {
     unsafe { zig_fill_rect(fb, pitch, x, y, w, h, color) }
 }
 
 /// Copy a rectangular sprite from `src` to `dst` framebuffer.
-pub fn blit_bitmap(
+pub unsafe fn blit_bitmap(
     dst: *mut u8,
     pitch: u32,
     src: *const u8,
@@ -185,27 +185,27 @@ pub fn blit_bitmap(
 }
 
 /// Scroll framebuffer up by `lines` rows, filling the bottom with `fill_color`.
-pub fn scroll_up(fb: *mut u8, pitch: u32, w: u32, h: u32, lines: u32, fill_color: u32) {
+pub unsafe fn scroll_up(fb: *mut u8, pitch: u32, w: u32, h: u32, lines: u32, fill_color: u32) {
     unsafe { zig_scroll_up(fb, pitch, w, h, lines, fill_color) }
 }
 
 /// Clear the entire framebuffer (`size` bytes) with XRGB8888 `color`.
-pub fn clear(fb: *mut u8, size: usize, color: u32) {
+pub unsafe fn clear(fb: *mut u8, size: usize, color: u32) {
     unsafe { zig_clear(fb, size, color) }
 }
 
 /// Set `count` 32-bit words at `dst` to `val`.
-pub fn memset32(dst: *mut u32, val: u32, count: usize) {
+pub unsafe fn memset32(dst: *mut u32, val: u32, count: usize) {
     unsafe { zig_memset32(dst, val, count) }
 }
 
 /// Copy `len` bytes from `src` to `dst`.
-pub fn memcpy(dst: *mut u8, src: *const u8, len: usize) {
+pub unsafe fn memcpy(dst: *mut u8, src: *const u8, len: usize) {
     unsafe { zig_memcpy(dst, src, len) }
 }
 
 /// Fill a rectangle with a vertical gradient.
-pub fn gradient_fill(
+pub unsafe fn gradient_fill(
     fb: *mut u8,
     pitch: u32,
     x: u32,
@@ -219,7 +219,7 @@ pub fn gradient_fill(
 }
 
 /// Fill a rectangle with an alpha-blended color over the existing framebuffer.
-pub fn blend_rect(
+pub unsafe fn blend_rect(
     fb: *mut u8,
     pitch: u32,
     x: u32,
@@ -233,7 +233,7 @@ pub fn blend_rect(
 }
 
 /// Apply a horizontal shake to a framebuffer region (for explosion feedback).
-pub fn shake_fb(
+pub unsafe fn shake_fb(
     fb: *mut u8,
     pitch: u32,
     x: u32,
@@ -250,7 +250,7 @@ pub fn shake_fb(
 ///
 /// `particles` is a flat slice of packed entries: each entry is
 /// `[x: u16, y: u16, color: u32, size: u16, pad: u16]` = 12 bytes.
-pub fn draw_embers(
+pub unsafe fn draw_embers(
     fb: *mut u8,
     pitch: u32,
     fb_w: u32,
@@ -263,7 +263,7 @@ pub fn draw_embers(
 }
 
 /// Run one step of the DOOM fire propagation + render.
-pub fn doom_fire_step(
+pub unsafe fn doom_fire_step(
     fb: *mut u8,
     pitch: u32,
     w: u32,
@@ -275,7 +275,7 @@ pub fn doom_fire_step(
 }
 
 /// Run one animated step of the DOOM fire propagation + render.
-pub fn doom_fire_step_seeded(
+pub unsafe fn doom_fire_step_seeded(
     fb: *mut u8,
     pitch: u32,
     w: u32,
@@ -306,7 +306,7 @@ pub fn doom_fire_to_ascii(fire_buf: &[u8], w: u32, h: u32, out: &mut [u8]) -> us
 }
 
 /// Apply motion-blur trail by blending with a saved ghost frame.
-pub fn trail_blur(fb: *mut u8, pitch: u32, w: u32, h: u32, ghost: &mut [u8], decay: u32) {
+pub unsafe fn trail_blur(fb: *mut u8, pitch: u32, w: u32, h: u32, ghost: &mut [u8], decay: u32) {
     unsafe { zig_trail_blur(fb, pitch, w, h, ghost.as_mut_ptr(), decay) }
 }
 
@@ -316,22 +316,22 @@ pub fn save_ghost(fb: &[u8], pitch: u32, w: u32, h: u32, ghost: &mut [u8]) {
 }
 
 /// Apply CRT scanline overlay (darkens every other row).
-pub fn scanline_overlay(fb: *mut u8, pitch: u32, w: u32, h: u32, strength: u32, phase: u32) {
+pub unsafe fn scanline_overlay(fb: *mut u8, pitch: u32, w: u32, h: u32, strength: u32, phase: u32) {
     unsafe { zig_scanline_overlay(fb, pitch, w, h, strength, phase) }
 }
 
 /// Darken edges of the framebuffer (vignette effect).
-pub fn vignette(fb: *mut u8, pitch: u32, w: u32, h: u32, radius: u32, strength: u32) {
+pub unsafe fn vignette(fb: *mut u8, pitch: u32, w: u32, h: u32, radius: u32, strength: u32) {
     unsafe { zig_vignette(fb, pitch, w, h, radius, strength) }
 }
 
 /// Draw a line using Bresenham's algorithm.
-pub fn draw_line(fb: *mut u8, pitch: u32, x0: u32, y0: u32, x1: u32, y1: u32, color: u32) {
+pub unsafe fn draw_line(fb: *mut u8, pitch: u32, x0: u32, y0: u32, x1: u32, y1: u32, color: u32) {
     unsafe { zig_draw_line(fb, pitch, x0, y0, x1, y1, color) }
 }
 
 /// Spawn a fireworks burst of particles returning how many were spawned.
-pub fn fireworks_burst(
+pub unsafe fn fireworks_burst(
     fb: *mut u8,
     pitch: u32,
     fb_w: u32,
@@ -348,7 +348,7 @@ pub fn fireworks_burst(
 }
 
 /// Update and render fireworks particles, returns number still alive.
-pub fn fireworks_update(
+pub unsafe fn fireworks_update(
     fb: *mut u8,
     pitch: u32,
     fb_w: u32,

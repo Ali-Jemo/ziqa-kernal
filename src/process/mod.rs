@@ -299,11 +299,11 @@ impl Process {
         cpu.cs = crate::arch::x86_64::gdt::user_code_selector().0 as u64;
         cpu.ss = crate::arch::x86_64::gdt::user_data_selector().0 as u64;
 
-        // Allocate a dedicated kernel stack (16KB) for user mode execution
+        // Allocate a dedicated kernel stack (64KB) for user mode execution
         // Boot process (indicated by stack == 0) shares kernel context/stack
         let (kstack, kstack_top) = if stack.as_u64() != 0 {
-            let mut kstack = alloc::vec![0u8; 16384];
-            let top = kstack.as_mut_ptr() as u64 + 16384;
+            let mut kstack = alloc::vec![0u8; 65536];
+            let top = kstack.as_mut_ptr() as u64 + 65536;
             (Some(kstack), top)
         } else {
             (None, 0)

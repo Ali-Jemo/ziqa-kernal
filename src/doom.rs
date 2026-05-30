@@ -268,16 +268,18 @@ pub fn run_serial(steps: usize) {
         }
 
         // ── Fire step ─────────────────────────────────────────────────────
-        crate::zig_ffi::doom_fire_step_seeded(
-            dummy_fb.as_mut_ptr(),
-            fb_pitch,
-            FIRE_W,
-            FIRE_H,
-            &animated_palette,
-            &mut fire_buf,
-            s,
-            wind,
-        );
+        unsafe {
+            crate::zig_ffi::doom_fire_step_seeded(
+                dummy_fb.as_mut_ptr(),
+                fb_pitch,
+                FIRE_W,
+                FIRE_H,
+                &animated_palette,
+                &mut fire_buf,
+                s,
+                wind,
+            );
+        }
 
         // ── Ember particles ───────────────────────────────────────────────
         for i in 0..max_embers {
@@ -332,15 +334,17 @@ pub fn run_serial(steps: usize) {
             }
         }
         if ember_count > 0 {
-            crate::zig_ffi::draw_embers(
-                dummy_fb.as_mut_ptr(),
-                fb_pitch,
-                FIRE_W,
-                FIRE_H,
-                &ember_pack[..ember_count as usize * 12],
-                ember_count,
-                200,
-            );
+            unsafe {
+                crate::zig_ffi::draw_embers(
+                    dummy_fb.as_mut_ptr(),
+                    fb_pitch,
+                    FIRE_W,
+                    FIRE_H,
+                    &ember_pack[..ember_count as usize * 12],
+                    ember_count,
+                    200,
+                );
+            }
         }
 
         // ── Smoke particles ───────────────────────────────────────────────
@@ -382,20 +386,24 @@ pub fn run_serial(steps: usize) {
             }
         }
         if smoke_count > 0 {
-            crate::zig_ffi::draw_embers(
-                dummy_fb.as_mut_ptr(),
-                fb_pitch,
-                FIRE_W,
-                FIRE_H,
-                &smoke_pack[..smoke_count as usize * 12],
-                smoke_count,
-                120,
-            );
+            unsafe {
+                crate::zig_ffi::draw_embers(
+                    dummy_fb.as_mut_ptr(),
+                    fb_pitch,
+                    FIRE_W,
+                    FIRE_H,
+                    &smoke_pack[..smoke_count as usize * 12],
+                    smoke_count,
+                    120,
+                );
+            }
         }
 
         // ── Apply scanline + vignette to framebuffer ──────────────────────
-        crate::zig_ffi::scanline_overlay(dummy_fb.as_mut_ptr(), fb_pitch, FIRE_W, FIRE_H, 20, s);
-        crate::zig_ffi::vignette(dummy_fb.as_mut_ptr(), fb_pitch, FIRE_W, FIRE_H, FIRE_H / 3, 60);
+        unsafe {
+            crate::zig_ffi::scanline_overlay(dummy_fb.as_mut_ptr(), fb_pitch, FIRE_W, FIRE_H, 20, s);
+            crate::zig_ffi::vignette(dummy_fb.as_mut_ptr(), fb_pitch, FIRE_W, FIRE_H, FIRE_H / 3, 60);
+        }
 
         // ── ZIQA wordmark ─────────────────────────────────────────────────
         stamp_ziqa_logo(&mut fire_buf, FIRE_W, FIRE_H, step);

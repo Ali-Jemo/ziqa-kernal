@@ -1,5 +1,6 @@
 //! VirtIO data structures shared between the net driver and protocol layer.
 
+pub const VQ_DESC_F_NEXT: u16 = 1;
 pub const VQ_DESC_F_WRITE: u16 = 2;
 
 #[repr(C)]

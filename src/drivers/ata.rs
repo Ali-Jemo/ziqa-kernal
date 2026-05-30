@@ -221,3 +221,31 @@ impl BlockDevice for AtaBlock {
         self.total_sectors
     }
 }
+
+pub struct AtaDriver;
+
+impl crate::drivers::device_manager::Driver for AtaDriver {
+    fn name(&self) -> &str { "ATA / IDE Controller" }
+    fn pci_match(&self, device: &crate::drivers::pci::PciDevice) -> bool {
+        (device.class == 0x01 && device.subclass == 0x01) ||
+        (device.vendor_id == 0x8086 && device.device_id == 0x7010)
+    }
+    fn init(&self, device: &crate::drivers::pci::PciDevice) -> Result<(), ()> {
+        crate::println!("[ATA] Probing IDE/ATA controller at {:02X}:{:02X}.{}", device.bus, device.dev, device.func);
+        match AtaBlock::new() {
+            Ok(disk) => {
+                let disk: alloc::sync::Arc<dyn BlockDevice> = alloc::sync::Arc::new(disk);
+                crate::drivers::block_registry::register("hda", "ata", disk);
+                Ok(())
+            }
+            Err(e) => {
+                crate::println!("[ATA] Probing failed: {:?}", e);
+                Err(())
+            }
+        }
+    }
+}
+
+pub fn register() {
+    crate::drivers::device_manager::DEVICE_MANAGER.lock().register_driver(alloc::boxed::Box::new(AtaDriver));
+}

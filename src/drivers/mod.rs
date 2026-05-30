@@ -1,12 +1,19 @@
+pub mod device_manager;
 pub mod virtio_net;
 pub mod virtio_net_proto;
 pub mod ata;
 pub mod block;
+pub mod block_registry;
+#[cfg(feature = "drm")]
 pub mod drm;
 pub mod framebuffer;
 pub mod keyboard;
 pub mod uart;
 pub mod vga;
 pub mod virtio_block;
+pub mod virtio_block_new;
+pub mod virtio_hal;
 pub mod ps2_mouse;
+pub mod pci;
+pub mod acpi;
 // pub mod input; // Directory is empty, removing from module tree

@@ -2,7 +2,7 @@
 
 SHELL := /bin/zsh
 
-.PHONY: build run clean test profile
+.PHONY: build run clean test profile fat-disk
 
 # Build targets
 TARGET := x86_64-unknown-none
@@ -22,7 +22,20 @@ release:
 
 # Run on QEMU
 run: boot disk.img
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive format=raw,file=disk.img -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+
+# Create a host-editable FAT32 development disk as disk.img.
+# Requires: parted, mkfs.vfat/mkfs.fat, mcopy (mtools, optional for files).
+fat-disk:
+	rm -f disk.img
+	truncate -s 64M disk.img
+	parted -s disk.img mklabel msdos mkpart primary fat32 1MiB 100% set 1 lba on
+	LOOP=$$(sudo losetup --find --show --partscan disk.img); \
+	trap 'sudo losetup -d '$$LOOP EXIT; \
+	(sudo mkfs.vfat -F 32 $${LOOP}p1 || sudo mkfs.fat -F 32 $${LOOP}p1); \
+	mkdir -p fat-root/bin; \
+	echo 'Hello from host FAT32 disk' > fat-root/README.TXT; \
+	sudo mcopy -i $${LOOP}p1 -s fat-root/* ::/ 2>/dev/null || true
 
 # Clean build artifacts
 clean:
@@ -63,4 +76,4 @@ zig-check:
 
 # Run on QEMU with graphical display (for DOOM fire visual)
 run-gui: boot
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive format=raw,file=disk.img -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0

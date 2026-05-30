@@ -1,11 +1,16 @@
 /// Capability-based security system for ZiqaKernel
 ///
 /// Instead of traditional Unix ACLs, every resource access is mediated
-/// by unforgeable capability tokens. A process can only operate on
+/// unforgeable capability tokens. A process can only operate on
 /// resources for which it holds a valid capability.
 
-/// Unique identifier for a capability token
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use alloc::vec::Vec;
+
+use spin::Mutex;
+use alloc::collections::BTreeMap;
+
+/// Unique identifier for a capability token (Global across system for revocation)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CapabilityId(pub u64);
 
 /// What the capability grants access to
@@ -70,6 +75,7 @@ impl Permissions {
 #[derive(Debug, Clone)]
 pub struct CapabilityToken {
     pub id: CapabilityId,
+    pub parent_id: Option<CapabilityId>,
     pub resource: ResourceKind,
     pub permissions: Permissions,
     /// Resource-specific identifier (e.g., FD number, address, port)
@@ -79,12 +85,14 @@ pub struct CapabilityToken {
 impl CapabilityToken {
     pub fn new(
         id: CapabilityId,
+        parent_id: Option<CapabilityId>,
         resource: ResourceKind,
         permissions: Permissions,
         target: u64,
     ) -> Self {
         Self {
             id,
+            parent_id,
             resource,
             permissions,
             target,
@@ -113,7 +121,6 @@ const MAX_CAPS_PER_PROCESS: usize = 64;
 pub struct CapabilitySpace {
     caps: [Option<CapabilityToken>; MAX_CAPS_PER_PROCESS],
     count: usize,
-    next_id: u64,
 }
 
 impl CapabilitySpace {
@@ -122,7 +129,6 @@ impl CapabilitySpace {
         Self {
             caps: [NONE; MAX_CAPS_PER_PROCESS],
             count: 0,
-            next_id: 1,
         }
     }
 
@@ -132,13 +138,19 @@ impl CapabilitySpace {
         resource: ResourceKind,
         permissions: Permissions,
         target: u64,
+        parent_id: Option<CapabilityId>,
     ) -> Option<CapabilityId> {
         if self.count >= MAX_CAPS_PER_PROCESS {
             return None;
         }
-        let id = CapabilityId(self.next_id);
-        self.next_id += 1;
-        let token = CapabilityToken::new(id, resource, permissions, target);
+        let id = alloc_id();
+        let token = CapabilityToken::new(id, parent_id, resource, permissions, target);
+        
+        // Track relationship for revocation
+        if let Some(pid) = parent_id {
+            REVOCATION_TREE.lock().add_child(pid, id);
+        }
+
         // Find first empty slot
         for slot in self.caps.iter_mut() {
             if slot.is_none() {
@@ -150,8 +162,8 @@ impl CapabilitySpace {
         None
     }
 
-    /// Revoke a capability by its ID
-    pub fn revoke(&mut self, id: CapabilityId) -> bool {
+    /// Revoke a capability by its ID (Local operation)
+    pub fn revoke_local(&mut self, id: CapabilityId) -> bool {
         for slot in self.caps.iter_mut() {
             let matches = match slot {
                 Some(cap) => cap.id == id,
@@ -191,4 +203,78 @@ impl CapabilitySpace {
                 .unwrap_or(false)
         })
     }
+
+    /// System-wide instant revocation
+    pub fn revoke_global(id: CapabilityId) {
+        let mut descendants = Vec::new();
+        {
+            let tree = REVOCATION_TREE.lock();
+            tree.get_all_descendants(id, &mut descendants);
+        }
+
+        descendants.push(id);
+
+        // Iterate over all processes and remove these capabilities
+        let pids = crate::process::scheduler::list_pids();
+        for pid in pids {
+            crate::process::scheduler::with_process_mut(pid, |proc| {
+                for &target_id in &descendants {
+                    if proc.capabilities.revoke_local(target_id) {
+                        // If it's a memory capability, we should ideally unmap it.
+                        // For now, this severes future access checks.
+                        crate::println!("[CAP] Revoked {} from PID {}", target_id.0, pid.0);
+                    }
+                }
+            });
+        }
+
+        // Cleanup tree
+        let mut tree = REVOCATION_TREE.lock();
+        for &target_id in &descendants {
+            tree.remove_node(target_id);
+        }
+    }
 }
+
+// ── Global ID Allocation and Revocation Tree ──────────────────────────────────
+
+static NEXT_ID: Mutex<u64> = Mutex::new(1);
+
+fn alloc_id() -> CapabilityId {
+    let mut lock = NEXT_ID.lock();
+    let id = *lock;
+    *lock += 1;
+    CapabilityId(id)
+}
+
+struct RevocationTree {
+    /// Maps parent ID to its direct children
+    children: BTreeMap<CapabilityId, Vec<CapabilityId>>,
+}
+
+impl RevocationTree {
+    pub const fn new() -> Self {
+        Self {
+            children: BTreeMap::new(),
+        }
+    }
+
+    pub fn add_child(&mut self, parent: CapabilityId, child: CapabilityId) {
+        self.children.entry(parent).or_insert_with(Vec::new).push(child);
+    }
+
+    pub fn get_all_descendants(&self, id: CapabilityId, out: &mut Vec<CapabilityId>) {
+        if let Some(kids) = self.children.get(&id) {
+            for &kid in kids {
+                out.push(kid);
+                self.get_all_descendants(kid, out);
+            }
+        }
+    }
+
+    pub fn remove_node(&mut self, id: CapabilityId) {
+        self.children.remove(&id);
+    }
+}
+
+static REVOCATION_TREE: Mutex<RevocationTree> = Mutex::new(RevocationTree::new());

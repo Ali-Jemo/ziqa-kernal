@@ -36,13 +36,18 @@ pub fn get_mouse_pos() -> (i32, i32) {
     (state.x, state.y)
 }
 
+pub fn get_mouse_btn() -> u8 {
+    let state = MOUSE_STATE.lock();
+    (state.left_pressed as u8) | ((state.right_pressed as u8) << 1)
+}
+
 /// Initialize PS/2 Mouse
 pub fn init() {
     let mut port_64 = Port::<u8>::new(0x64);
     let mut port_60 = Port::<u8>::new(0x60);
 
     // Enable Auxiliary Device
-    unsafe {
+    let ok = unsafe {
         wait_write();
         port_64.write(0xA8);
         
@@ -58,24 +63,38 @@ pub fn init() {
         
         // Tell mouse to use default settings
         mouse_write(0xF6);
-        let _ = mouse_read();
+        let ack1 = mouse_read();
         
         // Enable data reporting
         mouse_write(0xF4);
-        let _ = mouse_read();
+        let ack2 = mouse_read();
+        
+        ack1 == 0xFA && ack2 == 0xFA
+    };
+
+    if ok {
+        crate::println!(" ~ PS/2 Mouse ........................... ready");
+    } else {
+        crate::println!(" ~ PS/2 Mouse ........................... not detected");
     }
-    
-    crate::println!(" ~ PS/2 Mouse ........................... ready");
 }
 
 fn wait_read() {
     let mut port = Port::<u8>::new(0x64);
-    while (unsafe { port.read() } & 1) == 0 {}
+    for _ in 0..100000 {
+        if (unsafe { port.read() } & 1) != 0 {
+            return;
+        }
+    }
 }
 
 fn wait_write() {
     let mut port = Port::<u8>::new(0x64);
-    while (unsafe { port.read() } & 2) != 0 {}
+    for _ in 0..100000 {
+        if (unsafe { port.read() } & 2) == 0 {
+            return;
+        }
+    }
 }
 
 fn mouse_write(data: u8) {
@@ -116,8 +135,8 @@ pub fn on_interrupt() {
             state.left_pressed = (state.data[0] & 1) != 0;
             state.right_pressed = (state.data[0] & 2) != 0;
             
-            let dx = state.data[1] as i32 - ((state.data[0] as i32 << 4) & 0x100);
-            let dy = state.data[2] as i32 - ((state.data[0] as i32 << 3) & 0x100);
+            let dx = state.data[1] as i32 - (((state.data[0] as i32) << 4) & 0x100);
+            let dy = state.data[2] as i32 - (((state.data[0] as i32) << 3) & 0x100);
             
             state.x = (state.x + dx).clamp(0, 1919);
             state.y = (state.y - dy).clamp(0, 1079);

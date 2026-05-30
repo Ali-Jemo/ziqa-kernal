@@ -11,6 +11,7 @@
 /// native formats — all through the same unified interface.
 pub mod linux;
 pub mod syscall;
+#[cfg(feature = "wasm")]
 pub mod wasm;
 pub mod handler;
 

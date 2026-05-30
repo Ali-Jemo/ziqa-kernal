@@ -6,26 +6,39 @@ pub mod abi;
 pub mod arch;
 pub mod boot_screen;
 pub mod capability;
-pub mod doom;
 pub mod drivers;
-pub mod ebpf;
-pub mod edit;
 pub mod fs;
+
+#[cfg(feature = "shell")]
+pub mod edit;
 pub mod init;
 pub mod io;
 pub mod ipc;
 pub mod klog;
 pub mod memory;
-pub mod net;
 pub mod perf;
 pub mod process;
-pub mod shell;
-pub mod tests;
-pub mod tetris;
 pub mod timer;
+
+#[cfg(feature = "ebpf")]
+pub mod ebpf;
+#[cfg(feature = "games")]
+pub mod doom;
+#[cfg(feature = "games")]
+pub mod tetris;
+#[cfg(feature = "games")]
 pub mod userspace;
+#[cfg(feature = "net")]
+pub mod net;
+#[cfg(feature = "shell")]
+pub mod shell;
+#[cfg(feature = "zig-hotpaths")]
 pub mod zig_ffi;
+#[cfg(feature = "zig-hotpaths")]
 pub mod zig_kernel_ops;
+
+// tests always available but some test bodies may be cfg-gated
+pub mod tests;
 
 pub use init::{init, init_abi_registry};
 

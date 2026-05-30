@@ -82,7 +82,7 @@ impl Framebuffer {
     }
 
     /// Fill the entire screen — uses Zig blitter for XRGB8888 mode
-    pub fn fill(&mut self, color: u8) {
+    pub unsafe fn fill(&mut self, color: u8) {
         match self.format {
             PixelFormat::Indexed8 => {
                 for i in 0..(self.width * self.height) {
@@ -99,18 +99,41 @@ impl Framebuffer {
     }
 
     /// Fill with 32-bit XRGB color — dispatches to Zig blitter
-    pub fn fill32(&mut self, color: u32) {
+    pub unsafe fn fill32(&mut self, color: u32) {
         let total_bytes = self.pitch * self.height;
+        #[cfg(feature = "zig-hotpaths")]
         crate::zig_ffi::clear(self.ptr, total_bytes, color);
+        #[cfg(not(feature = "zig-hotpaths"))]
+        {
+            let p = core::slice::from_raw_parts_mut(self.ptr, total_bytes / 4);
+            for px in p.iter_mut() {
+                *px = color;
+            }
+        }
     }
 
     /// Fill a rectangle — dispatches to Zig blitter
-    pub fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    pub unsafe fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
+        #[cfg(feature = "zig-hotpaths")]
         crate::zig_ffi::fill_rect(self.ptr, self.pitch as u32, x, y, w, h, color);
+        #[cfg(not(feature = "zig-hotpaths"))]
+        {
+            let pitch = self.pitch as u32;
+            for row in y..y + h {
+                let row_start = (row * pitch + x) as usize;
+                let row_end = (row * pitch + x + w) as usize;
+                let slice = core::slice::from_raw_parts_mut(self.ptr.add(row_start), (row_end - row_start) * 4);
+                for px in slice.chunks_exact_mut(4) {
+                    let bytes = color.to_le_bytes();
+                    px.copy_from_slice(&bytes);
+                }
+            }
+        }
     }
 
     /// Scroll up by N pixel lines — dispatches to Zig blitter
-    pub fn scroll_up(&mut self, lines: u32, fill_color: u32) {
+    pub unsafe fn scroll_up(&mut self, lines: u32, fill_color: u32) {
+        #[cfg(feature = "zig-hotpaths")]
         crate::zig_ffi::scroll_up(
             self.ptr,
             self.pitch as u32,
@@ -119,6 +142,21 @@ impl Framebuffer {
             lines,
             fill_color,
         );
+        #[cfg(not(feature = "zig-hotpaths"))]
+        {
+            let pitch = self.pitch;
+            let width = self.width as usize;
+            let height = self.height as usize;
+            let bytes_per_pixel = if self.format == PixelFormat::XRGB8888 { 4 } else { 1 };
+            let line_bytes = width * bytes_per_pixel;
+            let src = self.ptr.add(lines as usize * pitch);
+            let dst = self.ptr;
+            let count = (height - lines as usize) * pitch;
+            core::ptr::copy(src, dst, count);
+            let fill_start = (height - lines as usize) * pitch;
+            let fill_size = lines as usize * pitch;
+            core::ptr::write_bytes(self.ptr.add(fill_start), fill_color as u8, fill_size);
+        }
     }
 }
 

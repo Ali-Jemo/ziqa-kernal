@@ -120,20 +120,8 @@ impl NetDevice {
     }
 
     fn poll_hardware(&mut self) {
-        if !self.is_loopback {
-            #[cfg(target_arch = "x86_64")]
-            unsafe {
-                #[allow(static_mut_refs)]
-                if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
-                    while let Some((pkt_data, pkt_len)) = net.receive() {
-                        let pkt = Packet::new(&pkt_data[..pkt_len]);
-                        let _ = self.rx_queue.push(pkt);
-                        self.rx_packets += 1;
-                        self.rx_bytes += pkt_len as u64;
-                    }
-                }
-            }
-        }
+        // Physical NIC packets are consumed by smoltcp via ZiqaDevice.
+        // NetDevice's rx_queue receives only loopback traffic.
     }
 
     /// Transmit a packet. For loopback, immediately enqueues to rx.
@@ -149,11 +137,8 @@ impl NetDevice {
         } else {
             // Physical: transmit via VIRTIO_NET
             #[cfg(target_arch = "x86_64")]
-            unsafe {
-                #[allow(static_mut_refs)]
-                if let Some(net) = &mut crate::drivers::virtio_net::VIRTIO_NET {
-                    let _ = net.transmit(data);
-                }
+            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                let _ = net.transmit(data);
             }
         }
         Ok(())
@@ -228,6 +213,7 @@ impl NetStack {
 pub mod device;
 pub mod dns;
 pub mod http;
+pub mod socket;
 pub mod stack;
 
 pub static NET: Mutex<NetStack> = Mutex::new(NetStack::new());

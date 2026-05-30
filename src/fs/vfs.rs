@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::{Mutex, RwLock};
 
 /// Global VFS state
 pub struct Vfs {
@@ -115,8 +115,6 @@ impl Vfs {
     /// Create a new empty RamFile at the given path (kernel-internal)
     pub fn create(&mut self, path: &str) {
         use crate::fs::ramfs::RamFile;
-        use alloc::sync::Arc;
-        use spin::Mutex;
         if !self.exists(path) {
             self.files
                 .insert(path.to_string(), Arc::new(Mutex::new(RamFile::new())));
@@ -194,8 +192,6 @@ impl Vfs {
     /// Create a directory marker in VFS
     pub fn mkdir(&mut self, path: &str) {
         use crate::fs::ramfs::RamFile;
-        use alloc::sync::Arc;
-        use spin::Mutex;
         let p = path.trim_end_matches('/');
         if !p.is_empty() && !self.files.contains_key(p) {
             self.files
@@ -204,5 +200,23 @@ impl Vfs {
     }
 }
 
-/// Global VFS instance
-pub static VFS: Mutex<Vfs> = Mutex::new(Vfs::new());
+/// Global VFS instance with fine-grained locking
+pub static VFS: RwLock<Vfs> = RwLock::new(Vfs::new());
+
+#[derive(Clone)]
+pub struct MountInfo {
+    pub source: String,
+    pub target: String,
+    pub fstype: String,
+}
+
+pub static MOUNT_REGISTRY: Mutex<Vec<MountInfo>> = Mutex::new(Vec::new());
+
+pub fn register_mount(source: &str, target: &str, fstype: &str) {
+    let mut mounts = MOUNT_REGISTRY.lock();
+    mounts.push(MountInfo {
+        source: source.to_string(),
+        target: target.to_string(),
+        fstype: fstype.to_string(),
+    });
+}

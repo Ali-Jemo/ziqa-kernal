@@ -4,6 +4,7 @@ pub mod verifier;
 /// Allows running safe, verified code in kernel space for
 /// tracing, networking, and security auditing.
 pub mod vm;
+pub mod attach;
 
 /// eBPF Instruction representation
 #[repr(C)]

@@ -1,68 +1,103 @@
 extern crate alloc;
 use crate::memory::VirtAddr;
-use crate::process::signal::{default_action, DefaultDisposition, SignalAction};
-use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable};
-/// Multilevel Feedback Queue (MLFQ) Scheduler for ZiqaKernel
-///
-/// Features:
-/// - Dynamic priority adjustment (feedback)
-/// - Interactive tasks stay at high priority
-/// - CPU-bound tasks are demoted to lower priority levels
-/// - Starvation prevention via periodic priority boosting
-/// - Load balancing across priority levels
-/// - Fixed-size array (no heap dependency)
-use spin::Mutex;
+use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable as PidAllocator};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
+use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::FrameAllocator;
 
 const MAX_TASKS: usize = 64;
 const PRIORITY_LEVELS: u8 = 4;
-const BOOST_INTERVAL: u64 = 1000; // Reset priorities every 1000 ticks
+const BOOST_INTERVAL: u64 = 1000;
 
-pub struct Scheduler {
-    /// Process slots
-    tasks: [Option<Process>; MAX_TASKS],
-    current: usize,
-    count: usize,
-    ticks: u64,
-    table: ProcessTable,
-    /// Tracks current time slice for running task
-    timeslice_remaining: u32,
-    /// Load tracking for each priority level (number of ticks consumed)
-    #[allow(dead_code)]
-    priority_load: [u64; PRIORITY_LEVELS as usize],
+/// The global process table, allowing concurrent access to different processes.
+pub struct GlobalProcessTable {
+    pub tasks: [Option<Arc<Mutex<Process>>>; MAX_TASKS],
 }
 
-const NONE_PROCESS: Option<Process> = None;
+impl GlobalProcessTable {
+    pub const fn new() -> Self {
+        const NONE_PROC: Option<Arc<Mutex<Process>>> = None;
+        Self {
+            tasks: [NONE_PROC; MAX_TASKS],
+        }
+    }
+
+    pub fn get(&self, pid: Pid) -> Option<Arc<Mutex<Process>>> {
+        self.tasks.iter().filter_map(|t| t.as_ref().cloned()).find(|p| p.lock().pid == pid)
+    }
+
+    fn find_free_slot(&self) -> Option<usize> {
+        self.tasks.iter().position(|s| s.is_none())
+    }
+}
+
+/// Ready queues for Multi-Level Feedback Queue (MLFQ) scheduling.
+struct ReadyQueues {
+    queues: [Vec<Pid>; PRIORITY_LEVELS as usize],
+}
+
+impl ReadyQueues {
+    pub const fn new() -> Self {
+        Self {
+            queues: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        }
+    }
+
+    pub fn push(&mut self, pid: Pid, priority: u8) {
+        let p = priority.min(PRIORITY_LEVELS - 1) as usize;
+        if !self.queues[p].contains(&pid) {
+            self.queues[p].push(pid);
+        }
+    }
+
+    pub fn pop_highest(&mut self) -> Option<Pid> {
+        for q in self.queues.iter_mut() {
+            if !q.is_empty() {
+                return Some(q.remove(0));
+            }
+        }
+        None
+    }
+}
+
+/// The Scalable Scheduler for ZiqaKernel.
+pub struct Scheduler {
+    pub process_table: RwLock<GlobalProcessTable>,
+    ready_queues: Mutex<ReadyQueues>,
+    current_pid: Mutex<Option<Pid>>,
+    ticks: AtomicU64,
+    pid_allocator: Mutex<PidAllocator>,
+    timeslice_remaining: Mutex<u32>,
+}
 
 impl Scheduler {
     pub const fn new() -> Self {
         Scheduler {
-            tasks: [NONE_PROCESS; MAX_TASKS],
-            current: 0,
-            count: 0,
-            ticks: 0,
-            table: ProcessTable::new(),
-            timeslice_remaining: 0,
-            priority_load: [0; PRIORITY_LEVELS as usize],
+            process_table: RwLock::new(GlobalProcessTable::new()),
+            ready_queues: Mutex::new(ReadyQueues::new()),
+            current_pid: Mutex::new(None),
+            ticks: AtomicU64::new(0),
+            pid_allocator: Mutex::new(PidAllocator::new()),
+            timeslice_remaining: Mutex::new(0),
         }
     }
 
-    /// Create a new process (starts at highest priority)
-    pub fn spawn(&mut self, abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> {
-        if self.count >= MAX_TASKS {
-            return None;
-        }
-        let pid = self.table.alloc_pid();
-        let mut proc = Process::new(pid, abi, entry, stack);
-        proc.set_priority(0); // Highest priority
+    pub fn total_ticks(&self) -> u64 {
+        self.ticks.load(Ordering::Relaxed)
+    }
 
-        // 1. Give the process its own page table
+    pub fn spawn(&self, abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> {
+        let pid = self.pid_allocator.lock().alloc_pid();
+        let mut proc = Process::new(pid, abi, entry, stack);
+        proc.set_priority(0);
+
         if let Some(frame) = crate::memory::paging::create_process_page_table() {
             proc.page_table_frame = Some(frame);
         }
 
-        // 2. Add stack region
         let stack_size = 256 * 1024;
         let stack_start = stack.as_u64().checked_sub(stack_size as u64)?;
         proc.add_region(crate::memory::MemoryRegion {
@@ -73,93 +108,84 @@ impl Scheduler {
             file_offset: 0,
         });
 
-        // 3. Initialize process stack with TrapFrame
         init_process_stack(&mut proc);
-
         proc.make_ready();
 
-        for slot in self.tasks.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(proc);
-                self.count += 1;
-                return Some(pid);
-            }
+        let mut table = self.process_table.write();
+        if let Some(slot) = table.find_free_slot() {
+            table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
+            self.ready_queues.lock().push(pid, 0);
+            return Some(pid);
         }
         None
     }
 
-    /// Spawn a native kernel thread (shares kernel address space, runs in Ring 0)
-    pub fn spawn_kthread(&mut self, entry: fn()) -> Option<Pid> {
-        if self.count >= MAX_TASKS {
-            return None;
-        }
-        let pid = self.table.alloc_pid();
-        // Use 1 as stack sentinel to trigger kstack allocation in Process::new
+    pub fn spawn_kthread(&self, entry: fn()) -> Option<Pid> {
+        let pid = self.pid_allocator.lock().alloc_pid();
         let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(entry as u64), VirtAddr::new(1));
-        
-        // Kernel thread specifics:
-        proc.cpu_state.cs = 0x8; // Kernel Code
-        proc.cpu_state.ss = 0x10; // Kernel Data
-        proc.cpu_state.rflags = 0x202; // IF enabled
-        
-        // Shares kernel page table
+        proc.cpu_state.cs = 0x8;
+        proc.cpu_state.ss = 0x10;
+        proc.cpu_state.rflags = 0x202;
         proc.page_table_frame = None;
-
         proc.make_ready();
+        init_kthread_stack(&mut proc);
 
-        for slot in self.tasks.iter_mut() {
-            if let Some(p) = slot {
-                if p.pid == pid {
-                    // Safety check: don't overwrite
-                    return None;
-                }
-            }
-            if slot.is_none() {
-                *slot = Some(proc);
-                self.count += 1;
-                return Some(pid);
-            }
+        let mut table = self.process_table.write();
+        if let Some(slot) = table.find_free_slot() {
+            table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
+            self.ready_queues.lock().push(pid, 0);
+            return Some(pid);
         }
         None
     }
 
-    /// Terminate a process with an exit code.
-    /// Sends SIGCHLD to the parent if one exists.
-    pub fn exit_process(&mut self, pid: Pid, code: i64) {
-        for slot in self.tasks.iter_mut() {
-            if let Some(proc) = slot {
-                if proc.pid == pid {
-                    proc.exit_code = code;
-                    proc.state = ProcessState::Exited(code);
-                    // Notify parent via SIGCHLD
-                    let parent_pid = proc.parent;
-                    if parent_pid != 0 {
-                        self.send_signal_inner(
-                            Pid(parent_pid),
-                            crate::process::signal::sig::SIGCHLD,
-                        );
-                    }
-                    return;
+    pub fn spawn_elf(&self, binary: &[u8]) -> Option<Pid> {
+        let registry = crate::init_abi_registry();
+        let plugin = registry.detect(binary)?;
+        let pid = self.pid_allocator.lock().alloc_pid();
+        let entry = VirtAddr::new(0x1000000); // Dummy, will be overwritten by load_elf
+        let stack = VirtAddr::new(0x7FFF_FFFF_000);
+        let mut proc = Process::new(pid, plugin.kind(), entry, stack);
+        proc.binary_data = binary.to_vec();
+
+        if let Some(frame) = crate::memory::paging::create_process_page_table() {
+            proc.page_table_frame = Some(frame);
+        }
+
+        match plugin.load(binary, &mut proc) {
+            Ok(()) => {
+                init_process_stack(&mut proc);
+                proc.make_ready();
+                let mut table = self.process_table.write();
+                if let Some(slot) = table.find_free_slot() {
+                    table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
+                    self.ready_queues.lock().push(pid, 0);
+                    return Some(pid);
                 }
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
+    pub fn exit_process(&self, pid: Pid, code: i64) {
+        if let Some(proc_arc) = self.get_process(pid) {
+            let mut proc = proc_arc.lock();
+            proc.exit_code = code;
+            proc.state = ProcessState::Exited(code);
+            let parent_pid = proc.parent;
+            if parent_pid != 0 {
+                self.send_signal(Pid(parent_pid), crate::process::signal::sig::SIGCHLD);
             }
         }
     }
 
-    /// Fork: clone the parent process with copy-on-write page tables.
-    /// Returns the child's Pid, or None if the fork fails.
-    pub fn fork(&mut self, parent_pid: Pid) -> Option<Pid> {
-        // Step 1: Set up COW page tables (makes parent pages read-only, clones for child)
+    pub fn fork(&self, parent_pid: Pid) -> Option<Pid> {
         let child_l4_frame = crate::memory::paging::cow_fork_parent();
+        let parent_arc = self.get_process(parent_pid)?;
+        let mut parent = parent_arc.lock();
 
-        // Step 2: Find the parent and create the child
-        let parent_index = self
-            .tasks
-            .iter()
-            .position(|s| s.as_ref().map(|p| p.pid == parent_pid).unwrap_or(false))?;
-
-        let parent = self.tasks[parent_index].as_ref().unwrap();
-
-        let child_pid = self.table.alloc_pid();
+        let child_pid = self.pid_allocator.lock().alloc_pid();
         let mut child = Process::new(child_pid, parent.abi, parent.entry_point, parent.stack_top);
         child.cpu_state = parent.cpu_state;
         child.priority = parent.priority;
@@ -170,59 +196,54 @@ impl Scheduler {
         child.state = ProcessState::Ready;
         child.fds.clone_from(&parent.fds);
 
-        // Set the child's page table frame
         if let Some(frame) = child_l4_frame {
             child.page_table_frame = Some(frame);
         }
 
-        // Mark all writable regions as copy_on_write in BOTH parent and child
-        for region_opt in self.tasks[parent_index]
-            .as_mut()
-            .unwrap()
-            .regions
-            .iter_mut()
-        {
-            if let Some(ref mut r) = region_opt {
-                if r.flags.writable {
-                    r.flags.copy_on_write = true;
-                }
+        for r_opt in parent.regions.iter_mut() {
+            if let Some(ref mut r) = r_opt {
+                if r.flags.writable { r.flags.copy_on_write = true; }
             }
         }
-        for region_opt in child.regions.iter_mut() {
-            if let Some(ref mut r) = region_opt {
-                if r.flags.writable {
-                    r.flags.copy_on_write = true;
-                }
+        for r_opt in child.regions.iter_mut() {
+            if let Some(ref mut r) = r_opt {
+                if r.flags.writable { r.flags.copy_on_write = true; }
             }
         }
 
-        // Insert the child into a free slot
-        for slot in self.tasks.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(child);
-                self.count += 1;
-                return Some(child_pid);
-            }
+        let mut table = self.process_table.write();
+        if let Some(slot) = table.find_free_slot() {
+            table.tasks[slot] = Some(Arc::new(Mutex::new(child)));
+            self.ready_queues.lock().push(child_pid, 0);
+            return Some(child_pid);
         }
-
         None
     }
 
-    /// Wait for a child process to exit.
-    /// Returns Some((pid, exit_code)) if a zombie child is found, None otherwise.
-    pub fn waitpid(&mut self, parent: Pid, child_pid: i64) -> Option<(Pid, i64)> {
-        for slot in self.tasks.iter_mut() {
-            if let Some(proc) = slot {
+    pub fn waitpid(&self, parent: Pid, child_pid: i64) -> Option<(Pid, i64)> {
+        let table = self.process_table.read();
+        for slot in table.tasks.iter() {
+            if let Some(proc_arc) = slot {
+                let proc = proc_arc.lock();
                 let matches = if child_pid == -1 {
                     proc.parent == parent.0
                 } else {
                     proc.pid.0 == child_pid as u64 && proc.parent == parent.0
                 };
+
                 if matches {
                     if let ProcessState::Exited(code) = proc.state {
                         let pid = proc.pid;
-                        *slot = None; // Reap the zombie
-                        self.count -= 1;
+                        drop(proc);
+                        drop(table);
+                        
+                        let mut write_table = self.process_table.write();
+                        if let Some(idx) = write_table.tasks.iter().position(|t| {
+                            t.as_ref().map(|p| p.lock().pid == pid).unwrap_or(false)
+                        }) {
+                            write_table.tasks[idx] = None;
+                            return Some((pid, code));
+                        }
                         return Some((pid, code));
                     }
                 }
@@ -231,419 +252,193 @@ impl Scheduler {
         None
     }
 
-    /// Send a signal to a process. Returns false if the process doesn't exist.
-    pub fn send_signal(&mut self, target: Pid, signum: u8) -> bool {
-        self.send_signal_inner(target, signum)
-    }
-
-    fn send_signal_inner(&mut self, target: Pid, signum: u8) -> bool {
-        for slot in self.tasks.iter_mut() {
-            if let Some(proc) = slot {
-                if proc.pid == target {
-                    proc.signals.send(signum);
-                    // SIGKILL/SIGSTOP are delivered immediately
-                    if signum == crate::process::signal::sig::SIGKILL {
-                        proc.exit_code = -1;
-                        proc.state = ProcessState::Exited(-1);
-                    } else if signum == crate::process::signal::sig::SIGSTOP {
-                        proc.state = ProcessState::Blocked;
-                    } else if signum == crate::process::signal::sig::SIGCONT {
-                        if proc.state == ProcessState::Blocked {
-                            proc.state = ProcessState::Ready;
-                        }
-                    }
-                    return true;
+    pub fn send_signal(&self, target: Pid, signum: u8) -> bool {
+        if let Some(proc_arc) = self.get_process(target) {
+            let mut proc = proc_arc.lock();
+            proc.signals.send(signum);
+            if signum == crate::process::signal::sig::SIGKILL {
+                proc.exit_code = -1;
+                proc.state = ProcessState::Exited(-1);
+            } else if signum == crate::process::signal::sig::SIGSTOP {
+                proc.state = ProcessState::Blocked;
+            } else if signum == crate::process::signal::sig::SIGCONT {
+                if proc.state == ProcessState::Blocked {
+                    proc.state = ProcessState::Ready;
+                    self.ready_queues.lock().push(target, proc.priority);
                 }
             }
+            return true;
         }
         false
     }
 
-    /// Deliver pending signals to the current process.
-    /// Called at the top of each scheduler tick for the running task.
-    fn deliver_signals(&mut self) {
-        let idx = self.current;
-        if let Some(proc) = &mut self.tasks[idx] {
-            if !proc.signals.has_pending() {
-                return;
-            }
+    pub fn tick(&self) {
+        let t = self.ticks.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Check for signals that should be delivered to userspace
-            let signum = proc.signals.dequeue();
-            if signum == 0 {
-                return;
-            }
-
-            let action = proc.signals.get_action(signum);
-
-            match action {
-                SignalAction::Ignore => {}
-                SignalAction::Handler(addr) => {
-                    // Store signal info for context switch
-                    proc.signals.pending_signal = signum;
-                    proc.signals.handler_addr = addr;
-
-                    crate::println!(
-                        "[SIGNAL] PID {} handler at 0x{:x} for sig {}",
-                        proc.pid.0,
-                        addr,
-                        signum
-                    );
+        let mut ts = self.timeslice_remaining.lock();
+        if *ts > 0 {
+            *ts -= 1;
+            if *ts == 0 {
+                if let Some(pid) = self.current_pid() {
+                    if let Some(proc_arc) = self.get_process(pid) {
+                        let mut proc = proc_arc.lock();
+                        if proc.priority < PRIORITY_LEVELS - 1 {
+                            proc.priority += 1;
+                        }
+                    }
                 }
-                SignalAction::Default => match default_action(signum) {
-                    DefaultDisposition::Terminate | DefaultDisposition::CoreDump => {
-                        proc.exit_code = -(signum as i64);
-                        proc.state = ProcessState::Exited(-(signum as i64));
-                    }
-                    DefaultDisposition::Stop => {
-                        proc.state = ProcessState::Blocked;
-                    }
-                    DefaultDisposition::Ignore => {}
-                },
+            }
+        }
+
+        if t % BOOST_INTERVAL == 0 {
+            let table = self.process_table.read();
+            for slot in table.tasks.iter() {
+                if let Some(p) = slot {
+                    p.lock().priority = 0;
+                }
             }
         }
     }
 
-    /// Wake processes whose sleep deadline has passed (called from timer subsystem).
-    /// `woken_mask` is a bitmask where bit N means PID N should wake.
-    pub fn wake_sleeping_mask(&mut self, woken_mask: u64) {
-        for slot in self.tasks.iter_mut() {
-            if let Some(proc) = slot {
+    pub fn schedule(&self) {
+        let next_pid = self.ready_queues.lock().pop_highest();
+        
+        if let Some(new_pid) = next_pid {
+            let mut current_guard = self.current_pid.lock();
+            let old_pid = *current_guard;
+            
+            if old_pid == Some(new_pid) {
+                *self.timeslice_remaining.lock() = match self.get_process(new_pid).unwrap().lock().priority {
+                    0 => 5, 1 => 10, 2 => 20, _ => 40,
+                };
+                return;
+            }
+
+            *current_guard = Some(new_pid);
+            drop(current_guard);
+
+            let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
+            let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
+
+            let mut new_proc = new_proc_arc.lock();
+            new_proc.state = ProcessState::Running;
+            *self.timeslice_remaining.lock() = match new_proc.priority {
+                0 => 5, 1 => 10, 2 => 20, _ => 40,
+            };
+
+            if let Some(frame) = new_proc.page_table_frame {
+                unsafe { Cr3::write(frame, Cr3Flags::empty()); }
+            }
+
+            crate::arch::x86_64::update_trap_stacks(new_proc.kernel_stack_top);
+
+            if let Some(old_arc) = old_proc_arc {
+                let mut old_proc = old_arc.lock();
+                if old_proc.state == ProcessState::Running {
+                    old_proc.state = ProcessState::Ready;
+                    self.ready_queues.lock().push(old_proc.pid, old_proc.priority);
+                }
+                
+                unsafe {
+                    crate::arch::x86_64::switch::switch_context(
+                        &mut old_proc.kernel_stack_ptr,
+                        new_proc.kernel_stack_ptr,
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn get_process(&self, pid: Pid) -> Option<Arc<Mutex<Process>>> {
+        self.process_table.read().get(pid)
+    }
+
+    pub fn current_pid(&self) -> Option<Pid> {
+        *self.current_pid.lock()
+    }
+
+    pub fn wake_sleeping_mask(&self, woken_mask: u64) {
+        let table = self.process_table.read();
+        for slot in table.tasks.iter() {
+            if let Some(p) = slot {
+                let mut proc = p.lock();
                 if proc.state == ProcessState::Blocked {
                     let bit = proc.pid.0;
                     if bit < 64 && (woken_mask & (1 << bit)) != 0 {
                         proc.state = ProcessState::Ready;
+                        self.ready_queues.lock().push(proc.pid, proc.priority);
                     }
                 }
             }
         }
     }
 
-    /// MLFQ bookkeeping — called from the timer ISR.
-    /// Must NOT context-switch: the scheduler lock is held and switching to a
-    /// user process before releasing it would deadlock when the new process
-    /// page-faults or makes a syscall (both of which try to re-acquire the lock).
-    pub fn tick(&mut self) {
-        self.ticks += 1;
-
-        if self.count == 0 {
-            return;
-        }
-
-        // Deliver pending signals to the running task
-        self.deliver_signals();
-
-        // Periodic priority boost (anti-starvation)
-        if self.ticks % BOOST_INTERVAL == 0 {
-            self.boost_priorities();
-        }
-    }
-
-    /// Find the next task to run based on MLFQ rules
-    fn schedule_next(&mut self) {
-        let mut best_idx = None;
-        let mut best_priority = PRIORITY_LEVELS + 1;
-
-        // Find highest priority Ready task
-        for i in 0..MAX_TASKS {
-            if let Some(proc) = &self.tasks[i] {
-                if proc.state == ProcessState::Ready {
-                    if proc.priority < best_priority {
-                        best_priority = proc.priority;
-                        best_idx = Some(i);
-                    }
-                }
-            }
-        }
-
-        if let Some(idx) = best_idx {
-            let old_idx = self.current;
-            let new_idx = idx;
-
-            self.current = new_idx;
-
-            // 1. Prepare new proc
-            {
-                let new_proc = self.tasks[new_idx].as_mut().unwrap();
-                new_proc.state = ProcessState::Running;
-                self.timeslice_remaining = match new_proc.priority {
-                    0 => 5,
-                    1 => 10,
-                    2 => 20,
-                    _ => 40,
-                };
-
-                // 2. Load page table
-                if let Some(frame) = new_proc.page_table_frame {
-                    unsafe {
-                        Cr3::write(frame, Cr3Flags::empty());
-                    }
-                }
-            }
-
-            // 3. Switch
-            if old_idx != new_idx {
-                let old_ptr = self.tasks[old_idx].as_mut().map(|p| p as *mut Process);
-                let new_ptr = self.tasks[new_idx].as_mut().map(|p| p as *mut Process);
-
-                unsafe {
-                    let new_proc = &mut *new_ptr.unwrap();
-
-                    // Set TSS.RSP0 and KERNEL_STACK for Ring 3↔Ring 0 transitions.
-                    // All processes now have a dedicated kernel stack.
-                    crate::arch::x86_64::update_trap_stacks(new_proc.kernel_stack_top);
-
-                    if let Some(old) = old_ptr.map(|p| &mut *p) {
-
-                        if old.state == ProcessState::Running {
-                            old.state = ProcessState::Ready;
-                        }
-
-                        crate::arch::x86_64::switch::switch_context(
-                            &mut old.kernel_stack_ptr,
-                            new_proc.kernel_stack_ptr,
-                        );
-                    }
-                }
-            }
+    pub fn set_current(&self, pid: Pid) -> bool {
+        if self.get_process(pid).is_some() {
+            *self.current_pid.lock() = Some(pid);
+            true
         } else {
-            // No ready tasks
-            self.timeslice_remaining = 1;
+            false
         }
     }
 
-    fn boost_priorities(&mut self) {
-        for slot in self.tasks.iter_mut() {
-            if let Some(proc) = slot {
-                proc.priority = 0;
-            }
-        }
+    pub fn list_pids(&self) -> Vec<Pid> {
+        let table = self.process_table.read();
+        table.tasks.iter().filter_map(|t| t.as_ref().map(|p| p.lock().pid)).collect()
     }
 
-    pub fn current_task(&self) -> Option<&Process> {
-        self.tasks[self.current].as_ref()
-    }
-
-    pub fn current_task_mut(&mut self) -> Option<&mut Process> {
-        self.tasks[self.current].as_mut()
-    }
-
-    pub fn set_current(&mut self, pid: Pid) -> bool {
-        for (i, slot) in self.tasks.iter().enumerate() {
-            if let Some(proc) = slot {
-                if proc.pid == pid {
-                    self.current = i;
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    pub fn total_ticks(&self) -> u64 {
-        self.ticks
-    }
-
-    pub fn get_process(&self, pid: Pid) -> Option<&Process> {
-        self.tasks
-            .iter()
-            .filter_map(|t| t.as_ref())
-            .find(|p| p.pid == pid)
-    }
-
-    pub fn get_process_mut(&mut self, pid: Pid) -> Option<&mut Process> {
-        self.tasks
-            .iter_mut()
-            .filter_map(|t| t.as_mut())
-            .find(|p| p.pid == pid)
-    }
-
-    pub fn init_boot_process(&mut self) {
-        let pid = self.table.alloc_pid();
+    pub fn init_boot_process(&self) {
+        let pid = self.pid_allocator.lock().alloc_pid();
         let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
-        // Give the boot process a dedicated kernel stack so TSS.RSP0 always
-        // points to a valid stack when switching back from a Ring 3 process.
-        let kstack = alloc::vec![0u8; 8192];
-        let top = kstack.as_ptr() as u64 + 8192;
+        let kstack = alloc::vec![0u8; 65536];
+        let top = kstack.as_ptr() as u64 + 65536;
         proc.kernel_stack = Some(kstack);
         proc.kernel_stack_top = top;
-        // kernel_stack_ptr is set during the first context switch away
-        // (switch_context saves the current bootloader stack there)
-        // The boot process starts as running (it is the current kernel thread)
-        self.tasks[0] = Some(proc);
-        self.tasks[0].as_mut().unwrap().state = ProcessState::Running;
-        self.current = 0;
-        self.count = 1;
-    }
-
-    pub fn schedule(&mut self) {
-        if let Some(proc) = &self.tasks[self.current] {
-            if proc.state == ProcessState::Running {
-                self.tasks[self.current].as_mut().unwrap().state = ProcessState::Ready;
-            }
-        }
-        self.schedule_next();
-    }
-
-    pub fn poll_network(&mut self) {
-        let mut stack = crate::net::stack::TCPIP.lock();
-        if let Some(s) = stack.as_mut() {
-            s.poll();
-        }
+        proc.state = ProcessState::Running;
+        
+        let mut table = self.process_table.write();
+        table.tasks[0] = Some(Arc::new(Mutex::new(proc)));
+        *self.current_pid.lock() = Some(pid);
+        *self.timeslice_remaining.lock() = 10;
     }
 }
 
-pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+pub static SCHEDULER: Scheduler = Scheduler::new();
 
-pub fn tick() {
-    SCHEDULER.lock().tick();
-}
+pub fn tick() { SCHEDULER.tick(); }
+pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { SCHEDULER.spawn(abi, entry, stack) }
+pub fn spawn_kthread(entry: fn()) -> Option<Pid> { SCHEDULER.spawn_kthread(entry) }
+pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { SCHEDULER.spawn_elf(binary) }
+pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { SCHEDULER.get_process(pid).map(|p| f(&p.lock())) }
+pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { SCHEDULER.get_process(pid).map(|p| f(&mut p.lock())) }
+pub fn current_task() -> Option<Arc<Mutex<Process>>> { SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid)) }
+pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
+pub fn wake_sleeping(woken_mask: u64) { SCHEDULER.wake_sleeping_mask(woken_mask); }
+pub fn init() { SCHEDULER.init_boot_process(); }
+pub fn list_pids() -> Vec<Pid> { SCHEDULER.list_pids() }
+pub fn yield_now() { unsafe { core::arch::asm!("int 0x20"); } }
 
-pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER.lock().spawn(abi, entry, stack)
-    })
-}
-
-pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R>
-where
-    F: FnOnce(&Process) -> R,
-{
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER.lock().get_process(pid).map(f)
-    })
-}
-
-pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R>
-where
-    F: FnOnce(&mut Process) -> R,
-{
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER
-            .lock()
-            .tasks
-            .iter_mut()
-            .filter_map(|t| t.as_mut())
-            .find(|p| p.pid == pid)
-            .map(f)
-    })
-}
-
-/// Called from the timer subsystem to wake sleeping processes
-pub fn wake_sleeping(woken_mask: u64) {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER.lock().wake_sleeping_mask(woken_mask);
-    })
-}
-
-pub fn init() {
-    // Disable interrupts while taking the scheduler lock — init_pics() has
-    // already enabled the PIT timer, and the timer ISR also takes this lock.
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        SCHEDULER.lock().init_boot_process();
-    });
-}
-
-impl Scheduler {
-    pub fn print_process_list(&self) {
-        crate::println!(" PID | State   | Priority | Parent ");
-        crate::println!("-----|---------|----------|--------");
-        for slot in self.tasks.iter() {
-            if let Some(proc) = slot {
-                crate::println!(
-                    "{:4} | {:7?} | {:8} | {:6}",
-                    proc.pid.0,
-                    proc.state,
-                    proc.priority,
-                    proc.parent
-                );
-            }
+fn init_kthread_stack(proc: &mut Process) {
+    if let Some(ref mut _kstack) = proc.kernel_stack {
+        let kstack_top = proc.kernel_stack_top;
+        unsafe {
+            let ret_ptr = (kstack_top - 8) as *mut u64;
+            ret_ptr.write(proc.entry_point.as_u64());
+            let context_ptr = (kstack_top - 8 - 48) as *mut u64;
+            for i in 0..6 { context_ptr.add(i).write(0); }
+            proc.kernel_stack_ptr = kstack_top - 8 - 48;
         }
     }
-
-    pub fn get_pid_list(&self) -> alloc::vec::Vec<crate::process::Pid> {
-        let mut pids = alloc::vec::Vec::new();
-        for slot in self.tasks.iter() {
-            if let Some(proc) = slot {
-                pids.push(proc.pid);
-            }
-        }
-        pids
-    }
 }
 
-pub fn list_pids() -> alloc::vec::Vec<crate::process::Pid> {
-    SCHEDULER.lock().get_pid_list()
-}
-pub fn spawn_elf(binary: &[u8]) -> Option<Pid> {
-    let registry = crate::init_abi_registry();
-    let plugin = registry.detect(binary)?;
-
-    let pid = x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut sched = SCHEDULER.lock();
-        if sched.count >= MAX_TASKS {
-            return None;
-        }
-        Some(sched.table.alloc_pid())
-    })?;
-
-    // Use safe address 16MB
-    let entry = VirtAddr::new(0x1000000);
-    let stack = VirtAddr::new(0x7FFF_FFFF_000);
-    let mut proc = Process::new(pid, plugin.kind(), entry, stack);
-    proc.binary_data = binary.to_vec();
-
-    // 1. Give the process its own page table
-    if let Some(frame) = crate::memory::paging::create_process_page_table() {
-        proc.page_table_frame = Some(frame);
-    }
-
-    // 2. Add stack region
-    let stack_size = 256 * 1024;
-    let stack_start = stack.as_u64() - stack_size;
-    proc.add_region(crate::memory::MemoryRegion {
-        start: VirtAddr::new(stack_start),
-        size: stack_size as usize,
-        flags: crate::memory::paging::MemoryRegionFlags::read_write(),
-        is_file_backed: false,
-        file_offset: 0,
-    });
-
-    match plugin.load(binary, &mut proc) {
-        Ok(()) => {
-            // 3. Initialize stack AFTER loading (so we have the real entry point)
-            init_process_stack(&mut proc);
-            proc.make_ready();
-            x86_64::instructions::interrupts::without_interrupts(|| {
-                let mut sched = SCHEDULER.lock();
-                for slot in sched.tasks.iter_mut() {
-                    if slot.is_none() {
-                        *slot = Some(proc);
-                        sched.count += 1;
-                        return Some(pid);
-                    }
-                }
-                None
-            })
-        }
-        Err(_) => None,
-    }
-}
-
-pub fn init_process_stack(proc: &mut Process) {
+fn init_process_stack(proc: &mut Process) {
     let stack_top = proc.stack_top.as_u64();
-
-    // 1. Map user stack page if the process has a user stack (stack_top != 0)
     if stack_top != 0 {
         let page_addr = (stack_top - 4096) & !0xFFF;
         let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
-
         let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
         let fa = fa_guard.as_mut().unwrap();
-        let flags = x86_64::structures::paging::PageTableFlags::PRESENT
-            | x86_64::structures::paging::PageTableFlags::WRITABLE
-            | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
-
+        let flags = x86_64::structures::paging::PageTableFlags::PRESENT | x86_64::structures::paging::PageTableFlags::WRITABLE | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
         if let Some(frame) = fa.allocate_frame() {
             unsafe {
                 use x86_64::structures::paging::Mapper;
@@ -660,61 +455,17 @@ pub fn init_process_stack(proc: &mut Process) {
             }
         }
     }
-
-    // 2. Initialize the kernel stack layout if the process has a dedicated kernel stack
     if proc.kernel_stack_top != 0 {
         unsafe {
             let kstack_top = proc.kernel_stack_top;
-            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64)
-                as *mut crate::process::CpuState;
-
-            // Initialize CpuState on kernel stack
-            cpu_state_ptr.write(crate::process::CpuState {
-                r15: 0,
-                r14: 0,
-                r13: 0,
-                r12: 0,
-                r11: 0,
-                r10: 0,
-                r9: 0,
-                r8: 0,
-                rdi: 0,
-                rsi: 0,
-                rbp: 0,
-                rbx: 0,
-                rdx: 0,
-                rcx: 0,
-                rax: 0,
-                rip: proc.entry_point.as_u64(),
-                cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64,
-                rflags: 0x202, // Interrupts enabled
-                rsp: stack_top,
-                ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64,
-            });
-
-            // Write the return address for switch_context (jump_to_user_stub)
-            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8)
-                as *mut u64;
-            extern "C" {
-                fn jump_to_user_stub();
-            }
+            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64) as *mut crate::process::CpuState;
+            cpu_state_ptr.write(crate::process::CpuState { r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rdi: 0, rsi: 0, rbp: 0, rbx: 0, rdx: 0, rcx: 0, rax: 0, rip: proc.entry_point.as_u64(), cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64, rflags: 0x202, rsp: stack_top, ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64, });
+            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8) as *mut u64;
+            extern "C" { fn jump_to_user_stub(); }
             ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
-
-            // Write 6 zeroed registers for switch_context (r15, r14, r13, r12, rbx, rbp)
-            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48)
-                as *mut u64;
-            for i in 0..6 {
-                context_ptr.add(i).write(0);
-            }
-
-            // Set the saved kernel stack pointer to point to the bottom of the switch context frame
+            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48) as *mut u64;
+            for i in 0..6 { context_ptr.add(i).write(0); }
             proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
         }
-    }
-}
-
-pub fn yield_now() {
-    unsafe {
-        core::arch::asm!("int 0x20");
     }
 }

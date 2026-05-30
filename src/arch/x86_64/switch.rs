@@ -282,19 +282,18 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
     ];
 
     let registry = crate::init_abi_registry();
-    let mut scheduler = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(proc) = scheduler.current_task_mut() {
+    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
+        let mut proc = proc_arc.lock();
         proc.cpu_state = *frame;
 
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, &mut proc);
         let handler = crate::abi::handler::KernelSyscallHandler;
 
         let res = crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx);
 
-        let current_proc = scheduler.current_task_mut().unwrap();
         match res {
             Ok(v) => {
-                current_proc.cpu_state.rax = v;
+                proc.cpu_state.rax = v;
             }
             Err(e) => {
                 let errno_val = match e {
@@ -302,14 +301,12 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
                     crate::abi::AbiError::PermissionDenied => 13, // EACCES
                     _ => 1, // EPERM or default error
                 };
-                current_proc.cpu_state.rax = -(errno_val as i64) as u64;
+                proc.cpu_state.rax = -(errno_val as i64) as u64;
             }
         }
         // Sanitize rflags before returning to Ring 3:
-        // clear IOPL(12-13), TF(8), DF(10), NT(14), RF(16), VM(17), AC(18)
-        // set IF(9) so the user process can receive interrupts
-        current_proc.cpu_state.rflags &= 0xFFF88AFF;
-        current_proc.cpu_state.rflags |= 0x200;
-        *frame = current_proc.cpu_state;
+        proc.cpu_state.rflags &= 0xFFF88AFF;
+        proc.cpu_state.rflags |= 0x200;
+        *frame = proc.cpu_state;
     }
 }

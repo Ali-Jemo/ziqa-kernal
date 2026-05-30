@@ -22,11 +22,11 @@ fn rand_num() -> u32 {
 }
 
 fn next_piece_idx() -> usize {
-    (rand_num() % 7) as usize
+    (rand_num() % 8) as usize
 }
 
 // 7 standard Tetris pieces represented in 4x4 grids
-const SHAPE_TEMPLATES: [[[u8; 4]; 4]; 7] = [
+const SHAPE_TEMPLATES: [[[u8; 4]; 4]; 8] = [
     // 0: I
     [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 1: O
@@ -41,9 +41,11 @@ const SHAPE_TEMPLATES: [[[u8; 4]; 4]; 7] = [
     [[1, 0, 0, 0], [1, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
     // 6: L
     [[0, 0, 1, 0], [1, 1, 1, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    // 7: Bomb (1x1)
+    [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
 ];
 
-const PIECE_COLORS: [u32; 7] = [
+const PIECE_COLORS: [u32; 8] = [
     0x00FFFF, // 0: I (Cyan)
     0xFFFF00, // 1: O (Yellow)
     0x9900FF, // 2: T (Purple/Magenta)
@@ -51,6 +53,7 @@ const PIECE_COLORS: [u32; 7] = [
     0xFF0000, // 4: Z (Red)
     0x0000FF, // 5: J (Blue)
     0xFF8800, // 6: L (Orange)
+    0xFFFFFF, // 7: Bomb (White)
 ];
 
 // Returns a rotated version of the shape grid
@@ -235,7 +238,7 @@ fn find_ghost_y(
     gy
 }
 
-pub fn render_screen(
+pub unsafe fn render_screen(
     fb: *mut u8,
     pitch: u32,
     v_fb: &mut [u32],
@@ -378,7 +381,7 @@ pub fn render_screen(
 }
 
 fn get_piece_size(piece: usize) -> usize {
-    if piece == 0 { 4 } else if piece == 1 { 2 } else { 3 }
+    if piece == 0 { 4 } else if piece == 1 { 2 } else if piece == 7 { 1 } else { 3 }
 }
 
 pub fn run() {
@@ -488,12 +491,14 @@ pub fn run() {
                     let burst_count = (pending_lines as u32) * 30;
                     fw_particles = alloc::vec::Vec::with_capacity((burst_count as usize) * 8);
                     fw_particles.resize((burst_count as usize) * 8, 0);
-                    fw_count = crate::zig_ffi::fireworks_burst(
-                        fb_ptr, pitch, 80, 25,
-                        40, 1 + (pending_lines * 2).min(18),
-                        fw_color, burst_count, 6, now as u32,
-                        &mut fw_particles,
-                    );
+                    fw_count = unsafe {
+                        crate::zig_ffi::fireworks_burst(
+                            fb_ptr, pitch, 80, 25,
+                            40, 1 + (pending_lines * 2).min(18),
+                            fw_color, burst_count, 6, now as u32,
+                            &mut fw_particles,
+                        )
+                    };
 
                     pending_lines = 0;
                     pending_score_inc = 0;
@@ -519,13 +524,49 @@ pub fn run() {
                 let size = get_piece_size(current_piece);
                 let rotated = get_rotated_grid(&template, size, current_rotation);
                 let color = PIECE_COLORS[current_piece];
-                for r in 0..size {
-                    for c in 0..size {
-                        if rotated[r][c] != 0 {
-                            let board_x = current_x + c as i32;
-                            let board_y = current_y + r as i32;
-                            if board_y >= 0 && board_y < 20 {
-                                board[board_y as usize][board_x as usize] = color;
+                if current_piece == 7 {
+                    // Bomb: explode and clear a 3x3 area centered on the bomb cell
+                    let mut cleared_blocks: u32 = 0;
+                    for er in -1..=1 {
+                        for ec in -1..=1 {
+                            let bx = current_x + ec;
+                            let by = current_y + er;
+                            if by >= 0 && by < 20 && bx >= 0 && bx < 10 {
+                                if board[by as usize][bx as usize] != 0 {
+                                    board[by as usize][bx as usize] = 0;
+                                    cleared_blocks += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    // Immediate score for cleared blocks (scaled by level)
+                    if cleared_blocks > 0 {
+                        score = score.saturating_add(cleared_blocks * 50 * level);
+                    }
+
+                    // Small explosion/fireworks effect
+                    let burst_count = 32u32;
+                    fw_particles = alloc::vec::Vec::with_capacity((burst_count as usize) * 8);
+                    fw_particles.resize((burst_count as usize) * 8, 0);
+                    fw_color = 0xFFFFFF;
+                    fw_count = unsafe {
+                        crate::zig_ffi::fireworks_burst(
+                            fb_ptr, pitch, 80, 25,
+                            40, 6,
+                            fw_color, burst_count, 6, now as u32,
+                            &mut fw_particles,
+                        )
+                    };
+                } else {
+                    for r in 0..size {
+                        for c in 0..size {
+                            if rotated[r][c] != 0 {
+                                let board_x = current_x + c as i32;
+                                let board_y = current_y + r as i32;
+                                if board_y >= 0 && board_y < 20 && board_x >= 0 && board_x < 10 {
+                                    board[board_y as usize][board_x as usize] = color;
+                                }
                             }
                         }
                     }
@@ -556,7 +597,7 @@ pub fn run() {
                     }
                     line_flash = 12; // ~6 visible flashes
                     // Screen shake on line clear!
-                    crate::zig_ffi::shake_fb(fb_ptr, pitch, 0, 0, 80, 25, 3, now as u32);
+                    unsafe { crate::zig_ffi::shake_fb(fb_ptr, pitch, 0, 0, 80, 25, 3, now as u32); }
                 } else {
                     // Spawn next piece immediately
                     current_piece = next_piece;
@@ -576,19 +617,23 @@ pub fn run() {
 
         // ── Fireworks update ───────────────────────────────────────────────
         if fw_count > 0 {
-            fw_count = crate::zig_ffi::fireworks_update(
-                fb_ptr, pitch, 80, 25, &mut fw_particles, fw_count, fw_color, 2,
-            );
+            fw_count = unsafe {
+                crate::zig_ffi::fireworks_update(
+                    fb_ptr, pitch, 80, 25, &mut fw_particles, fw_count, fw_color, 2,
+                )
+            };
         }
 
         // ── Render ─────────────────────────────────────────────────────────
-        render_screen(
-            fb_ptr, pitch, &mut v_fb, &board,
-            score, level, lines_cleared, next_piece,
-            current_piece, current_rotation, current_x, current_y,
-            is_game_over, ghost_y, line_flash, &line_flash_rows,
-            now as u32,
-        );
+        unsafe {
+            render_screen(
+                fb_ptr, pitch, &mut v_fb, &board,
+                score, level, lines_cleared, next_piece,
+                current_piece, current_rotation, current_x, current_y,
+                is_game_over, ghost_y, line_flash, &line_flash_rows,
+                now as u32,
+            );
+        }
 
         present_to_vga(&v_fb);
         x86_64::instructions::hlt();
