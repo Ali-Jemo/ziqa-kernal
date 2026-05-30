@@ -149,10 +149,11 @@ Following a comprehensive forensic audit, the project status has been updated to
 | **Scheduler** | **A-Tier** | **Scalable Decoupled Architecture.** Transitioned from global Mutex to fine-grained per-process locking + RwLock process table. Supports multi-core scheduling without global lock contention. |
 | **Scalability** | **Hardened** | **Eliminated Big Kernel Lock.** Fine-grained locking implemented across IPC (per-channel), VFS (per-file lookup), and Scheduler. Ready for massive multi-core scaling. |
 | **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. **SMEP (CR4.20), SMAP (CR4.21), UMIP (CR4.11)** enabled after CPUID detection with CR4 write-back verification. `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets. |
-| **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. |
-| **Memory** | **Hardened** | 32MiB heap; `copy_from_user` with page-table validation, heap profiler, frame allocator. |
+| **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. Userspace process launch (`spawn_elf`, `exec_process`), `sys_brk` with page allocation, `sys_execve` with VFS binary loading, and int 0x80 rewritten in assembly (replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline). |
+| **Memory** | **Enhanced** | **VMA Tracking System.** Refactored memory management from static regions to a flexible VMA collection. **`sys_mmap` now uses VMA manager** for robust address range allocation. **`sys_brk` implemented** with page-alignment validation for dynamic heap expansion. |
+| **VirtIO** | **Experimental** | Added `virtio-drivers` crate support for comparative driver development alongside custom VirtIO net/block drivers. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
-| **eBPF VM** | **Experimental** | Bytecode verifier (kCFI, bounded loops) + interpreter; tracing, networking, and bounded tail calls (up to 32 deep). Hash map support with linear probing. |
+| **eBPF VM** | **Obsidian-Tier** | Advanced VM with **Array/Hash Maps**, **512B VM Stack**, **SMP-aware helpers**, and **64-bit immediate loads**. Supports stateful tracing and kernel-space data aggregation. |
 | **Shell** | **Modernized** | Zero-alloc prompt, real parser (quotes/escapes/env expansion), 40+ builtins via command registry, job control (`bg`/`fg`/`jobs`), tab completion, arrow history, ANSI colors. |
 | **Graphics** | **Demos** | DOOM fire + Tetris on bare metal; DRM/KMS driver for future compositor support. |
 
@@ -220,6 +221,9 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 *   **State Machine**: `Created → Ready → Running → Blocked → Exited`.
 *   **Capabilities**: Each process has a defined `CapabilitySpace` for resource access.
 *   **Signals**: SignalState with default dispositions and custom action handlers.
+*   **User Process Launch**: `spawn_elf()` loads a static ELF binary into a new per-process page table, resets CPU state and kernel stack, and context-switches to Ring 3.
+*   **`exec_process()`**: Full address-space replacement — clears old mappings, creates a fresh page table, loads a new ELF, resets kernel stack and register state.
+*   **Exit Handling**: After `sys_exit` dispatch, the handler drops the process lock and calls `SCHEDULER.schedule()`, preventing any return trampoline from resuming a dead process.
 
 <div align="center">
   <img src="assets/ipc.svg" alt="IPC Mechanisms" width="300"/>
@@ -249,6 +253,7 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 *   **IDT Setup**: Interrupt descriptor table configuration with PIC remapping.
 *   **Exception Handling**: Page fault, double fault, breakpoint, and general protection fault handlers.
 *   **IOAPIC**: Advanced interrupt controller support for IRQ routing.
+*   **int 0x80 Assembly Trampoline**: Replaced the `extern "x86-interrupt"` handler with a `global_asm` `int80_entry` that pushes GPRs in CpuState order, calls `rust_syscall_handler`, sanitizes rflags (clears IOPL/TF/DF/NT/RF/VM/AC, enforces IF), clears XMM registers, and returns via `iretq`.
 
 <div align="center">
   <img src="assets/interrupts.svg" alt="Interrupt Layout" width="300"/>
@@ -306,12 +311,15 @@ A minimal Direct Rendering Manager / Kernel Mode Setting driver ([`src/drivers/d
 - `DRM_IOCTL_MODE_GETRESOURCES` — enumerate CRTCs, connectors, encoders
 - Pixel formats: XRGB8888, ARGB8888, RGB565
 
-### 13. eBPF Verifier + VM
+### 13. eBPF "Obsidian-Tier" VM
 Extended Berkeley Packet Filter subsystem ([`src/ebpf/`](src/ebpf/)) for running safe, verified kernel-space programs:
-- **Verifier** — kCFI (Control-Flow Integrity) checks, bounded loop detection, stack depth validation
-- **VM** — interpreter for verified eBPF bytecode with ALU ops, jumps, memory access, function calls, and tail calls (max depth 32)
-- **Maps** — Array, Hash (linear probing), RingBuf, and ProgArray map types
-- **Use cases**: tracing, networking filters, security auditing
+- **Verifier** — kCFI (Control-Flow Integrity), bounded loop detection, and **stack-relative bounds checking** (ensuring safe R10 access).
+- **VM Infrastructure** — interpreter for verified eBPF bytecode with:
+    - **512B Local Stack** for local variables and structure passing.
+    - **Array & Hash Maps** for stateful tracing and cross-CPU data aggregation.
+    - **64-bit Immediates** (`LD_IMM_64`) for pointer manipulation.
+    - **Advanced Helpers**: `bpf_map_lookup/update`, `bpf_get_current_pid_tgid`, `bpf_get_smp_processor_id`, and `bpf_probe_read`.
+- **Use cases**: SMP-aware tracing, networking filters, and real-time security auditing.
 
 ### 14. Performance Suite
 Built-in benchmarking utilities ([`src/perf.rs`](src/perf.rs)) using x86_64 RDTSC:
@@ -412,6 +420,11 @@ make zig-check   # Verify Zig blitter compiles independently
 4.  **Input System Maturity**: ✅ **COMPLETED** — Interrupt-driven console input with buffer support and extended navigation (Delete key) added.
 5.  **Wayland Compositor Support**: ✅ **COMPLETED** — Native Wayland-Compatible Compositor (NWCC) implemented with SHM-backed buffer sharing and high-performance **VGA-Downsampled architecture**.
 6.  **Unified Zero-Copy Pipeline**: ✅ **COMPLETED (May 2026)** — Unified `io_uring` + `SHM` + `VirtIO` into a single high-performance Fast Path. Enabled direct DMA from hardware to shared memory regions.
+7.  **Per-Process Page Tables + ELF Pre-Mapping**: ✅ **COMPLETED** — `map_process_regions()` allocates physical frames and copies ELF binary data into per-process page tables at load time.
+8.  **`sys_brk` with Page Allocation**: ✅ **COMPLETED** — `handle_brk()` maps user-accessible RW pages when the program break expands, replacing the no-op stub.
+9.  **`sys_execve` + `exec_process`**: ✅ **COMPLETED** — Full address-space replacement via `exec_process()`; `sys_execve` reads a binary from VFS and dispatches to the ELF loader.
+10. **int 0x80 Assembly Rewrite**: ✅ **COMPLETED** — Replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline compatible with per-process kernel stacks and context switches.
+11. **Exit Handling in Syscall Dispatch**: ✅ **COMPLETED** — After `sys_exit`, the handler drops the process lock and calls `SCHEDULER.schedule()`, preventing return to a dead process.
 
 ### Long Term (P2)
 1. **SMEP/SMAP Enforcement**: ✅ **COMPLETED (May 2026)** — SMEP (CR4.20), SMAP (CR4.21), and UMIP (CR4.11) enabled after CPUID detection; `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets; CR4 write-back verification; `rt_sigaction` hardened.
@@ -499,4 +512,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: May 30, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | A-Tier Scalability: ✅ complete | Rust + Zig hybrid | 111+ syscalls | 40+ shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete | P2 roadmap: ✅ complete</sup>
+<sup>Last updated: May 30, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | A-Tier Scalability: ✅ complete | Rust + Zig hybrid | 111+ syscalls | 40+ shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete | eBPF Obsidian-Tier: ✅ complete | P1/P2 roadmap: ✅ complete | int 0x80 assembly rewrite: ✅ complete | Per-process page tables + ELF pre-mapping: ✅ complete | sys_execve + exec_process: ✅ complete</sup>
