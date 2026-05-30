@@ -105,3 +105,40 @@
         let mut vm = BpfVm::new();
         vm.execute(&prog) == Ok(0xDEADBEEF)
     });
+
+    test!("ebpf: hash maps", {
+        use crate::ebpf::vm::BpfVm;
+        use crate::ebpf::{BpfInstruction, op, helpers};
+        use crate::ebpf::map::{BPF_MAPS, BpfMap, BpfMapType};
+        
+        // 1. Create a Hash Map
+        let map = BpfMap::new(BpfMapType::Hash, 8, 8, 5); // 8-byte key, 8-byte value
+        let map_id = BPF_MAPS.register(map);
+        
+        let mut key: u64 = 0xAAAA_BBBB;
+        let mut value: u64 = 0x1111_2222;
+        let key_ptr = &key as *const _ as u64;
+        let val_ptr = &value as *const _ as u64;
+
+        // 2. Program to update hash map
+        let prog = [
+            BpfInstruction { code: op::MOV, regs: 0x01, off: 0, imm: map_id as i32 },
+            BpfInstruction { code: op::LD_IMM_64, regs: 0x02, off: 0, imm: (key_ptr & 0xFFFFFFFF) as i32 },
+            BpfInstruction { code: 0, regs: 0, off: 0, imm: (key_ptr >> 32) as i32 },
+            BpfInstruction { code: op::LD_IMM_64, regs: 0x03, off: 0, imm: (val_ptr & 0xFFFFFFFF) as i32 },
+            BpfInstruction { code: 0, regs: 0, off: 0, imm: (val_ptr >> 32) as i32 },
+            BpfInstruction { code: op::CALL, regs: 0x00, off: 0, imm: helpers::MAP_UPDATE_ELEM },
+            BpfInstruction { code: op::RET, regs: 0x00, off: 0, imm: 0 },
+        ];
+        
+        let mut vm = BpfVm::new();
+        if vm.execute(&prog) != Ok(0) { return false; }
+        
+        // 3. Verify lookup
+        if let Some(m) = BPF_MAPS.get(map_id) {
+            if let Ok(ptr) = m.lookup(key_ptr) {
+                return unsafe { *(ptr as *const u64) } == 0x1111_2222;
+            }
+        }
+        false
+    });

@@ -171,6 +171,15 @@ fn run_startup() {
     ziqa_kernel::drivers::uart::VGA_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
     section("Startup");
     set_fg(Color::LightGreen);
+
+    // Spawn the built-in test ELF as a user process
+    let binary = include_bytes!("../assets/test_elf.bin");
+    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(binary) {
+        println!(" ✓ Spawned user process pid={} ............ from test_elf.bin", pid.0);
+    } else {
+        println!(" ! Failed to spawn user process");
+    }
+
     println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");
     set_fg(Color::White);
 }

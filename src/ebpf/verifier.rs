@@ -65,15 +65,10 @@ impl<'a> BpfVerifier<'a> {
 
             // Check jump targets
             let is_jmp = (insn.code & 0x07) == 0x05;
-            if is_jmp && insn.code != op::RET {
+            if is_jmp && insn.code != op::RET && insn.code != op::CALL {
                 let target = i as i32 + insn.off as i32 + 1;
                 if target < 0 || target >= self.program.len() as i32 {
                     return Err(BpfError::VerificationFailed("Jump out of bounds"));
-                }
-                if insn.off <= 0 {
-                    return Err(BpfError::VerificationFailed(
-                        "Backward jumps forbidden for now",
-                    ));
                 }
             }
 

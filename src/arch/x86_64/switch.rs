@@ -110,6 +110,101 @@ global_asm!(
 
         iretq
 
+    .global int80_entry
+    int80_entry:
+        # CPU already switched to kernel stack via TSS.RSP0 and pushed
+        # SS, RSP (user), RFLAGS, CS, RIP onto it.
+        #
+        # At this point RSP points to the interrupt frame:
+        #   [RSP+0]  = RIP
+        #   [RSP+8]  = CS
+        #   [RSP+16] = RFLAGS
+        #   [RSP+24] = RSP (user)
+        #   [RSP+32] = SS
+        #
+        # We need to push GPRs in CpuState order (below the interrupt frame),
+        # so that RSP points to r15 at the top of a full CpuState.
+
+        # Make room for CpuState registers between current RSP and the int frame.
+        # Push GPRs below the existing interrupt frame.
+        push r15
+        push r14
+        push r13
+        push r12
+        push r11
+        push r10
+        push r9
+        push r8
+        push rdi
+        push rsi
+        push rbp
+        push rbx
+        push rdx
+        push rcx
+        push rax
+
+        # Now RSP points to saved_rax — which is the CpuState.rax field.
+        # The interrupt frame is 40 bytes higher up:
+        #   rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 [gap] rip cs rflags rsp ss
+        # This matches CpuState layout:
+        #   struct CpuState {
+        #       r15..rax (15 regs = 120 bytes),
+        #       rip, cs, rflags, rsp, ss (5 regs = 40 bytes)
+        #   }
+        # But wait — we pushed in reverse order (rax last), which matches CpuState
+        # where rax is at the highest offset within the GPR block:
+        #   r15 (lowest addr), r14, ..., rax (highest addr)
+        # Then the interrupt frame continues: rip, cs, rflags, rsp, ss.
+
+        # Call Rust handler (RDI = &mut CpuState)
+        mov rdi, rsp
+        call rust_syscall_handler
+
+        # Restore registers (reverse push order: rax first, r15 last)
+        pop rax
+        pop rcx
+        pop rdx
+        pop rbx
+        pop rbp
+        pop rsi
+        pop rdi
+        pop r8
+        pop r9
+        pop r10
+        pop r11
+        pop r12
+        pop r13
+        pop r14
+        pop r15
+
+        # Now RSP points to the original interrupt frame: rip, cs, rflags, rsp, ss
+        # Sanitize rflags at [RSP+16]
+        mov ecx, [rsp + 16]
+        and ecx, 0xFFF88AFF
+        or  ecx, 0x200
+        mov [rsp + 16], rcx
+
+        # Clear XMM registers
+        pxor xmm0, xmm0
+        pxor xmm1, xmm1
+        pxor xmm2, xmm2
+        pxor xmm3, xmm3
+        pxor xmm4, xmm4
+        pxor xmm5, xmm5
+        pxor xmm6, xmm6
+        pxor xmm7, xmm7
+        pxor xmm8, xmm8
+        pxor xmm9, xmm9
+        pxor xmm10, xmm10
+        pxor xmm11, xmm11
+        pxor xmm12, xmm12
+        pxor xmm13, xmm13
+        pxor xmm14, xmm14
+        pxor xmm15, xmm15
+
+        # Return via iretq (pops rip, cs, rflags, rsp, ss)
+        iretq
+
     .global syscall_entry
     syscall_entry:
         # 1. Save user RSP, load kernel stack (KERNEL_STACK is preserved)
@@ -308,5 +403,19 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         proc.cpu_state.rflags &= 0xFFF88AFF;
         proc.cpu_state.rflags |= 0x200;
         *frame = proc.cpu_state;
+
+        // If process exited, schedule another process instead of returning
+        // to the assembly trampoline (which would try to return to user mode).
+        // We drop the process lock first, then schedule.
+        let pid = proc.pid;
+        let is_exited = matches!(proc.state, crate::process::ProcessState::Exited(_));
+        drop(proc);
+        drop(proc_arc);
+
+        if is_exited {
+            crate::process::scheduler::SCHEDULER.schedule();
+            // If schedule returns, we have no more work to do — loop halt
+            loop { x86_64::instructions::hlt(); }
+        }
     }
 }

@@ -122,6 +122,7 @@ pub mod nr {
     pub const GETPPID: u64 = 110;
     pub const SCHED_YIELD: u64 = 24;
     pub const FORK: u64 = 57;
+    pub const EXECVE: u64 = 59;
     pub const WAITPID: u64 = 61; // wait4 in Linux; simplified as waitpid
     pub const MMAP: u64 = 9;
     pub const MUNMAP: u64 = 11;
@@ -328,6 +329,48 @@ pub fn dispatch_syscall(
                 Some((pid, _code)) => return Ok(pid),
                 None => return Ok(0), // no zombie child yet
             }
+        }
+
+        nr::EXECVE => {
+            // args: [pathname, argv (ignored), envp (ignored)]
+            // For now, we check capabilities and return -ENOENT if path is invalid
+            if !check_capability(ctx.process, ResourceKind::ProcessCreate, false, false) {
+                return Err(crate::abi::AbiError::Other("EPERM: no process creation capability"));
+            }
+
+            let path_addr = ctx.args[0] as *const u8;
+            if path_addr.is_null() {
+                return Ok(-(errno::EFAULT as i64) as u64);
+            }
+
+            // Read path from userspace
+            let mut tmp = [0u8; 128];
+            let n = (0..127)
+                .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+                .count();
+            unsafe {
+                core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+            }
+            let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+
+            klog_syscall("execve", ctx.args[0]);
+
+            // Read binary from VFS
+            let mut buf = alloc::vec![0u8; 65536];
+            let read_len = match crate::fs::vfs::VFS.read().read_raw(path_str, &mut buf, 0) {
+                Ok(n) => n,
+                Err(_) => return Ok(-(errno::ENOENT as i64) as u64),
+            };
+            if read_len == 0 {
+                return Ok(-(errno::ENOENT as i64) as u64);
+            }
+            buf.truncate(read_len);
+
+            let pid = ctx.process.pid;
+            return match crate::process::scheduler::exec_process(pid, &buf, &[], &[]) {
+                Ok(()) => Ok(0),
+                Err(_) => Ok(-(errno::ENOENT as i64) as u64),
+            };
         }
 
         nr::MMAP => {

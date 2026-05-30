@@ -5,8 +5,9 @@ use spin::Mutex;
 use x86_64::{
     registers::control::{Cr3, Cr3Flags},
     structures::paging::{
-        mapper::Translate, page_table::PageTableEntry, FrameAllocator, OffsetPageTable, PageTable,
-        PageTableFlags, PhysFrame,
+        mapper::{Translate, Mapper},
+        page_table::PageTableEntry,
+        FrameAllocator, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
     },
     PhysAddr, VirtAddr,
 };
@@ -523,6 +524,139 @@ pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
         new_frame
     );
     true
+}
+
+/// Map all VMA regions of a process into its page table.
+/// Copies data from `binary` for file-backed regions (identified by the
+/// file_offset field and the process's stored `binary_data`).
+pub fn map_process_regions(process: &mut crate::process::Process) -> Result<(), &'static str> {
+    let root_frame = match process.page_table_frame {
+        Some(f) => f,
+        None => return Err("no per-process page table"),
+    };
+
+    // Build a mapper from the process's root page table
+    let po = phys_offset();
+    let l4_virt = po + root_frame.start_address().as_u64();
+    let l4 = unsafe { &mut *(l4_virt.as_mut_ptr()) };
+    let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
+
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+
+    let binary_data = &process.binary_data;
+
+    for vma in &process.vmas {
+        let start_addr = vma.start.as_u64();
+        let end_addr = vma.end.as_u64();
+        let page_flags = region_flags_to_page_flags(&vma.flags);
+
+        for addr in (start_addr..end_addr).step_by(4096) {
+            let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(addr));
+            let frame = fa.allocate_frame().ok_or("OOM mapping process region")?;
+
+            unsafe {
+                mapper
+                    .map_to(page, frame, page_flags, fa)
+                    .map_err(|_| "map_to failed in map_process_regions")?
+                    .flush();
+            }
+
+            // Copy data from binary if this VMA has file_offset == vaddr
+            let vma_start = vma.start.as_u64();
+            let page_in_region_offset = addr - vma_start;
+            let binary_offset = vma.file_offset as usize + page_in_region_offset as usize;
+            let copy_size = 4096usize.min(binary_data.len().saturating_sub(binary_offset));
+
+            if copy_size > 0 {
+                let dst = (po + frame.start_address().as_u64()).as_mut_ptr();
+                unsafe {
+                    core::ptr::copy_nonoverlapping(binary_data.as_ptr().add(binary_offset), dst, copy_size);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert MemoryRegionFlags to PageTableFlags
+fn region_flags_to_page_flags(rf: &crate::memory::paging::MemoryRegionFlags) -> PageTableFlags {
+    let mut pf = PageTableFlags::PRESENT;
+    if rf.writable {
+        pf |= PageTableFlags::WRITABLE;
+    }
+    if rf.user_accessible {
+        pf |= PageTableFlags::USER_ACCESSIBLE;
+    }
+    if !rf.executable {
+        pf |= PageTableFlags::NO_EXECUTE;
+    }
+    pf
+}
+
+/// Map pages for a brk expansion from `old_brk` to `new_brk`.
+/// `page_table_frame` is an optional per-process page table.
+pub fn handle_brk(
+    page_table_frame: Option<PhysFrame>,
+    old_brk: u64,
+    new_brk: u64,
+) -> Result<(), &'static str> {
+    let start_page = (old_brk + 0xFFF) & !0xFFF;
+    let end_page = new_brk & !0xFFF;
+    if start_page >= end_page {
+        return Ok(());
+    }
+
+    let po = phys_offset();
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+
+    // Determine which mapper to use
+    if let Some(root_frame) = page_table_frame {
+        let l4_virt = po + root_frame.start_address().as_u64();
+        let l4 = unsafe { &mut *(l4_virt.as_mut_ptr()) };
+        let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
+
+        for addr in (start_page..end_page).step_by(4096) {
+            let page = Page::containing_address(VirtAddr::new(addr));
+            if mapper.translate_addr(page.start_address()).is_some() {
+                continue;
+            }
+            let frame = fa.allocate_frame().ok_or("OOM in brk")?;
+            let flags = PageTableFlags::PRESENT
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::NO_EXECUTE;
+            unsafe {
+                mapper
+                    .map_to(page, frame, flags, fa)
+                    .map_err(|_| "map_to failed in brk")?
+                    .flush();
+            }
+        }
+    } else {
+        let mut mapper = unsafe { current_mapper() };
+        for addr in (start_page..end_page).step_by(4096) {
+            let page = Page::containing_address(VirtAddr::new(addr));
+            if mapper.translate_addr(page.start_address()).is_some() {
+                continue;
+            }
+            let frame = fa.allocate_frame().ok_or("OOM in brk")?;
+            let flags = PageTableFlags::PRESENT
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::NO_EXECUTE;
+            unsafe {
+                mapper
+                    .map_to(page, frame, flags, fa)
+                    .map_err(|_| "map_to failed in brk")?
+                    .flush();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Create a new page table for a process by copying kernel space L4 entries.

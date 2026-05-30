@@ -12,6 +12,8 @@ use crate::ebpf::BpfError;
 pub enum BpfMapType {
     Array = 1,
     Hash = 2,
+    RingBuf = 3,
+    ProgArray = 4,
 }
 
 pub struct BpfMap {
@@ -24,7 +26,15 @@ pub struct BpfMap {
 
 impl BpfMap {
     pub fn new(map_type: BpfMapType, key_size: u32, value_size: u32, max_entries: u32) -> Self {
-        let total_size = (value_size * max_entries) as usize;
+        let total_size = match map_type {
+            BpfMapType::Array | BpfMapType::ProgArray => (value_size * max_entries) as usize,
+            BpfMapType::Hash => {
+                // entry: 1 byte used flag + key + value
+                let entry_size = 1 + key_size + value_size;
+                (entry_size * max_entries) as usize
+            }
+            BpfMapType::RingBuf => max_entries as usize,
+        };
         Self {
             map_type,
             key_size,
@@ -35,8 +45,7 @@ impl BpfMap {
     }
 
     pub fn lookup(&self, key_ptr: u64) -> Result<u64, BpfError> {
-        // For Array maps, key is a 4-byte index
-        if self.map_type == BpfMapType::Array {
+        if self.map_type == BpfMapType::Array || self.map_type == BpfMapType::ProgArray {
             let index = unsafe { *(key_ptr as *const u32) };
             if index >= self.max_entries {
                 return Ok(0); // NULL
@@ -45,13 +54,29 @@ impl BpfMap {
             let mut data = self.data.lock();
             let ptr = data.as_mut_ptr().wrapping_add(offset);
             return Ok(ptr as u64);
+        } else if self.map_type == BpfMapType::Hash {
+            let entry_size = (1 + self.key_size + self.value_size) as usize;
+            let mut data = self.data.lock();
+            let key_slice = unsafe { core::slice::from_raw_parts(key_ptr as *const u8, self.key_size as usize) };
+            
+            for i in 0..self.max_entries {
+                let offset = (i as usize) * entry_size;
+                if data[offset] == 1 {
+                    let k = &data[offset + 1 .. offset + 1 + self.key_size as usize];
+                    if k == key_slice {
+                        let ptr = data.as_mut_ptr().wrapping_add(offset + 1 + self.key_size as usize);
+                        return Ok(ptr as u64);
+                    }
+                }
+            }
+            return Ok(0); // NULL
         }
         
         Err(BpfError::ExecutionError) // Unsupported map type
     }
 
     pub fn update(&self, key_ptr: u64, value_ptr: u64) -> Result<u64, BpfError> {
-        if self.map_type == BpfMapType::Array {
+        if self.map_type == BpfMapType::Array || self.map_type == BpfMapType::ProgArray {
             let index = unsafe { *(key_ptr as *const u32) };
             if index >= self.max_entries {
                 return Ok(1); // Error
@@ -66,12 +91,40 @@ impl BpfMap {
                 );
             }
             return Ok(0);
+        } else if self.map_type == BpfMapType::Hash {
+            let entry_size = (1 + self.key_size + self.value_size) as usize;
+            let mut data = self.data.lock();
+            let key_slice = unsafe { core::slice::from_raw_parts(key_ptr as *const u8, self.key_size as usize) };
+            let value_slice = unsafe { core::slice::from_raw_parts(value_ptr as *const u8, self.value_size as usize) };
+            
+            // First try to update existing
+            for i in 0..self.max_entries {
+                let offset = (i as usize) * entry_size;
+                if data[offset] == 1 {
+                    let k = &data[offset + 1 .. offset + 1 + self.key_size as usize];
+                    if k == key_slice {
+                        data[offset + 1 + self.key_size as usize .. offset + entry_size].copy_from_slice(value_slice);
+                        return Ok(0);
+                    }
+                }
+            }
+            // If not found, find empty slot
+            for i in 0..self.max_entries {
+                let offset = (i as usize) * entry_size;
+                if data[offset] == 0 {
+                    data[offset] = 1;
+                    data[offset + 1 .. offset + 1 + self.key_size as usize].copy_from_slice(key_slice);
+                    data[offset + 1 + self.key_size as usize .. offset + entry_size].copy_from_slice(value_slice);
+                    return Ok(0);
+                }
+            }
+            return Ok(1); // Map full
         }
         Err(BpfError::ExecutionError)
     }
 
     pub fn delete(&self, key_ptr: u64) -> Result<u64, BpfError> {
-        if self.map_type == BpfMapType::Array {
+        if self.map_type == BpfMapType::Array || self.map_type == BpfMapType::ProgArray {
             let index = unsafe { *(key_ptr as *const u32) };
             if index >= self.max_entries {
                 return Ok(1); // Error
@@ -86,6 +139,22 @@ impl BpfMap {
                 );
             }
             return Ok(0);
+        } else if self.map_type == BpfMapType::Hash {
+            let entry_size = (1 + self.key_size + self.value_size) as usize;
+            let mut data = self.data.lock();
+            let key_slice = unsafe { core::slice::from_raw_parts(key_ptr as *const u8, self.key_size as usize) };
+            
+            for i in 0..self.max_entries {
+                let offset = (i as usize) * entry_size;
+                if data[offset] == 1 {
+                    let k = &data[offset + 1 .. offset + 1 + self.key_size as usize];
+                    if k == key_slice {
+                        data[offset] = 0; // Mark as empty
+                        return Ok(0);
+                    }
+                }
+            }
+            return Ok(1); // Not found
         }
         Err(BpfError::ExecutionError)
     }

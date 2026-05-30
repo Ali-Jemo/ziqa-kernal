@@ -321,7 +321,7 @@ impl Process {
             parent: 0,
             exit_code: 0,
             fds: FdTable::new(),
-            brk: 0,
+            brk: 0x2000_0000,
             cwd: {
                 let mut b = [0u8; 128];
                 b[0] = b'/';

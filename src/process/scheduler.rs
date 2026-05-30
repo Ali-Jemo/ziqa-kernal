@@ -401,6 +401,65 @@ pub fn init() { SCHEDULER.init_boot_process(); }
 pub fn list_pids() -> Vec<Pid> { SCHEDULER.list_pids() }
 pub fn yield_now() { unsafe { core::arch::asm!("int 0x20"); } }
 
+/// Replace a process with a new ELF binary (execve).
+/// This clears old mappings, loads the new binary, and resets CPU state.
+pub fn exec_process(
+    pid: Pid,
+    binary: &[u8],
+    _args: &[&[u8]],
+    _env: &[&[u8]],
+) -> Result<(), &'static str> {
+    let registry = crate::init_abi_registry();
+    let plugin = registry.detect(binary).ok_or("exec: unrecognized binary format")?;
+
+    let proc_arc = SCHEDULER.get_process(pid).ok_or("exec: process not found")?;
+    let mut proc = proc_arc.lock();
+
+    // Save old page table frame if using per-process tables
+    let old_frame = proc.page_table_frame;
+
+    // Create a fresh page table for the new address space
+    if let Some(frame) = crate::memory::paging::create_process_page_table() {
+        proc.page_table_frame = Some(frame);
+    } else {
+        proc.page_table_frame = None;
+    }
+
+    // Clear old VMAs
+    proc.vmas.clear();
+
+    // Reset binary data for demand paging
+    proc.binary_data = binary.to_vec();
+    proc.cpu_state = crate::process::CpuState::zero();
+
+    // Set up initial process state
+    proc.stack_top = VirtAddr::new(0x7FFF_FFFF_000);
+    proc.brk = 0x2000_0000;
+    proc.mmap_bump = 0x7000_0000;
+
+    // Load the new ELF
+    plugin.load(binary, &mut proc).map_err(|_| "exec: ELF load failed")?;
+
+    // Reinit process stack
+    init_process_stack(&mut proc);
+
+    // Set the entry point in CPU state
+    proc.cpu_state.rip = proc.entry_point.as_u64();
+    proc.cpu_state.rsp = proc.stack_top.as_u64();
+    proc.cpu_state.cs = crate::arch::x86_64::gdt::user_code_selector().0 as u64;
+    proc.cpu_state.ss = crate::arch::x86_64::gdt::user_data_selector().0 as u64;
+    proc.cpu_state.rflags = 0x202;
+
+    // Set argv/envp on the stack (simplified: just push null)
+    // A proper implementation would push argv/envp arrays onto the user stack
+    proc.state = ProcessState::Ready;
+
+    // Free old page table frames (best-effort)
+    let _ = old_frame;
+
+    Ok(())
+}
+
 fn init_kthread_stack(proc: &mut Process) {
     if let Some(ref mut _kstack) = proc.kernel_stack {
         let kstack_top = proc.kernel_stack_top;

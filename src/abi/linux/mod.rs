@@ -70,6 +70,7 @@ mod nr {
     pub const SYS_SETSOCKOPT: u64 = 54;
     pub const SYS_GETSOCKOPT: u64 = 55;
     pub const SYS_CLONE: u64 = 56;
+    pub const SYS_EXECVE: u64 = 59;
     pub const SYS_KILL: u64 = 62;
     pub const SYS_UNAME: u64 = 63;
     pub const SYS_FCNTL: u64 = 72;
@@ -382,13 +383,29 @@ fn sys_exit(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_brk(new_brk) → current_brk
 fn sys_brk(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let new_brk = ctx.args[0];
-    if new_brk == 0 || new_brk < ctx.process.brk {
-        // Query or invalid shrink — return current break
-        Ok(ctx.process.brk)
-    } else {
-        ctx.process.brk = new_brk;
-        Ok(new_brk)
+    let old_brk = ctx.process.brk;
+    
+    // Query current brk (new_brk == 0 or less than heap start)
+    if new_brk == 0 || new_brk < 0x2000_0000 {
+        return Ok(old_brk);
     }
+    
+    let aligned_new_brk = (new_brk + 0xFFF) & !0xFFF;
+    
+    // Map pages for expanded heap
+    if aligned_new_brk > old_brk {
+        if let Err(e) = crate::memory::paging::handle_brk(
+            ctx.process.page_table_frame,
+            old_brk,
+            aligned_new_brk,
+        ) {
+            crate::println!("[BRK] failed to map pages: {}", e);
+            return Ok(old_brk); // Return old brk on failure
+        }
+    }
+    
+    ctx.process.brk = aligned_new_brk;
+    Ok(aligned_new_brk)
 }
 
 /// sys_getpid() → pid
@@ -1745,4 +1762,43 @@ fn sys_pidfd_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_memfd_create(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.process.fds.alloc_file(b"memfd:", 0).unwrap_or(3);
     Ok(fd as u64)
+}
+
+/// sys_execve(pathname, argv, envp) → -errno
+/// Replaces the current process with a new executable.
+fn sys_execve(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx.process.capabilities.has_permission(ResourceKind::ProcessCreate, false, false) {
+        return Ok(-(1_i64) as u64); // -EPERM
+    }
+
+    let path_addr = ctx.args[0] as *const u8;
+    if path_addr.is_null() {
+        return Ok(-(14_i64) as u64); // -EFAULT
+    }
+
+    let mut tmp = [0u8; 128];
+    let n = (0..127)
+        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    }
+    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+
+    // Read binary from VFS
+    let mut buf = alloc::vec![0u8; 65536];
+    let read_len = match crate::fs::vfs::VFS.read().read_raw(path_str, &mut buf, 0) {
+        Ok(n) => n,
+        Err(_) => return Ok(-(2_i64) as u64), // -ENOENT
+    };
+    if read_len == 0 {
+        return Ok(-(2_i64) as u64); // -ENOENT
+    }
+    buf.truncate(read_len);
+
+    let pid = ctx.process.pid;
+    match crate::process::scheduler::exec_process(pid, &buf, &[], &[]) {
+        Ok(()) => Ok(0),
+        Err(_) => Ok(-(2_i64) as u64), // -ENOENT
+    }
 }

@@ -24,8 +24,15 @@ impl BpfVm {
     /// Execute a verified program
     pub fn execute(&mut self, program: &[BpfInstruction]) -> BpfResult {
         let mut pc = 0;
+        let mut inst_count = 0;
+        const MAX_INSTRUCTIONS: usize = 1_000_000;
 
         while pc < program.len() {
+            inst_count += 1;
+            if inst_count > MAX_INSTRUCTIONS {
+                return Err(BpfError::ExecutionError); // Limit reached
+            }
+
             let insn = program[pc];
             let dst = insn.dst_reg() as usize;
 
@@ -261,13 +268,32 @@ impl BpfVm {
             helpers::KTIME_GET_NS => {
                 Ok(crate::timer::uptime_ms() * 1_000_000)
             }
-            helpers::GET_CURRENT_PID => {
+            helpers::GET_CURRENT_PID_TGID => {
                 use crate::arch::x86_64::per_cpu;
                 Ok(per_cpu::current_cpu().current_pid().map_or(0, |p| p.0))
+            }
+            helpers::GET_SMP_PROCESSOR_ID => {
+                use crate::arch::x86_64::per_cpu;
+                Ok(per_cpu::current_cpu().cpu_id as u64)
             }
             helpers::GET_CURRENT_COMM => {
                 use crate::arch::x86_64::per_cpu;
                 Ok(per_cpu::current_cpu().current_pid().map_or(0, |p| p.0)) // FIXME: implement comm
+            }
+            helpers::PROBE_READ => {
+                let dst_ptr = self.registers[1] as *mut u8;
+                let size = self.registers[2] as usize;
+                let src_ptr = self.registers[3] as *const u8;
+                
+                // Safety: Ensure we don't overflow the destination buffer (usually on stack)
+                // In a real eBPF verifier, we'd know the size of the destination buffer.
+                // For now, we'll cap it to 512 (max stack size).
+                let safe_size = size.min(512);
+                
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, safe_size);
+                }
+                Ok(0)
             }
             helpers::TRACE_PRINTK => {
                 let fmt_ptr = self.registers[1] as *const u8;

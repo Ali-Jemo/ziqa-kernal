@@ -5,6 +5,7 @@ use super::{nr, SyscallContext, AbiError};
 pub(super) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     Some(match ctx.number {
         nr::SYS_EXIT | nr::SYS_EXIT_GROUP => super::sys_exit(ctx),
+        nr::SYS_EXECVE => super::sys_execve(ctx),
         nr::SYS_GETPID => super::sys_getpid(ctx),
         nr::SYS_KILL => super::sys_kill(ctx),
         nr::SYS_WAITPID => super::sys_waitpid(ctx),

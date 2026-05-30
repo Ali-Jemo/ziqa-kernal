@@ -85,8 +85,11 @@ pub mod helpers {
     pub const MAP_DELETE_ELEM: i32 = 3;
     pub const KTIME_GET_NS: i32 = 4;
     pub const TRACE_PRINTK: i32 = 5;
-    pub const GET_CURRENT_PID: i32 = 6;
+    pub const GET_CURRENT_PID_TGID: i32 = 6;
     pub const GET_CURRENT_COMM: i32 = 7;
+    pub const PROBE_READ: i32 = 8;
+    pub const TAIL_CALL: i32 = 9;
+    pub const GET_SMP_PROCESSOR_ID: i32 = 10;
 }
 
 /// The result of eBPF program execution
@@ -100,4 +103,6 @@ pub enum BpfError {
     ExecutionError,
     /// Out of bounds memory access
     OutOfBounds,
+    /// Tail call request (internal use)
+    TailCall(u64),
 }

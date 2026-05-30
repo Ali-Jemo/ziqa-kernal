@@ -45,6 +45,8 @@ fn sys_bpf_map_create(attr_ptr: *const u8, _size: usize) -> Result<u64, AbiError
     let map_type = match attr[0] {
         1 => BpfMapType::Array,
         2 => BpfMapType::Hash,
+        3 => BpfMapType::RingBuf,
+        4 => BpfMapType::ProgArray,
         _ => return Ok(-(crate::abi::syscall::errno::EINVAL as i64) as u64),
     };
     
