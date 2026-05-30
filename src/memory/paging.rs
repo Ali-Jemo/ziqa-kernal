@@ -455,10 +455,19 @@ pub fn cow_fork_parent() -> Option<PhysFrame> {
     let child_l4 = clone_user_table_tree(parent_l4_frame, 4, fa)?;
     drop(fa_guard);
 
-    // Flush entire TLB since we modified the active page table
-    x86_64::instructions::tlb::flush_all();
+    smp_tlb_flush_all();
 
     Some(child_l4)
+}
+
+pub fn smp_tlb_flush_all() {
+    x86_64::instructions::tlb::flush_all();
+    crate::arch::x86_64::smp::tlb_shootdown_all(0);
+}
+
+pub fn smp_tlb_flush(vaddr: VirtAddr) {
+    x86_64::instructions::tlb::flush(vaddr);
+    crate::arch::x86_64::smp::tlb_shootdown_all(vaddr.as_u64());
 }
 
 /// Handle a copy-on-write page fault at `fault_addr`.

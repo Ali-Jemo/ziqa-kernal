@@ -8,6 +8,7 @@
 ///   - `load_elf`  — the only function that logs; calls parsers then maps segments
 use crate::abi::AbiError;
 use crate::memory::{MemoryRegion, VirtAddr};
+use crate::process::vma::Vma;
 use crate::process::Process;
 
 // ELF64 constants
@@ -150,9 +151,8 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                     is_file_backed: false,
                     file_offset: phdr.p_offset,
                 };
-                if !process.add_region(region) {
-                    return Err(AbiError::Other("Too many memory regions"));
-                }
+                process.add_region(Vma::from(region));
+
                 if end_vaddr > max_vaddr { max_vaddr = end_vaddr; }
                 load_count += 1;
             }

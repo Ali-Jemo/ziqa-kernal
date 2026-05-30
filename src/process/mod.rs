@@ -1,10 +1,12 @@
 /// Process management for ZiqaKernel
 pub mod scheduler;
 pub mod signal;
+pub mod vma;
 
 use crate::arch::x86_64::switch::TrapFrame;
 use crate::capability::CapabilitySpace;
-use crate::memory::{MemoryRegion, VirtAddr};
+use crate::memory::VirtAddr;
+use crate::process::vma::Vma;
 use signal::SignalState;
 use x86_64::structures::paging::PhysFrame;
 
@@ -251,8 +253,6 @@ impl FdTable {
 
 // ── Process ───────────────────────────────────────────────────────────────────
 
-const MAX_REGIONS: usize = 16;
-
 pub struct Process {
     pub pid: Pid,
     pub state: ProcessState,
@@ -260,8 +260,7 @@ pub struct Process {
     pub priority: u8,
     pub capabilities: CapabilitySpace,
     pub cpu_state: CpuState,
-    pub regions: [Option<MemoryRegion>; MAX_REGIONS],
-    pub region_count: usize,
+    pub vmas: alloc::vec::Vec<Vma>,
     pub entry_point: VirtAddr,
     pub stack_top: VirtAddr,
     pub signals: SignalState,
@@ -292,7 +291,6 @@ pub struct Process {
 
 impl Process {
     pub fn new(pid: Pid, abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Self {
-        const NONE_REGION: Option<MemoryRegion> = None;
         let mut cpu = CpuState::zero();
         cpu.rip = entry.as_u64();
         cpu.rsp = stack.as_u64();
@@ -316,8 +314,7 @@ impl Process {
             priority: 2,
             capabilities: CapabilitySpace::new(),
             cpu_state: cpu,
-            regions: [NONE_REGION; MAX_REGIONS],
-            region_count: 0,
+            vmas: alloc::vec::Vec::new(),
             entry_point: entry,
             stack_top: stack,
             signals: SignalState::new(),
@@ -341,18 +338,8 @@ impl Process {
         }
     }
 
-    pub fn add_region(&mut self, region: MemoryRegion) -> bool {
-        if self.region_count >= MAX_REGIONS {
-            return false;
-        }
-        for slot in self.regions.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(region);
-                self.region_count += 1;
-                return true;
-            }
-        }
-        false
+    pub fn add_region(&mut self, vma: Vma) {
+        self.vmas.push(vma);
     }
 
     pub fn make_ready(&mut self) {

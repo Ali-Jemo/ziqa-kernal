@@ -9,9 +9,25 @@ pub mod paging;
 pub use frame_allocator::BootInfoFrameAllocator;
 pub use paging::{AddressSpace, MemoryRegion, MemoryRegionFlags};
 pub use x86_64::VirtAddr;
+use x86_64::structures::paging::FrameAllocator;
 
 use spin::Mutex;
 pub static FRAME_ALLOCATOR: Mutex<Option<BootInfoFrameAllocator>> = Mutex::new(None);
+
+/// Allocate a 4KB page for per-CPU data.
+pub fn allocate_percpu_area() -> u64 {
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+    let frame = fa.allocate_frame().expect("out of memory for per-CPU area");
+    drop(fa_guard);
+    let po = paging::phys_offset();
+    let vaddr = po + frame.start_address().as_u64();
+    unsafe {
+        let ptr: *mut u8 = vaddr.as_mut_ptr();
+        core::ptr::write_bytes(ptr, 0, PAGE_SIZE);
+    }
+    frame.start_address().as_u64()
+}
 
 /// Page size on x86_64
 pub const PAGE_SIZE: usize = 4096;

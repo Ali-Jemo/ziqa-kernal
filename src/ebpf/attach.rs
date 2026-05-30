@@ -96,31 +96,16 @@ impl EbpfAttachments {
             if *tp_ref == tp {
                 // Execute the program
                 let mut vm = BpfVm::new();
-                // Initialize registers from syscall context
-                vm.registers[0] = ctx.number; // R0: syscall number
-                vm.registers[1] = ctx.args[0]; // R1: arg0
-                vm.registers[2] = ctx.args[1]; // R2: arg1
-                vm.registers[3] = ctx.args[2]; // R3: arg2
-                vm.registers[4] = ctx.args[3]; // R4: arg3
-                vm.registers[5] = ctx.args[4]; // R5: arg4
-                vm.registers[6] = ctx.args[5]; // R6: arg5
-                // For exit tracepoint, also set retval in R7
-                if tp == TracepointType::SyscallExit {
-                    vm.registers[7] = ctx.retval;
-                }
-                // Execute the program
-                match vm.execute(&prog.instructions) {
+                
+                // Execute using the unified context initialization
+                match vm.execute_with_syscall_context(&prog.instructions, ctx) {
                     Ok(_retval) => {
                         // Optionally collect retval? For now, just count as success.
                         any = true;
-                        // If we wanted to modify the syscall retval, we could do:
-                        // if tp == TracepointType::SyscallExit {
-                        //     ctx.retval = _retval;
-                        // }
                     }
                     Err(e) => {
-                // Log error but continue
-                crate::klog!(Level::Error, "eBPF program execution failed: {:?}", e);
+                        // Log error but continue
+                        crate::klog!(Level::Error, "eBPF program execution failed: {:?}", e);
                     }
                 }
             }

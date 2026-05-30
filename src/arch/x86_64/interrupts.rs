@@ -14,16 +14,12 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub static PICS: Mutex<ChainedPics> =
     Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
-// ── User-Mode IRQ Redirection ────────────────────────────────────────────────
-
 lazy_static! {
-    /// Tracks which process is waiting for which IRQ vector.
     pub static ref IRQ_WAITERS: Mutex<BTreeMap<u8, crate::process::Pid>> = Mutex::new(BTreeMap::new());
 }
 
 use alloc::collections::BTreeMap;
 
-/// Wake up any process waiting for this IRQ.
 fn notify_irq(vector: u8) {
     let mut waiters = IRQ_WAITERS.lock();
     if let Some(pid) = waiters.remove(&vector) {
@@ -34,14 +30,17 @@ fn notify_irq(vector: u8) {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum InterruptIndex {
-    Timer = PIC_1_OFFSET,        // 32
-    Keyboard = PIC_1_OFFSET + 1, // 33
-    Mouse = PIC_2_OFFSET + 4,    // 44 (IRQ 12)
-    Ata1 = PIC_1_OFFSET + 14,    // 46
-    Ata2 = PIC_1_OFFSET + 15,    // 47
+    Timer = 0x20,                      // 32
+    Keyboard = 0x21,                   // 33
+    IpIReschedule = 0x34,              // 52
+    IpITlbShootdown = 0x35,            // 53
+    Mouse = 0x2C,                      // 44 (IRQ 12)
+    Ata1 = 0x2E,                       // 46 (IRQ 14)
+    Ata2 = 0x2F,                       // 47 (IRQ 15)
+    Spurious = 0x30,                   // 48
+    ApicError = 0x31,                  // 49
 }
 
-/// int 0x80 — Linux-compatible syscall gate
 pub const SYSCALL_VECTOR: u8 = 0x80;
 
 lazy_static! {
@@ -65,6 +64,10 @@ lazy_static! {
         idt[InterruptIndex::Ata1 as usize].set_handler_fn(ata1_handler);
         idt[InterruptIndex::Ata2 as usize].set_handler_fn(ata2_handler);
 
+        // ── IPI handlers ──
+        idt[InterruptIndex::IpIReschedule as usize].set_handler_fn(ipi_reschedule_handler);
+        idt[InterruptIndex::IpITlbShootdown as usize].set_handler_fn(ipi_tlb_shootdown_handler);
+
         // ── int 0x80 syscall gate ──
         idt[SYSCALL_VECTOR as usize].set_handler_fn(syscall_handler);
 
@@ -79,6 +82,16 @@ pub fn init_idt() {
 pub fn init_pics() {
     unsafe { PICS.lock().initialize() };
     x86_64::instructions::interrupts::enable();
+}
+
+fn send_eoi(vector: u8) {
+    unsafe {
+        if crate::arch::x86_64::apic::LAPIC_VADDR != 0 {
+            crate::arch::x86_64::apic::eoi();
+        } else {
+            PICS.lock().notify_end_of_interrupt(vector);
+        }
+    }
 }
 
 // ── Exception handlers ──
@@ -114,16 +127,8 @@ extern "x86-interrupt" fn page_fault_handler(
         let proc = proc_arc.lock();
         println!("[MM] Current process {} found", proc.pid.0);
         // Check if fault address is within any of the process's memory regions
-        let has_region = proc.regions.iter().any(|opt_region| {
-            opt_region
-                .as_ref()
-                .map(|region| {
-                    let start = region.start.as_u64();
-                    let end = start + region.size as u64;
-                    fault_addr.as_u64() >= start && fault_addr.as_u64() < end
-                })
-                .unwrap_or(false)
-        });
+        let has_region = proc.vmas.iter().any(|vma| vma.contains(fault_addr));
+        
         if has_region {
             println!("[MM] Found region for address {:?}", fault_addr);
         } else {
@@ -137,16 +142,8 @@ extern "x86-interrupt" fn page_fault_handler(
             let is_cow = crate::process::scheduler::current_task()
                 .map(|proc_arc| {
                     let proc = proc_arc.lock();
-                    proc.regions.iter().any(|opt| {
-                        opt.as_ref()
-                            .map(|r| {
-                                let start = r.start.as_u64();
-                                let end = start + r.size as u64;
-                                r.flags.copy_on_write
-                                    && fault_addr.as_u64() >= start
-                                    && fault_addr.as_u64() < end
-                            })
-                            .unwrap_or(false)
+                    proc.vmas.iter().any(|vma| {
+                        vma.flags.copy_on_write && vma.contains(fault_addr)
                     })
                 })
                 .unwrap_or(false);
@@ -173,24 +170,18 @@ extern "x86-interrupt" fn page_fault_handler(
         let demand_info = {
             if let Some(proc_arc) = crate::process::scheduler::current_task() {
                 let proc = proc_arc.lock();
-                let region_entry = proc.regions.iter().find(|opt_region| {
-                    opt_region
-                        .as_ref()
-                        .map(|region| {
-                            let start = region.start.as_u64();
-                            let end = start + region.size as u64;
-                            fault_addr.as_u64() >= start && fault_addr.as_u64() < end
-                        })
-                        .unwrap_or(false)
-                });
-                if let Some(Some(region)) = region_entry {
+                let vma_entry = proc.vmas.iter().find(|vma| vma.contains(fault_addr));
+
+                if let Some(vma) = vma_entry {
                     // Clone what we need before dropping the lock
                     let binary_ptr = if !proc.binary_data.is_empty() {
                         Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
                     } else {
                         None
                     };
-                    Some((region.start.as_u64(), region.file_offset, binary_ptr))
+                    // Note: file_offset is not in Vma currently, 
+                    // this might need adjustment if file_offset is essential.
+                    Some((vma.start.as_u64(), 0, binary_ptr))
                 } else {
                     println!("[MM] Invalid access - no region found");
                     None
@@ -198,7 +189,8 @@ extern "x86-interrupt" fn page_fault_handler(
             } else {
                 None
             }
-        }; // scheduler lock dropped here
+        };
+ // scheduler lock dropped here
 
         if let Some((region_start, file_offset, binary_info)) = demand_info {
             let page = x86_64::structures::paging::Page::containing_address(fault_addr);
@@ -272,12 +264,12 @@ extern crate alloc;
 
 extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Timer as u8);
-    crate::process::scheduler::tick();
-    crate::timer::tick();
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Timer as u8)
-    };
+    crate::arch::x86_64::per_cpu::current_cpu().tick();
+    if crate::arch::x86_64::per_cpu::current_cpu().cpu_id == 0 {
+        crate::process::scheduler::tick();
+        crate::timer::tick();
+    }
+    send_eoi(InterruptIndex::Timer as u8);
 }
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
@@ -287,21 +279,28 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     let mut port: Port<u8> = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
 
-    // Push scancode into the keyboard ring buffer
     crate::drivers::keyboard::push_scancode(scancode);
 
-    unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard as u8) };
+    send_eoi(InterruptIndex::Keyboard as u8);
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Mouse as u8);
     crate::drivers::ps2_mouse::on_interrupt();
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Mouse as u8)
-    };
+    send_eoi(InterruptIndex::Mouse as u8);
 }
 
+// ── IPI Handlers ──
+
+extern "x86-interrupt" fn ipi_reschedule_handler(_frame: InterruptStackFrame) {
+    send_eoi(InterruptIndex::IpIReschedule as u8);
+    crate::arch::x86_64::smp::handle_reschedule_ipi();
+}
+
+extern "x86-interrupt" fn ipi_tlb_shootdown_handler(_frame: InterruptStackFrame) {
+    send_eoi(InterruptIndex::IpITlbShootdown as u8);
+    crate::arch::x86_64::smp::handle_tlb_shootdown();
+}
 
 // ── int 0x80 syscall gate ──
 
@@ -383,16 +382,10 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn ata1_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Ata1 as u8);
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Ata1 as u8)
-    };
+    send_eoi(InterruptIndex::Ata1 as u8);
 }
 
 extern "x86-interrupt" fn ata2_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Ata2 as u8);
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Ata2 as u8)
-    };
+    send_eoi(InterruptIndex::Ata2 as u8);
 }

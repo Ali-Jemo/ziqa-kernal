@@ -21,10 +21,7 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     arch::x86_64::switch::init_syscalls();
 
     // Enable SMEP/SMAP/UMIP if the CPU supports them (CR4 bits 20/21/11).
-    // Must run after GDT/IDT are loaded so a #PF from a bad kernel pointer
-    // is handled rather than triple-faulting.
     let cpu_features = arch::x86_64::cpu_features::init();
-    // Verify the bits actually stuck in CR4 (paranoid check).
     if let Err(missing) = arch::x86_64::cpu_features::verify(cpu_features) {
         crate::klog!(
             crate::klog::Level::Warn,
@@ -61,7 +58,6 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     drivers::pci::init();
     drivers::device_manager::init();
     
-    // Register drivers
     #[cfg(feature = "net")]
     drivers::virtio_net::register();
     drivers::device_manager::DEVICE_MANAGER.lock().register_driver(Box::new(crate::drivers::virtio_block_new::VirtioBlockDriverNew));
@@ -71,11 +67,34 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     drivers::device_manager::DEVICE_MANAGER.lock().scan_and_match();
     
     drivers::acpi::init();
+
+    // ── SMP / APIC Init ──────────────────────────────────────────────────
+    if let Some(acpi_info) = &*drivers::acpi::ACPI_INFO.lock() {
+        crate::klog!(crate::klog::Level::Info, "APIC: initializing...");
+
+        arch::x86_64::apic::enable_lapic_in_bsp();
+        arch::x86_64::apic::init(acpi_info);
+
+        let bsp_apic_id = arch::x86_64::apic::lapic_id();
+        arch::x86_64::per_cpu::init_bsp(bsp_apic_id);
+
+        arch::x86_64::apic::enable();
+        arch::x86_64::apic::disable_pic();
+
+        let timer_count = arch::x86_64::apic::calibrate_timer(5);
+        arch::x86_64::apic::start_periodic_timer(timer_count);
+
+        arch::x86_64::smp::boot_aps(acpi_info);
+    } else {
+        crate::klog!(crate::klog::Level::Warn, "APIC: ACPI info not available, using legacy PIC");
+    }
+
     #[cfg(feature = "drm")]
     drivers::drm::init();
+
     process::scheduler::init();
 
-    crate::println!(" ~ GDT, IDT, PIC, Heap ................ loaded");
+    crate::println!(" ~ GDT, IDT, APIC, Heap ................ loaded");
     crate::println!(" ~ Memory mapper ...................... initialized");
     crate::println!(" ~ ABI plugins ........................ 2 registered");
 }

@@ -1,6 +1,7 @@
 extern crate alloc;
 use crate::memory::VirtAddr;
 use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable as PidAllocator};
+use crate::process::vma::Vma;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -67,10 +68,8 @@ impl ReadyQueues {
 pub struct Scheduler {
     pub process_table: RwLock<GlobalProcessTable>,
     ready_queues: Mutex<ReadyQueues>,
-    current_pid: Mutex<Option<Pid>>,
     ticks: AtomicU64,
     pid_allocator: Mutex<PidAllocator>,
-    timeslice_remaining: Mutex<u32>,
 }
 
 impl Scheduler {
@@ -78,11 +77,17 @@ impl Scheduler {
         Scheduler {
             process_table: RwLock::new(GlobalProcessTable::new()),
             ready_queues: Mutex::new(ReadyQueues::new()),
-            current_pid: Mutex::new(None),
             ticks: AtomicU64::new(0),
             pid_allocator: Mutex::new(PidAllocator::new()),
-            timeslice_remaining: Mutex::new(0),
         }
+    }
+
+    pub fn current_pid(&self) -> Option<Pid> {
+        crate::arch::x86_64::per_cpu::current_cpu().current_pid()
+    }
+
+    pub fn set_current_pid(&self, pid: Option<Pid>) {
+        crate::arch::x86_64::per_cpu::current_cpu_mut().set_current_pid(pid);
     }
 
     pub fn total_ticks(&self) -> u64 {
@@ -100,13 +105,13 @@ impl Scheduler {
 
         let stack_size = 256 * 1024;
         let stack_start = stack.as_u64().checked_sub(stack_size as u64)?;
-        proc.add_region(crate::memory::MemoryRegion {
+        proc.add_region(Vma::from(crate::memory::MemoryRegion {
             start: VirtAddr::new(stack_start),
             size: stack_size as usize,
             flags: crate::memory::paging::MemoryRegionFlags::read_write(),
             is_file_backed: false,
             file_offset: 0,
-        });
+        }));
 
         init_process_stack(&mut proc);
         proc.make_ready();
@@ -190,8 +195,7 @@ impl Scheduler {
         child.cpu_state = parent.cpu_state;
         child.priority = parent.priority;
         child.parent = parent_pid.0;
-        child.regions = parent.regions.clone();
-        child.region_count = parent.region_count;
+        child.vmas = parent.vmas.clone();
         child.binary_data = parent.binary_data.clone();
         child.state = ProcessState::Ready;
         child.fds.clone_from(&parent.fds);
@@ -200,15 +204,11 @@ impl Scheduler {
             child.page_table_frame = Some(frame);
         }
 
-        for r_opt in parent.regions.iter_mut() {
-            if let Some(ref mut r) = r_opt {
-                if r.flags.writable { r.flags.copy_on_write = true; }
-            }
+        for vma in parent.vmas.iter_mut() {
+            if vma.flags.writable { vma.flags.copy_on_write = true; }
         }
-        for r_opt in child.regions.iter_mut() {
-            if let Some(ref mut r) = r_opt {
-                if r.flags.writable { r.flags.copy_on_write = true; }
-            }
+        for vma in child.vmas.iter_mut() {
+            if vma.flags.writable { vma.flags.copy_on_write = true; }
         }
 
         let mut table = self.process_table.write();
@@ -275,16 +275,12 @@ impl Scheduler {
     pub fn tick(&self) {
         let t = self.ticks.fetch_add(1, Ordering::Relaxed) + 1;
 
-        let mut ts = self.timeslice_remaining.lock();
-        if *ts > 0 {
-            *ts -= 1;
-            if *ts == 0 {
-                if let Some(pid) = self.current_pid() {
-                    if let Some(proc_arc) = self.get_process(pid) {
-                        let mut proc = proc_arc.lock();
-                        if proc.priority < PRIORITY_LEVELS - 1 {
-                            proc.priority += 1;
-                        }
+        if let Some(pid) = self.current_pid() {
+            if let Some(proc_arc) = self.get_process(pid) {
+                let mut proc = proc_arc.lock();
+                if t % 10 == 0 {
+                    if proc.priority < PRIORITY_LEVELS - 1 {
+                        proc.priority += 1;
                     }
                 }
             }
@@ -304,27 +300,19 @@ impl Scheduler {
         let next_pid = self.ready_queues.lock().pop_highest();
         
         if let Some(new_pid) = next_pid {
-            let mut current_guard = self.current_pid.lock();
-            let old_pid = *current_guard;
+            let old_pid = self.current_pid();
             
             if old_pid == Some(new_pid) {
-                *self.timeslice_remaining.lock() = match self.get_process(new_pid).unwrap().lock().priority {
-                    0 => 5, 1 => 10, 2 => 20, _ => 40,
-                };
                 return;
             }
 
-            *current_guard = Some(new_pid);
-            drop(current_guard);
+            self.set_current_pid(Some(new_pid));
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
             let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
 
             let mut new_proc = new_proc_arc.lock();
             new_proc.state = ProcessState::Running;
-            *self.timeslice_remaining.lock() = match new_proc.priority {
-                0 => 5, 1 => 10, 2 => 20, _ => 40,
-            };
 
             if let Some(frame) = new_proc.page_table_frame {
                 unsafe { Cr3::write(frame, Cr3Flags::empty()); }
@@ -353,10 +341,6 @@ impl Scheduler {
         self.process_table.read().get(pid)
     }
 
-    pub fn current_pid(&self) -> Option<Pid> {
-        *self.current_pid.lock()
-    }
-
     pub fn wake_sleeping_mask(&self, woken_mask: u64) {
         let table = self.process_table.read();
         for slot in table.tasks.iter() {
@@ -375,7 +359,7 @@ impl Scheduler {
 
     pub fn set_current(&self, pid: Pid) -> bool {
         if self.get_process(pid).is_some() {
-            *self.current_pid.lock() = Some(pid);
+            self.set_current_pid(Some(pid));
             true
         } else {
             false
@@ -398,8 +382,7 @@ impl Scheduler {
         
         let mut table = self.process_table.write();
         table.tasks[0] = Some(Arc::new(Mutex::new(proc)));
-        *self.current_pid.lock() = Some(pid);
-        *self.timeslice_remaining.lock() = 10;
+        self.set_current_pid(Some(pid));
     }
 }
 

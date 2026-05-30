@@ -86,3 +86,17 @@ pub fn set_tss_stack(stack: VirtAddr) {
         (*tss_ptr).privilege_stack_table[0] = stack;
     }
 }
+
+pub fn init_ap() {
+    use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
+    use x86_64::instructions::tables::load_tss;
+
+    GDT.0.load();
+    unsafe {
+        CS::set_reg(GDT.1.code_selector);
+        DS::set_reg(GDT.1.kernel_data_selector);
+        ES::set_reg(GDT.1.kernel_data_selector);
+        SS::set_reg(GDT.1.kernel_data_selector);
+        load_tss(GDT.1.tss_selector);
+    }
+}

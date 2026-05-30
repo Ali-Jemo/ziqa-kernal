@@ -10,6 +10,7 @@
 ///   62 = kill(pid, sig)
 ///  230 = clock_nanosleep / nanosleep (simplified: ms in arg1)
 use crate::process::{Process, ProcessState};
+use crate::process::vma::Vma;
 use crate::capability::ResourceKind;
 
 /// Convert an AbiError to an errno value.
@@ -344,15 +345,10 @@ pub fn dispatch_syscall(
             use crate::memory::VirtAddr as KVirtAddr;
             let target = KVirtAddr::new(addr);
             // Remove the matching region
-            for slot in ctx.process.regions.iter_mut() {
-                if let Some(r) = slot {
-                    if r.start == target {
-                        *slot = None;
-                        ctx.process.region_count = ctx.process.region_count.saturating_sub(1);
-                        klog_syscall("munmap", addr);
-                        return Ok(0);
-                    }
-                }
+            if let Some(pos) = ctx.process.vmas.iter().position(|vma| vma.start == target) {
+                ctx.process.vmas.remove(pos);
+                klog_syscall("munmap", addr);
+                return Ok(0);
             }
             return Err(crate::abi::AbiError::Other("munmap: region not found"));
         }
@@ -745,13 +741,13 @@ fn ziqa_dev_map(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
     }
     
     // Register region in process for tracking
-    ctx.process.add_region(crate::memory::MemoryRegion {
+    ctx.process.add_region(Vma::from(crate::memory::MemoryRegion {
         start: VirtAddr::new(virt_start),
         size: aligned_size,
         flags: crate::memory::paging::MemoryRegionFlags::read_write(),
         is_file_backed: false,
         file_offset: 0,
-    });
+    }));
     
     klog_syscall("ziqa_dev_map", virt_start);
     Ok(virt_start)

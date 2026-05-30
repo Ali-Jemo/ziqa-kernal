@@ -23,7 +23,7 @@ impl<'a> BpfVerifier<'a> {
 
     /// Perform safety verification
     pub fn verify(&self) -> Result<(), BpfError> {
-        if self.program.len() == 0 {
+        if self.program.is_empty() {
             return Err(BpfError::VerificationFailed("Empty program"));
         }
 
@@ -36,6 +36,7 @@ impl<'a> BpfVerifier<'a> {
         for insn in self.program {
             if insn.code == op::RET {
                 has_exit = true;
+                break;
             }
         }
 
@@ -44,24 +45,39 @@ impl<'a> BpfVerifier<'a> {
         }
 
         // 2. Control flow analysis (simplified: no backward jumps)
-        for (i, insn) in self.program.iter().enumerate() {
+        let mut i = 0;
+        while i < self.program.len() {
+            let insn = self.program[i];
+
+            // Check register indices
+            if insn.dst_reg() >= 11 || insn.src_reg() >= 11 {
+                return Err(BpfError::VerificationFailed("Invalid register index"));
+            }
+
+            // Handle multi-word instructions
+            if insn.code == op::LD_IMM_64 {
+                if i + 1 >= self.program.len() {
+                    return Err(BpfError::VerificationFailed("Truncated LD_IMM_64"));
+                }
+                i += 2;
+                continue;
+            }
+
             // Check jump targets
-            if (insn.code & 0x07) == 0x05 {
-                // JMP class
-                if insn.code != op::RET {
-                    let target = i as i32 + insn.off as i32 + 1;
-                    if target < 0 || target >= self.program.len() as i32 {
-                        return Err(BpfError::VerificationFailed("Jump out of bounds"));
-                    }
-                    if insn.off <= 0 && insn.code != op::RET {
-                        // Strictly speaking, BPF allows backward jumps in recent versions
-                        // but for ZiqaKernel safety, we'll start with DAGs only.
-                        return Err(BpfError::VerificationFailed(
-                            "Backward jumps forbidden for now",
-                        ));
-                    }
+            let is_jmp = (insn.code & 0x07) == 0x05;
+            if is_jmp && insn.code != op::RET {
+                let target = i as i32 + insn.off as i32 + 1;
+                if target < 0 || target >= self.program.len() as i32 {
+                    return Err(BpfError::VerificationFailed("Jump out of bounds"));
+                }
+                if insn.off <= 0 {
+                    return Err(BpfError::VerificationFailed(
+                        "Backward jumps forbidden for now",
+                    ));
                 }
             }
+            
+            i += 1;
         }
 
         Ok(())

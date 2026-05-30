@@ -25,6 +25,7 @@ mod memory;
 mod misc;
 #[cfg(feature = "net")]
 mod net;
+mod ebpf;
 mod process;
 mod time;
 
@@ -155,6 +156,7 @@ mod nr {
     pub const SYS_PPOLL: u64 = 271;
     pub const SYS_PSELECT6: u64 = 270;
     pub const SYS_GETCPU: u64 = 309;
+    pub const SYS_BPF: u64 = 321;
     pub const SYS_PIDFD_OPEN: u64 = 434;
     pub const SYS_MEMFD_CREATE: u64 = 319;
     pub const SYS_FALLOCATE: u64 = 285;
@@ -218,10 +220,13 @@ impl AbiPlugin for LinuxAbiPlugin {
         }
         if let Some(result) = misc::handle(ctx) {
             return result;
-
+        }
+        if let Some(result) = ebpf::handle(ctx) {
+            return result;
         }
 
         println!("[Linux ABI] Unimplemented syscall: {}", ctx.number);
+
         Err(AbiError::UnsupportedSyscall(ctx.number))
     }
 }
@@ -432,13 +437,14 @@ fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let base = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
     ctx.process.mmap_bump = base + length as u64;
     use crate::memory::{paging::MemoryRegionFlags, MemoryRegion, VirtAddr};
-    ctx.process.add_region(MemoryRegion {
+use crate::process::vma::Vma;
+    ctx.process.add_region(Vma::from(MemoryRegion {
         start: VirtAddr::new(base),
         size: length,
         flags: MemoryRegionFlags::read_write(),
         is_file_backed: false,
         file_offset: 0,
-    });
+    }));
     Ok(base)
 }
 

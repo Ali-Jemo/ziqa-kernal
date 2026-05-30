@@ -1,6 +1,9 @@
+pub mod apic;
 pub mod cpu_features;
 pub mod gdt;
 pub mod interrupts;
+pub mod per_cpu;
+pub mod smp;
 pub mod switch;
 
 // Re-export the IDT init from interrupts module for backward compat
