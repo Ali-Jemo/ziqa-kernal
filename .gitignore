@@ -41,3 +41,4 @@ web/.vite/
 
 # Temp files
 temp_*.txt
+userspace/busybox-1.36.1/
