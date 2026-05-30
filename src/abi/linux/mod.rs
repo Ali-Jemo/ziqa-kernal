@@ -434,18 +434,24 @@ fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if length == 0 {
         return Ok((-22_i64) as u64);
     } // -EINVAL
-    let base = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
-    ctx.process.mmap_bump = base + length as u64;
-    use crate::memory::{paging::MemoryRegionFlags, MemoryRegion, VirtAddr};
-use crate::process::vma::Vma;
-    ctx.process.add_region(Vma::from(MemoryRegion {
-        start: VirtAddr::new(base),
-        size: length,
+    
+    let start_hint = crate::memory::VirtAddr::new(0x4000_0000);
+    let base = crate::process::vma::find_free_range(&ctx.process.vmas, length, start_hint)
+        .ok_or(AbiError::Other("mmap: no free address space"))?;
+
+    use crate::memory::paging::MemoryRegionFlags;
+    use crate::process::vma::Vma;
+    
+    ctx.process.add_region(Vma {
+        start: base,
+        end: base + length as u64,
         flags: MemoryRegionFlags::read_write(),
         is_file_backed: false,
+        file_path: None,
         file_offset: 0,
-    }));
-    Ok(base)
+    });
+    
+    Ok(base.as_u64())
 }
 
 /// sys_mprotect(addr, len, prot) → 0/-EINVAL

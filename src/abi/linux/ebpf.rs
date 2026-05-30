@@ -30,6 +30,7 @@ fn sys_bpf(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         2 => sys_bpf_map_create(attr_ptr, size),
         3 => sys_bpf_map_lookup(attr_ptr, size),
         4 => sys_bpf_map_update(attr_ptr, size),
+        5 => sys_bpf_map_delete(attr_ptr, size),
         _ => {
             crate::println!("[BPF] Unsupported command: {}", cmd);
             Ok(-(crate::abi::syscall::errno::ENOSYS as i64) as u64)
@@ -86,6 +87,23 @@ fn sys_bpf_map_update(attr_ptr: *const u8, _size: usize) -> Result<u64, AbiError
     
     if let Some(map) = BPF_MAPS.get(map_id) {
         match map.update(key_ptr, value_ptr) {
+            Ok(0) => Ok(0),
+            _ => Ok(-(crate::abi::syscall::errno::EINVAL as i64) as u64),
+        }
+    } else {
+        Ok(-(crate::abi::syscall::errno::EINVAL as i64) as u64)
+    }
+}
+
+/// BPF_MAP_DELETE_ELEM (5)
+fn sys_bpf_map_delete(attr_ptr: *const u8, _size: usize) -> Result<u64, AbiError> {
+    // attr: [map_id: u64, key_ptr: u64]
+    let attr = unsafe { *(attr_ptr as *const [u64; 2]) };
+    let map_id = attr[0] as usize;
+    let key_ptr = attr[1];
+    
+    if let Some(map) = BPF_MAPS.get(map_id) {
+        match map.delete(key_ptr) {
             Ok(0) => Ok(0),
             _ => Ok(-(crate::abi::syscall::errno::EINVAL as i64) as u64),
         }

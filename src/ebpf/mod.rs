@@ -68,6 +68,14 @@ pub mod op {
     pub const MOV_X: u8 = 0xbf;
     pub const CALL: u8 = 0x85;
     pub const LD_IMM_64: u8 = 0x18;
+
+    // Memory Access (Load/Store)
+    pub const LDX_W: u8 = 0x61;   // R0 = *(u32 *)(R1 + off)
+    pub const LDX_DW: u8 = 0x79;  // R0 = *(u64 *)(R1 + off)
+    pub const STX_W: u8 = 0x63;   // *(u32 *)(R0 + off) = R1
+    pub const STX_DW: u8 = 0x7b;  // *(u64 *)(R0 + off) = R1
+    pub const ST_W: u8 = 0x62;    // *(u32 *)(R0 + off) = imm
+    pub const ST_DW: u8 = 0x7a;   // *(u64 *)(R0 + off) = imm
 }
 
 /// eBPF Helper Function IDs
@@ -77,6 +85,8 @@ pub mod helpers {
     pub const MAP_DELETE_ELEM: i32 = 3;
     pub const KTIME_GET_NS: i32 = 4;
     pub const TRACE_PRINTK: i32 = 5;
+    pub const GET_CURRENT_PID: i32 = 6;
+    pub const GET_CURRENT_COMM: i32 = 7;
 }
 
 /// The result of eBPF program execution

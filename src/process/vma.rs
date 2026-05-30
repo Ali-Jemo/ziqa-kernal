@@ -1,7 +1,6 @@
 use crate::memory::MemoryRegionFlags;
 use x86_64::VirtAddr;
 use crate::memory::MemoryRegion;
-use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
 pub struct Vma {

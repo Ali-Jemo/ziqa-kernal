@@ -69,6 +69,26 @@ impl BpfMap {
         }
         Err(BpfError::ExecutionError)
     }
+
+    pub fn delete(&self, key_ptr: u64) -> Result<u64, BpfError> {
+        if self.map_type == BpfMapType::Array {
+            let index = unsafe { *(key_ptr as *const u32) };
+            if index >= self.max_entries {
+                return Ok(1); // Error
+            }
+            let offset = (index * self.value_size) as usize;
+            let mut data = self.data.lock();
+            unsafe {
+                core::ptr::write_bytes(
+                    data.as_mut_ptr().add(offset),
+                    0,
+                    self.value_size as usize
+                );
+            }
+            return Ok(0);
+        }
+        Err(BpfError::ExecutionError)
+    }
 }
 
 pub struct BpfMapRegistry {

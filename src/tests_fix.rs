@@ -87,3 +87,21 @@
         }
         false
     });
+
+    test!("ebpf: stack and memory ops", {
+        use crate::ebpf::vm::BpfVm;
+        use crate::ebpf::{BpfInstruction, op};
+        
+        // Program:
+        // 1. ST_W [R10-4], 0xDEADBEEF  (Store to stack)
+        // 2. LDX_W R0, [R10-4]         (Load from stack)
+        // 3. RET                       (Return R0)
+        let prog = [
+            BpfInstruction { code: op::ST_W, regs: 0x0A, off: -4, imm: 0xDEADBEEF as i32 },
+            BpfInstruction { code: op::LDX_W, regs: 0x0A, off: -4, imm: 0 }, // dst=0, src=10
+            BpfInstruction { code: op::RET, regs: 0x00, off: 0, imm: 0 },
+        ];
+        
+        let mut vm = BpfVm::new();
+        vm.execute(&prog) == Ok(0xDEADBEEF)
+    });

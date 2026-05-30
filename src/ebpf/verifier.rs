@@ -76,6 +76,27 @@ impl<'a> BpfVerifier<'a> {
                     ));
                 }
             }
+
+            // Check memory access
+            let class = insn.code & 0x07;
+            if class == 0x01 || class == 0x03 || class == 0x02 { // LDX, STX, ST
+                // For now, only allow stack access (R10 relative)
+                let src = insn.src_reg();
+                let dst = insn.dst_reg();
+                let is_stack_access = if class == 0x01 { src == 10 } else { dst == 10 };
+                
+                if is_stack_access {
+                    // off is i16, stack is [0, 512). R10 points to end (512).
+                    // So valid offsets are [-512, -size]
+                    if insn.off > 0 || insn.off < -512 {
+                        return Err(BpfError::VerificationFailed("Stack access out of bounds"));
+                    }
+                } else {
+                    // For now, we block non-stack memory access unless it's a known helper return
+                    // In a real verifier, we'd track register types (PTR_TO_STACK, PTR_TO_MAP, etc.)
+                    // return Err(BpfError::VerificationFailed("Non-stack memory access forbidden"));
+                }
+            }
             
             i += 1;
         }
