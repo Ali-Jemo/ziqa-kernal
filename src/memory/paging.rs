@@ -581,7 +581,7 @@ pub fn map_process_regions(process: &mut crate::process::Process) -> Result<(), 
 }
 
 /// Convert MemoryRegionFlags to PageTableFlags
-fn region_flags_to_page_flags(rf: &crate::memory::paging::MemoryRegionFlags) -> PageTableFlags {
+pub fn region_flags_to_page_flags(rf: &crate::memory::paging::MemoryRegionFlags) -> PageTableFlags {
     let mut pf = PageTableFlags::PRESENT;
     if rf.writable {
         pf |= PageTableFlags::WRITABLE;

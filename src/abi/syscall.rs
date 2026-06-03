@@ -150,6 +150,16 @@ pub mod nr {
     pub const ZIQA_DEV_MAP: u64 = 1033;
     /// Wait for a device interrupt. [irq] → 0
     pub const ZIQA_DEV_IRQ_WAIT: u64 = 1034;
+    /// Find a PCI device.
+    /// args: [vendor|0xffff, device|0xffff, class|0xffff, subclass|0xffff]
+    /// → packed BDF (bus<<16 | dev<<8 | func) / -ENOENT
+    pub const ZIQA_DEV_PCI_FIND: u64 = 1035;
+    /// Read a PCI BAR for a packed BDF.
+    /// args: [bdf, bar_index] → (is_io<<63 | bar_address) / -errno
+    pub const ZIQA_DEV_PCI_BAR: u64 = 1036;
+    /// Read PCI interrupt line for a packed BDF.
+    /// args: [bdf] → irq line / -errno
+    pub const ZIQA_DEV_PCI_IRQ: u64 = 1037;
 
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
     /// Close a file capability and release its FD slot.
@@ -437,6 +447,9 @@ pub fn dispatch_syscall(
         nr::ZIQA_DEV_PORT_OUT => return ziqa_dev_port_out(ctx),
         nr::ZIQA_DEV_MAP => return ziqa_dev_map(ctx),
         nr::ZIQA_DEV_IRQ_WAIT => return ziqa_dev_irq_wait(ctx),
+        nr::ZIQA_DEV_PCI_FIND => return ziqa_dev_pci_find(ctx),
+        nr::ZIQA_DEV_PCI_BAR => return ziqa_dev_pci_bar(ctx),
+        nr::ZIQA_DEV_PCI_IRQ => return ziqa_dev_pci_irq(ctx),
 
         // ── SHM / IPC handlers ──
         nr::ZIQA_SHM_CREATE => {
@@ -811,6 +824,101 @@ fn ziqa_dev_irq_wait(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErr
     
     klog_syscall("ziqa_dev_irq_wait", irq as u64);
     Ok(0)
+}
+
+fn pack_pci_bdf(bus: u8, dev: u8, func: u8) -> u64 {
+    ((bus as u64) << 16) | ((dev as u64) << 8) | func as u64
+}
+
+fn unpack_pci_bdf(bdf: u64) -> (u8, u8, u8) {
+    (((bdf >> 16) & 0xFF) as u8, ((bdf >> 8) & 0xFF) as u8, (bdf & 0xFF) as u8)
+}
+
+fn pci_matches(value: u16, requested: u64) -> bool {
+    requested == 0xFFFF || value == requested as u16
+}
+
+fn pci_class_matches(value: u8, requested: u64) -> bool {
+    requested == 0xFFFF || value == requested as u8
+}
+
+/// ZIQA_DEV_PCI_FIND (1035) — Locate a PCI device for a userspace driver.
+fn ziqa_dev_pci_find(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
+    let vendor = ctx.args[0];
+    let device = ctx.args[1];
+    let class = ctx.args[2];
+    let subclass = ctx.args[3];
+
+    let devices = crate::drivers::pci::PCI_DEVICES.lock();
+    for dev in devices.iter() {
+        if pci_matches(dev.vendor_id, vendor)
+            && pci_matches(dev.device_id, device)
+            && pci_class_matches(dev.class, class)
+            && pci_class_matches(dev.subclass, subclass)
+        {
+            let bdf = pack_pci_bdf(dev.bus, dev.dev, dev.func);
+            klog_syscall("ziqa_dev_pci_find", bdf);
+            return Ok(bdf);
+        }
+    }
+
+    Ok(-(errno::ENOENT as i64) as u64)
+}
+
+fn find_pci_by_bdf(bdf: u64) -> Option<crate::drivers::pci::PciDevice> {
+    let (bus, dev, func) = unpack_pci_bdf(bdf);
+    crate::drivers::pci::PCI_DEVICES
+        .lock()
+        .iter()
+        .find(|pci| pci.bus == bus && pci.dev == dev && pci.func == func)
+        .cloned()
+}
+
+/// ZIQA_DEV_PCI_BAR (1036) — Return BAR address and type for a userspace driver.
+fn ziqa_dev_pci_bar(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
+    let bdf = ctx.args[0];
+    let index = ctx.args[1] as usize;
+    if index >= 6 {
+        return Ok(-(errno::EINVAL as i64) as u64);
+    }
+
+    let dev = match find_pci_by_bdf(bdf) {
+        Some(dev) => dev,
+        None => return Ok(-(errno::ENOENT as i64) as u64),
+    };
+    let raw = dev.bars[index];
+    if raw == 0 {
+        return Ok(-(errno::ENOENT as i64) as u64);
+    }
+    let (addr, is_io) = crate::drivers::pci::bar_address(raw);
+    let encoded = addr | if is_io { 1 << 63 } else { 0 };
+    klog_syscall("ziqa_dev_pci_bar", encoded);
+    Ok(encoded)
+}
+
+/// ZIQA_DEV_PCI_IRQ (1037) — Return the legacy interrupt line for a PCI device.
+fn ziqa_dev_pci_irq(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
+    let dev = match find_pci_by_bdf(ctx.args[0]) {
+        Some(dev) => dev,
+        None => return Ok(-(errno::ENOENT as i64) as u64),
+    };
+    if dev.interrupt_line == 0 || dev.interrupt_line == 0xFF {
+        return Ok(-(errno::ENOENT as i64) as u64);
+    }
+    klog_syscall("ziqa_dev_pci_irq", dev.interrupt_line as u64);
+    Ok(dev.interrupt_line as u64)
 }
 
 #[inline(always)]

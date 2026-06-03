@@ -9,8 +9,25 @@ use x86_64::{
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
 
+struct TrackedAllocator(LockedHeap);
+
+unsafe impl core::alloc::GlobalAlloc for TrackedAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let ptr = self.0.alloc(layout);
+        if !ptr.is_null() {
+            crate::memory::heapstats::record_alloc(layout.size() as u64);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        self.0.dealloc(ptr, layout);
+        crate::memory::heapstats::record_dealloc(layout.size() as u64);
+    }
+}
+
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
+static ALLOCATOR: TrackedAllocator = TrackedAllocator(LockedHeap::empty());
 
 
 pub fn init_heap(
@@ -34,6 +51,6 @@ pub fn init_heap(
         unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
     }
 
-    unsafe { ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE) };
+    unsafe { ALLOCATOR.0.lock().init(HEAP_START as *mut u8, HEAP_SIZE) };
     Ok(())
 }

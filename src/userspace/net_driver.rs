@@ -4,31 +4,71 @@
 
 use core::panic::PanicInfo;
 
-/// VirtIO-Net I/O base (example, should be discovered via PCI in a real driver)
-const IO_BASE: u16 = 0xC000;
-const IRQ_VECTOR: u8 = 43; // Example IRQ
+const PCI_VENDOR_VIRTIO: u16 = 0x1AF4;
+const PCI_DEVICE_VIRTIO_NET_LEGACY: u16 = 0x1000;
+const PCI_WILDCARD: u16 = 0xFFFF;
+const BAR_IS_IO: u64 = 1 << 63;
+
+const PCI_HOST_FEATURES: u16 = 0x00;
+const PCI_GUEST_FEATURES: u16 = 0x04;
+const PCI_DEVICE_STATUS: u16 = 0x12;
+const PCI_ISR: u16 = 0x13;
+
+const STATUS_RESET: u8 = 0x00;
+const STATUS_ACKNOWLEDGE: u8 = 0x01;
+const STATUS_DRIVER: u8 = 0x02;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     sys_write(1, b"[Userspace Net] Driver starting...\n");
 
-    // 1. Initialize VirtIO-Net via I/O Ports
-    // Reset device
-    syscall_dev_port_out(IO_BASE + 18, 1, 0); // PCI_DEVICE_STATUS = 0
+    let bdf = syscall_dev_pci_find(
+        PCI_VENDOR_VIRTIO,
+        PCI_DEVICE_VIRTIO_NET_LEGACY,
+        PCI_WILDCARD,
+        PCI_WILDCARD,
+    );
+    if is_err(bdf) {
+        sys_write(1, b"[Userspace Net] virtio-net PCI device not found\n");
+        park();
+    }
+
+    let bar0 = syscall_dev_pci_bar(bdf, 0);
+    if is_err(bar0) || (bar0 & BAR_IS_IO) == 0 {
+        sys_write(1, b"[Userspace Net] virtio-net BAR0 is not I/O space\n");
+        park();
+    }
+    let io_base = (bar0 & !BAR_IS_IO) as u16;
+
+    let irq = syscall_dev_pci_irq(bdf);
+    if is_err(irq) {
+        sys_write(1, b"[Userspace Net] virtio-net IRQ line unavailable\n");
+        park();
+    }
+
+    // 1. Initialize VirtIO-Net via the discovered legacy I/O BAR.
+    syscall_dev_port_out(io_base + PCI_DEVICE_STATUS, 1, STATUS_RESET as u64);
     
     // Acknowledge + Driver
-    syscall_dev_port_out(IO_BASE + 18, 1, 1);
-    syscall_dev_port_out(IO_BASE + 18, 1, 3);
+    syscall_dev_port_out(io_base + PCI_DEVICE_STATUS, 1, STATUS_ACKNOWLEDGE as u64);
+    syscall_dev_port_out(
+        io_base + PCI_DEVICE_STATUS,
+        1,
+        (STATUS_ACKNOWLEDGE | STATUS_DRIVER) as u64,
+    );
+
+    let _features = syscall_dev_port_in(io_base + PCI_HOST_FEATURES, 4);
+    syscall_dev_port_out(io_base + PCI_GUEST_FEATURES, 4, 0);
 
     sys_write(1, b"[Userspace Net] Device acknowledged. Waiting for interrupts...\n");
 
     // 2. Main Event Loop
     loop {
         // Wait for IRQ from kernel
-        syscall_dev_irq_wait(IRQ_VECTOR);
+        syscall_dev_irq_wait(irq as u8);
         
         // IRQ fired! Check ISR
-        let isr = syscall_dev_port_in(IO_BASE + 20, 1) as u8; // PCI_ISR
+        let isr = syscall_dev_port_in(io_base + PCI_ISR, 1) as u8;
         if isr & 1 != 0 {
             sys_write(1, b"[Userspace Net] Received Packet IRQ!\n");
             // Perform packet RX logic...
@@ -40,6 +80,17 @@ pub extern "C" fn _start() -> ! {
 }
 
 // ── Syscall Wrappers ─────────────────────────────────────────────────────────
+
+#[inline(always)]
+fn is_err(value: u64) -> bool {
+    (value as i64) < 0
+}
+
+fn park() -> ! {
+    loop {
+        syscall_yield();
+    }
+}
 
 #[inline(always)]
 fn sys_write(fd: u64, buf: &[u8]) {
@@ -69,6 +120,41 @@ fn syscall_dev_irq_wait(irq: u8) {
     unsafe {
         core::arch::asm!("syscall", in("rax") 1034, in("rdi") irq as u64);
     }
+}
+
+#[inline(always)]
+fn syscall_dev_pci_find(vendor: u16, device: u16, class: u16, subclass: u16) -> u64 {
+    let res: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 1035,
+            in("rdi") vendor as u64,
+            in("rsi") device as u64,
+            in("rdx") class as u64,
+            in("r10") subclass as u64,
+            lateout("rax") res,
+        );
+    }
+    res
+}
+
+#[inline(always)]
+fn syscall_dev_pci_bar(bdf: u64, bar: u64) -> u64 {
+    let res: u64;
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 1036, in("rdi") bdf, in("rsi") bar, lateout("rax") res);
+    }
+    res
+}
+
+#[inline(always)]
+fn syscall_dev_pci_irq(bdf: u64) -> u64 {
+    let res: u64;
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 1037, in("rdi") bdf, lateout("rax") res);
+    }
+    res
 }
 
 #[inline(always)]

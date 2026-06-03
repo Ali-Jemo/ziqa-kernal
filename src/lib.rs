@@ -39,6 +39,7 @@ pub mod zig_kernel_ops;
 
 // tests always available but some test bodies may be cfg-gated
 pub mod tests;
+pub mod tests_net;
 
 pub use init::{init, init_abi_registry};
 

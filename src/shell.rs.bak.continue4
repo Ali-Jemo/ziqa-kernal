@@ -1027,22 +1027,25 @@ impl Shell {
             None => { println!("Usage: exec <pid>"); return 1; }
         };
         let pid = crate::process::Pid(pid_val);
-        use crate::process::scheduler::{self, with_process, with_process_mut};
+        use crate::process::scheduler::SCHEDULER;
 
-        let Some(entry) = with_process(pid, |proc| {
-            println!("[EXEC] Switching to PID {} entry=0x{:x}", pid_val, proc.entry_point.as_u64());
-            Some(proc.entry_point.as_u64())
-        }) else {
-            println!("exec: no process with PID {}", pid_val);
-            return 1;
+        let _entry_vaddr = {
+            if !SCHEDULER.set_current(pid) {
+                println!("exec: no process with PID {}", pid_val);
+                return 1;
+            }
+            let proc_arc = SCHEDULER.get_process(pid).unwrap();
+            let proc = proc_arc.lock();
+            let entry = proc.entry_point.as_u64();
+            println!("[EXEC] Switching to PID {} entry=0x{:x}", pid_val, entry);
+            entry
         };
-        let _entry_vaddr = entry;
 
-        with_process_mut(pid, |proc| {
-            proc.state = crate::process::ProcessState::Ready;
-        });
-
-        scheduler::yield_now();
+        if let Some(proc_arc) = SCHEDULER.get_process(pid) {
+            proc_arc.lock().state = crate::process::ProcessState::Ready;
+        }
+        
+        crate::process::scheduler::yield_now();
         0
     }
 

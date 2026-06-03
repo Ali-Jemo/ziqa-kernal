@@ -175,6 +175,127 @@ impl SocketManager {
     //  smoltcp-backed TCP operations
     // -----------------------------------------------------------------------
 
+    /// Put an AF_INET TCP socket into the listening state.
+    pub fn tcp_listen(&mut self, fd: usize, _backlog: i32) -> Result<(), &'static str> {
+        let entry = self.sockets.get_mut(&fd).ok_or("socket: bad fd")?;
+
+        if entry.domain != SockDomain::Inet {
+            return Err("socket: not AF_INET");
+        }
+        if entry.socktype != SockType::Stream {
+            return Err("socket: not SOCK_STREAM");
+        }
+
+        let port = entry
+            .local_addr
+            .as_ref()
+            .map(|a| a.port)
+            .ok_or("socket: not bound")?;
+
+        let mut stack_guard = super::stack::TCPIP.lock();
+        let stack = stack_guard
+            .as_mut()
+            .ok_or("socket: TCP/IP stack not initialized")?;
+
+        let handle = stack.add_tcp_socket(SMOLTCP_TCP_BUF_SIZE, SMOLTCP_TCP_BUF_SIZE);
+        {
+            let socket = stack.sockets.get_mut::<tcp::Socket>(handle);
+            socket
+                .listen(port)
+                .map_err(|_| "socket: smoltcp listen failed")?;
+        }
+
+        drop(stack_guard);
+
+        let entry = self.sockets.get_mut(&fd).ok_or("socket: bad fd")?;
+        entry.smoltcp_handle = Some(handle);
+        entry.state = SocketState::Listening;
+
+        crate::println!("[socket] fd {} listening on port {}", fd, port);
+        Ok(())
+    }
+
+    /// Accept a new connection from a listening AF_INET TCP socket.
+    ///
+    /// If a connection is established, moves the connected smoltcp handle to
+    /// the new FD and creates a fresh listening socket for the original FD.
+    pub fn tcp_accept(
+        &mut self,
+        listen_fd: usize,
+        new_fd: usize,
+    ) -> Result<([u8; 4], u16), &'static str> {
+        let (handle, port, local_addr) = {
+            let entry = self.sockets.get(&listen_fd).ok_or("socket: bad fd")?;
+            if entry.state != SocketState::Listening {
+                return Err("EAGAIN");
+            }
+            let handle = entry.smoltcp_handle.ok_or("socket: no handle")?;
+            let local_addr = entry.local_addr.ok_or("socket: not bound")?;
+            (handle, local_addr.port, local_addr)
+        };
+
+        let mut stack_guard = super::stack::TCPIP.lock();
+        let stack = stack_guard
+            .as_mut()
+            .ok_or("socket: TCP/IP stack not initialized")?;
+
+        stack.poll();
+
+        let (remote_addr, remote_port) = {
+            let socket = stack.sockets.get::<tcp::Socket>(handle);
+            if !socket.is_active() || socket.state() != tcp::State::Established {
+                return Err("EAGAIN");
+            }
+            let remote = socket.remote_endpoint().ok_or("socket: no remote endpoint")?;
+            let addr = match remote.addr {
+                IpAddress::Ipv4(ip) => ip.0,
+            };
+            (addr, remote.port)
+        };
+
+        // Found a connection!
+        // 1. Create a NEW listening socket handle for the original FD
+        let new_listen_handle = stack.add_tcp_socket(SMOLTCP_TCP_BUF_SIZE, SMOLTCP_TCP_BUF_SIZE);
+        stack
+            .sockets
+            .get_mut::<tcp::Socket>(new_listen_handle)
+            .listen(port)
+            .map_err(|_| "socket: listen failed")?;
+
+        drop(stack_guard);
+
+        // 2. Update SocketEntries
+        // Note: The new_fd was already created by the ABI layer calling create().
+        // We just need to update it with the established handle and remote info.
+        let new_entry = self.sockets.get_mut(&new_fd).ok_or("socket: bad new_fd")?;
+        new_entry.smoltcp_handle = Some(handle);
+        new_entry.state = SocketState::Connected;
+        new_entry.local_addr = Some(local_addr);
+        new_entry.remote_addr = Some(SockAddrInet {
+            family: 2,
+            port: remote_port,
+            addr: remote_addr,
+            zero: [0; 8],
+        });
+
+        // Replace handle in listen_fd so it can accept the next connection
+        let entry = self.sockets.get_mut(&listen_fd).unwrap();
+        entry.smoltcp_handle = Some(new_listen_handle);
+
+        crate::println!(
+            "[socket] fd {} accepted connection from {}.{}.{}.{}:{} -> fd {}",
+            listen_fd,
+            remote_addr[0],
+            remote_addr[1],
+            remote_addr[2],
+            remote_addr[3],
+            remote_port,
+            new_fd
+        );
+
+        Ok((remote_addr, remote_port))
+    }
+
     /// Connect an AF_INET TCP socket to a remote address via smoltcp.
     ///
     /// Creates a smoltcp TCP socket, adds it to the `TcpIpStack`'s `SocketSet`,

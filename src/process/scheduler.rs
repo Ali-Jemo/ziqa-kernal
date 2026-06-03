@@ -157,6 +157,16 @@ impl Scheduler {
             proc.page_table_frame = Some(frame);
         }
 
+        let stack_size = 256 * 1024;
+        let stack_start = stack.as_u64().checked_sub(stack_size as u64).unwrap_or(0);
+        proc.add_region(Vma::from(crate::memory::MemoryRegion {
+            start: VirtAddr::new(stack_start),
+            size: stack_size as usize,
+            flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+            is_file_backed: false,
+            file_offset: 0,
+        }));
+
         match plugin.load(binary, &mut proc) {
             Ok(()) => {
                 init_process_stack(&mut proc);
@@ -322,27 +332,38 @@ impl Scheduler {
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
             let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
-
-            let mut new_proc = new_proc_arc.lock();
-            new_proc.state = ProcessState::Running;
-
-            if let Some(frame) = new_proc.page_table_frame {
+            let new_cr3 = {
+                let mut new_proc = new_proc_arc.lock();
+                new_proc.state = ProcessState::Running;
+                new_proc.page_table_frame
+            };
+            let new_kstack_top = new_proc_arc.lock().kernel_stack_top;
+            let new_sp = new_proc_arc.lock().kernel_stack_ptr;
+            if let Some(frame) = new_cr3 {
                 unsafe { Cr3::write(frame, Cr3Flags::empty()); }
             }
-
-            crate::arch::x86_64::update_trap_stacks(new_proc.kernel_stack_top);
-
+            crate::arch::x86_64::update_trap_stacks(new_kstack_top);
             if let Some(old_arc) = old_proc_arc {
-                let mut old_proc = old_arc.lock();
-                if old_proc.state == ProcessState::Running {
-                    old_proc.state = ProcessState::Ready;
-                    self.ready_queues.lock().push(old_proc.pid, old_proc.priority);
-                }
-                
+                let old_sp_ptr = {
+                    let mut old_proc = old_arc.lock();
+                    if old_proc.state == ProcessState::Running {
+                        old_proc.state = ProcessState::Ready;
+                        self.ready_queues.lock().push(old_proc.pid, old_proc.priority);
+                    }
+                    &mut old_proc.kernel_stack_ptr as *mut u64
+                };
                 unsafe {
                     crate::arch::x86_64::switch::switch_context(
-                        &mut old_proc.kernel_stack_ptr,
-                        new_proc.kernel_stack_ptr,
+                        old_sp_ptr,
+                        new_sp,
+                    );
+                }
+            } else {
+                let mut dummy: u64 = 0;
+                unsafe {
+                    crate::arch::x86_64::switch::switch_context(
+                        &mut dummy as *mut u64,
+                        new_sp,
                     );
                 }
             }

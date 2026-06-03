@@ -33,6 +33,7 @@ pub fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
         nr::SYS_WRITEV => Some(super::sys_writev(ctx)),
         nr::SYS_OPENAT => Some(super::sys_openat(ctx)),
         nr::SYS_READLINK => Some(super::sys_readlink(ctx)),
+        nr::SYS_ACCESS => Some(super::sys_access(ctx)),
         nr::SYS_FCNTL => Some(super::sys_fcntl(ctx)),
         _ => None,
     }

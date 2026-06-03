@@ -167,11 +167,6 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
 
     process.brk = (max_vaddr + 0xFFF) & !0xFFF;
 
-    // Map all ELF segments into the process's page table
-    if let Err(e) = crate::memory::paging::map_process_regions(process) {
-        return Err(AbiError::Other(e));
-    }
-
-    crate::println!("[ELF] loaded {} segments, brk=0x{:x}", load_count, process.brk);
+    crate::println!("[ELF] {} segments registered, brk=0x{:x} (demand paged)", load_count, process.brk);
     Ok(())
 }

@@ -1370,14 +1370,15 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Ok((-20_i64) as u64); // -ENOTDIR
     }
 
-    let entries = crate::fs::vfs::VFS.read().list_dir(path);
+    let vfs = crate::fs::vfs::VFS.read();
+    let entries = vfs.list_dir(path);
     let mut written: usize = 0;
-    // Always emit "." and ".." first
-    let special = [b".".as_slice(), b"..".as_slice()];
-    for name_bytes in special.iter().copied().chain(entries.iter().map(|e| {
-        let name = e.rsplit('/').next().unwrap_or(e);
-        name.as_bytes()
-    })) {
+    
+    const DT_REG: u8 = 8;
+    const DT_DIR: u8 = 4;
+    
+    // Always emit "." and ".." first (both are directories)
+    for name_bytes in [b".".as_slice(), b"..".as_slice()].iter().copied() {
         let name_len = name_bytes.len();
         let reclen = (19 + name_len + 7) & !7; // align to 8
         if written + reclen > count {
@@ -1388,7 +1389,30 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             *(base as *mut u64) = 1; // d_ino
             *(base.add(8) as *mut i64) = reclen as i64; // d_off
             *(base.add(16) as *mut u16) = reclen as u16; // d_reclen
-            *base.add(18) = 8; // d_type (DT_REG)
+            *base.add(18) = DT_DIR; // "." and ".." are directories
+            core::ptr::copy_nonoverlapping(name_bytes.as_ptr(), base.add(19), name_len);
+            *base.add(19 + name_len) = 0;
+        }
+        written += reclen;
+    }
+    
+    // Emit regular entries with correct d_type
+    for entry_path in entries.iter() {
+        let name = entry_path.rsplit('/').next().unwrap_or(entry_path);
+        let name_bytes = name.as_bytes();
+        let name_len = name_bytes.len();
+        let reclen = (19 + name_len + 7) & !7; // align to 8
+        if written + reclen > count {
+            break;
+        }
+        
+        let d_type = if vfs.is_dir(entry_path) { DT_DIR } else { DT_REG };
+        unsafe {
+            let base = dirp.add(written);
+            *(base as *mut u64) = 1; // d_ino
+            *(base.add(8) as *mut i64) = reclen as i64; // d_off
+            *(base.add(16) as *mut u16) = reclen as u16; // d_reclen
+            *base.add(18) = d_type;
             core::ptr::copy_nonoverlapping(name_bytes.as_ptr(), base.add(19), name_len);
             *base.add(19 + name_len) = 0;
         }
@@ -1599,11 +1623,12 @@ fn sys_chmod(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     unsafe {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
-    if crate::fs::vfs::VFS.read().exists(path_str) {
-        Ok(0) // pretend we changed the mode
+    let raw = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
+    if crate::fs::vfs::VFS.read().exists(&path_str) {
+        Ok(0)
     } else {
-        Ok((-2_i64) as u64) // -ENOENT
+        Ok((-2_i64) as u64)
     }
 }
 
@@ -1624,11 +1649,12 @@ fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     unsafe {
         core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
     }
-    let old_str = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
-    if crate::fs::vfs::VFS.read().exists(old_str) {
-        Ok(0) // pretend link succeeded
+    let raw = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
+    let old_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
+    if crate::fs::vfs::VFS.read().exists(&old_str) {
+        Ok(0)
     } else {
-        Ok((-2_i64) as u64) // -ENOENT
+        Ok((-2_i64) as u64)
     }
 }
 
@@ -1653,7 +1679,8 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     unsafe {
         core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
     }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let raw = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
     let exists = crate::fs::vfs::VFS.read().exists(path_str);
     if !exists {
         if !crate::fs::vfs::VFS.read().is_dir(path_str) {

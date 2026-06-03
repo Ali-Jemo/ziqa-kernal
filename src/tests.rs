@@ -566,6 +566,8 @@ pub fn run_all() {
                 }
             }
         });
+
+        crate::tests_net::run_socket_tests();
         }
 
         println!("[TEST] Results: {}/{} passed", passed, passed + failed);

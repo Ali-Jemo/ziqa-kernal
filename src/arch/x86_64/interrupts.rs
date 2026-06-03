@@ -211,7 +211,7 @@ extern "x86-interrupt" fn page_fault_handler(
             fault_addr
         );
 
-        // Extract region + binary data info while holding the scheduler lock,
+        // Extract region info while holding the scheduler lock,
         // then drop it before taking memory locks to avoid deadlocks.
         let demand_info = {
             if let Some(proc_arc) = crate::process::scheduler::current_task() {
@@ -219,15 +219,13 @@ extern "x86-interrupt" fn page_fault_handler(
                 let vma_entry = proc.vmas.iter().find(|vma| vma.contains(fault_addr));
 
                 if let Some(vma) = vma_entry {
-                    // Clone what we need before dropping the lock
                     let binary_ptr = if !proc.binary_data.is_empty() {
                         Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
                     } else {
                         None
                     };
-                    // Note: file_offset is not in Vma currently, 
-                    // this might need adjustment if file_offset is essential.
-                    Some((vma.start.as_u64(), 0, binary_ptr))
+                    let flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
+                    Some((vma.start.as_u64(), vma.file_offset, binary_ptr, flags))
                 } else {
                     println!("[MM] Invalid access - no region found");
                     None
@@ -235,14 +233,10 @@ extern "x86-interrupt" fn page_fault_handler(
             } else {
                 None
             }
-        };
- // scheduler lock dropped here
+        }; // scheduler lock dropped here
 
-        if let Some((region_start, file_offset, binary_info)) = demand_info {
+        if let Some((region_start, file_offset, binary_info, flags)) = demand_info {
             let page = x86_64::structures::paging::Page::containing_address(fault_addr);
-            let flags = x86_64::structures::paging::PageTableFlags::PRESENT
-                | x86_64::structures::paging::PageTableFlags::WRITABLE
-                | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
 
             // Hold a SINGLE lock on the frame allocator for the entire operation.
             // This prevents map_to from getting frames that conflict with our frame.
@@ -258,9 +252,9 @@ extern "x86-interrupt" fn page_fault_handler(
                         Ok(flusher) => {
                             flusher.flush();
 
-                            // Copy ELF binary data into the newly mapped page
+                            // Copy ELF binary data or zero the page
+                            let page_addr = page.start_address().as_u64();
                             if let Some((bin_ptr, bin_len)) = binary_info {
-                                let page_addr = page.start_address().as_u64();
                                 let in_region_off = page_addr.saturating_sub(region_start);
                                 let binary_off = file_offset as usize + in_region_off as usize;
                                 let copy_size = 4096usize.min(bin_len.saturating_sub(binary_off));
@@ -275,6 +269,8 @@ extern "x86-interrupt" fn page_fault_handler(
                                         copy_size, page_addr
                                     );
                                 }
+                            } else {
+                                core::ptr::write_bytes(page_addr as *mut u8, 0, 4096);
                             }
 
                             println!("[MM] Demand page mapped + populated");
