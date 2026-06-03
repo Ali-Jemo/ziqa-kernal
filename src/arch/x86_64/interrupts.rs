@@ -48,6 +48,11 @@ lazy_static! {
         let mut idt = InterruptDescriptorTable::new();
 
         // ── CPU exceptions ──
+        idt.divide_error.set_handler_fn(divide_by_zero_handler);
+        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        idt.stack_segment_fault.set_handler_fn(stack_segment_fault_handler);
+        idt.invalid_tss.set_handler_fn(invalid_tss_handler);
+        idt.segment_not_present.set_handler_fn(segment_not_present_handler);
         idt.breakpoint.set_handler_fn(breakpoint_handler);
         idt.general_protection_fault.set_handler_fn(gpf_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
@@ -70,6 +75,22 @@ lazy_static! {
 
         // ── int 0x80 syscall gate ──
         idt[SYSCALL_VECTOR as usize].set_handler_fn(syscall_handler);
+
+        // ── Generic/Unhandled interrupt handlers ──
+        for vector in 32..255 {
+            if vector == InterruptIndex::Timer as usize
+                || vector == InterruptIndex::Keyboard as usize
+                || vector == InterruptIndex::Mouse as usize
+                || vector == InterruptIndex::Ata1 as usize
+                || vector == InterruptIndex::Ata2 as usize
+                || vector == InterruptIndex::IpIReschedule as usize
+                || vector == InterruptIndex::IpITlbShootdown as usize
+                || vector == SYSCALL_VECTOR as usize
+            {
+                continue;
+            }
+            idt[vector].set_handler_fn(generic_interrupt_handler);
+        }
 
         idt
     };
@@ -95,6 +116,31 @@ fn send_eoi(vector: u8) {
 }
 
 // ── Exception handlers ──
+
+extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptStackFrame) {
+    println!("EXCEPTION: DIVIDE BY ZERO\n{:#?}", frame);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
+    println!("EXCEPTION: INVALID OPCODE\n{:#?}", frame);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn stack_segment_fault_handler(frame: InterruptStackFrame, error_code: u64) {
+    println!("EXCEPTION: STACK SEGMENT FAULT (code={:#x})\n{:#?}", error_code, frame);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn invalid_tss_handler(frame: InterruptStackFrame, error_code: u64) {
+    println!("EXCEPTION: INVALID TSS (code={:#x})\n{:#?}", error_code, frame);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn segment_not_present_handler(frame: InterruptStackFrame, error_code: u64) {
+    println!("EXCEPTION: SEGMENT NOT PRESENT (code={:#x})\n{:#?}", error_code, frame);
+    loop { x86_64::instructions::hlt(); }
+}
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
     println!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
@@ -388,4 +434,34 @@ extern "x86-interrupt" fn ata1_handler(_frame: InterruptStackFrame) {
 extern "x86-interrupt" fn ata2_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Ata2 as u8);
     send_eoi(InterruptIndex::Ata2 as u8);
+}
+
+extern "x86-interrupt" fn generic_interrupt_handler(frame: InterruptStackFrame) {
+    let vector = unsafe {
+        if crate::arch::x86_64::apic::LAPIC_VADDR != 0 {
+            let mut active = None;
+            for i in (0..8).rev() {
+                let val = crate::arch::x86_64::apic::read_lapic(crate::arch::x86_64::apic::LAPIC_ISR_BASE + i * 0x10);
+                if val != 0 {
+                    let bit = 31 - val.leading_zeros();
+                    active = Some((i * 32) as u8 + bit as u8);
+                    break;
+                }
+            }
+            active
+        } else {
+            None
+        }
+    };
+
+    if let Some(v) = vector {
+        crate::println!("UNHANDLED INTERRUPT: vector {} at rip={:?}", v, frame.instruction_pointer);
+        send_eoi(v);
+    } else {
+        unsafe {
+            if crate::arch::x86_64::apic::LAPIC_VADDR != 0 {
+                crate::arch::x86_64::apic::eoi();
+            }
+        }
+    }
 }

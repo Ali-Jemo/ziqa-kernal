@@ -186,70 +186,74 @@ impl Scheduler {
     }
 
     pub fn fork(&self, parent_pid: Pid) -> Option<Pid> {
-        let child_l4_frame = crate::memory::paging::cow_fork_parent();
-        let parent_arc = self.get_process(parent_pid)?;
-        let mut parent = parent_arc.lock();
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let child_l4_frame = crate::memory::paging::cow_fork_parent();
+            let parent_arc = self.get_process(parent_pid)?;
+            let mut parent = parent_arc.lock();
 
-        let child_pid = self.pid_allocator.lock().alloc_pid();
-        let mut child = Process::new(child_pid, parent.abi, parent.entry_point, parent.stack_top);
-        child.cpu_state = parent.cpu_state;
-        child.priority = parent.priority;
-        child.parent = parent_pid.0;
-        child.vmas = parent.vmas.clone();
-        child.binary_data = parent.binary_data.clone();
-        child.state = ProcessState::Ready;
-        child.fds.clone_from(&parent.fds);
+            let child_pid = self.pid_allocator.lock().alloc_pid();
+            let mut child = Process::new(child_pid, parent.abi, parent.entry_point, parent.stack_top);
+            child.cpu_state = parent.cpu_state;
+            child.priority = parent.priority;
+            child.parent = parent_pid.0;
+            child.vmas = parent.vmas.clone();
+            child.binary_data = parent.binary_data.clone();
+            child.state = ProcessState::Ready;
+            child.fds.clone_from(&parent.fds);
 
-        if let Some(frame) = child_l4_frame {
-            child.page_table_frame = Some(frame);
-        }
+            if let Some(frame) = child_l4_frame {
+                child.page_table_frame = Some(frame);
+            }
 
-        for vma in parent.vmas.iter_mut() {
-            if vma.flags.writable { vma.flags.copy_on_write = true; }
-        }
-        for vma in child.vmas.iter_mut() {
-            if vma.flags.writable { vma.flags.copy_on_write = true; }
-        }
+            for vma in parent.vmas.iter_mut() {
+                if vma.flags.writable { vma.flags.copy_on_write = true; }
+            }
+            for vma in child.vmas.iter_mut() {
+                if vma.flags.writable { vma.flags.copy_on_write = true; }
+            }
 
-        let mut table = self.process_table.write();
-        if let Some(slot) = table.find_free_slot() {
-            table.tasks[slot] = Some(Arc::new(Mutex::new(child)));
-            self.ready_queues.lock().push(child_pid, 0);
-            return Some(child_pid);
-        }
-        None
+            let mut table = self.process_table.write();
+            if let Some(slot) = table.find_free_slot() {
+                table.tasks[slot] = Some(Arc::new(Mutex::new(child)));
+                self.ready_queues.lock().push(child_pid, 0);
+                return Some(child_pid);
+            }
+            None
+        })
     }
 
     pub fn waitpid(&self, parent: Pid, child_pid: i64, _options: i32) -> Option<(Pid, i64)> {
-        let table = self.process_table.read();
-        for slot in table.tasks.iter() {
-            if let Some(proc_arc) = slot {
-                let proc = proc_arc.lock();
-                let matches = if child_pid == -1 {
-                    proc.parent == parent.0
-                } else {
-                    proc.pid.0 == child_pid as u64 && proc.parent == parent.0
-                };
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let table = self.process_table.read();
+            for slot in table.tasks.iter() {
+                if let Some(proc_arc) = slot {
+                    let proc = proc_arc.lock();
+                    let matches = if child_pid == -1 {
+                        proc.parent == parent.0
+                    } else {
+                        proc.pid.0 == child_pid as u64 && proc.parent == parent.0
+                    };
 
-                if matches {
-                    if let ProcessState::Exited(code) = proc.state {
-                        let pid = proc.pid;
-                        drop(proc);
-                        drop(table);
-                        
-                        let mut write_table = self.process_table.write();
-                        if let Some(idx) = write_table.tasks.iter().position(|t| {
-                            t.as_ref().map(|p| p.lock().pid == pid).unwrap_or(false)
-                        }) {
-                            write_table.tasks[idx] = None;
+                    if matches {
+                        if let ProcessState::Exited(code) = proc.state {
+                            let pid = proc.pid;
+                            drop(proc);
+                            drop(table);
+                            
+                            let mut write_table = self.process_table.write();
+                            if let Some(idx) = write_table.tasks.iter().position(|t| {
+                                t.as_ref().map(|p| p.lock().pid == pid).unwrap_or(false)
+                            }) {
+                                write_table.tasks[idx] = None;
+                                return Some((pid, code));
+                            }
                             return Some((pid, code));
                         }
-                        return Some((pid, code));
                     }
                 }
             }
-        }
-        None
+            None
+        })
     }
 
     pub fn send_signal(&self, target: Pid, signum: u8) -> bool {
@@ -297,12 +301,20 @@ impl Scheduler {
     }
 
     pub fn schedule(&self) {
+        let interrupts_enabled = x86_64::instructions::interrupts::are_enabled();
+        if interrupts_enabled {
+            x86_64::instructions::interrupts::disable();
+        }
+
         let next_pid = self.ready_queues.lock().pop_highest();
         
         if let Some(new_pid) = next_pid {
             let old_pid = self.current_pid();
             
             if old_pid == Some(new_pid) {
+                if interrupts_enabled {
+                    x86_64::instructions::interrupts::enable();
+                }
                 return;
             }
 
@@ -334,6 +346,10 @@ impl Scheduler {
                     );
                 }
             }
+        }
+
+        if interrupts_enabled {
+            x86_64::instructions::interrupts::enable();
         }
     }
 
@@ -372,33 +388,35 @@ impl Scheduler {
     }
 
     pub fn init_boot_process(&self) {
-        let pid = self.pid_allocator.lock().alloc_pid();
-        let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
-        let kstack = alloc::vec![0u8; 65536];
-        let top = kstack.as_ptr() as u64 + 65536;
-        proc.kernel_stack = Some(kstack);
-        proc.kernel_stack_top = top;
-        proc.state = ProcessState::Running;
-        
-        let mut table = self.process_table.write();
-        table.tasks[0] = Some(Arc::new(Mutex::new(proc)));
-        self.set_current_pid(Some(pid));
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let pid = self.pid_allocator.lock().alloc_pid();
+            let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
+            let kstack = alloc::vec![0u8; 65536];
+            let top = kstack.as_ptr() as u64 + 65536;
+            proc.kernel_stack = Some(kstack);
+            proc.kernel_stack_top = top;
+            proc.state = ProcessState::Running;
+            
+            let mut table = self.process_table.write();
+            table.tasks[0] = Some(Arc::new(Mutex::new(proc)));
+            self.set_current_pid(Some(pid));
+        });
     }
 }
 
 pub static SCHEDULER: Scheduler = Scheduler::new();
 
 pub fn tick() { SCHEDULER.tick(); }
-pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { SCHEDULER.spawn(abi, entry, stack) }
-pub fn spawn_kthread(entry: fn()) -> Option<Pid> { SCHEDULER.spawn_kthread(entry) }
-pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { SCHEDULER.spawn_elf(binary) }
-pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { SCHEDULER.get_process(pid).map(|p| f(&p.lock())) }
-pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { SCHEDULER.get_process(pid).map(|p| f(&mut p.lock())) }
-pub fn current_task() -> Option<Arc<Mutex<Process>>> { SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid)) }
+pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
+pub fn spawn_kthread(entry: fn()) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_kthread(entry)) }
+pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
+pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
+pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
+pub fn current_task() -> Option<Arc<Mutex<Process>>> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid))) }
 pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
-pub fn wake_sleeping(woken_mask: u64) { SCHEDULER.wake_sleeping_mask(woken_mask); }
+pub fn wake_sleeping(woken_mask: u64) { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }
 pub fn init() { SCHEDULER.init_boot_process(); }
-pub fn list_pids() -> Vec<Pid> { SCHEDULER.list_pids() }
+pub fn list_pids() -> Vec<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.list_pids()) }
 pub fn yield_now() { unsafe { core::arch::asm!("int 0x20"); } }
 
 /// Replace a process with a new ELF binary (execve).
@@ -409,55 +427,56 @@ pub fn exec_process(
     _args: &[&[u8]],
     _env: &[&[u8]],
 ) -> Result<(), &'static str> {
-    let registry = crate::init_abi_registry();
-    let plugin = registry.detect(binary).ok_or("exec: unrecognized binary format")?;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let registry = crate::init_abi_registry();
+        let plugin = registry.detect(binary).ok_or("exec: unrecognized binary format")?;
 
-    let proc_arc = SCHEDULER.get_process(pid).ok_or("exec: process not found")?;
-    let mut proc = proc_arc.lock();
+        let proc_arc = SCHEDULER.get_process(pid).ok_or("exec: process not found")?;
+        let mut proc = proc_arc.lock();
 
-    // Save old page table frame if using per-process tables
-    let old_frame = proc.page_table_frame;
+        // Save old page table frame if using per-process tables
+        let old_frame = proc.page_table_frame;
 
-    // Create a fresh page table for the new address space
-    if let Some(frame) = crate::memory::paging::create_process_page_table() {
-        proc.page_table_frame = Some(frame);
-    } else {
-        proc.page_table_frame = None;
-    }
+        // Create a fresh page table for the new address space
+        if let Some(frame) = crate::memory::paging::create_process_page_table() {
+            proc.page_table_frame = Some(frame);
+        } else {
+            proc.page_table_frame = None;
+        }
 
-    // Clear old VMAs
-    proc.vmas.clear();
+        // Clear old VMAs
+        proc.vmas.clear();
 
-    // Reset binary data for demand paging
-    proc.binary_data = binary.to_vec();
-    proc.cpu_state = crate::process::CpuState::zero();
+        // Reset binary data for demand paging
+        proc.binary_data = binary.to_vec();
+        proc.cpu_state = crate::process::CpuState::zero();
 
-    // Set up initial process state
-    proc.stack_top = VirtAddr::new(0x7FFF_FFFF_000);
-    proc.brk = 0x2000_0000;
-    proc.mmap_bump = 0x7000_0000;
+        // Set up initial process state
+        proc.stack_top = VirtAddr::new(0x7FFF_FFFF_000);
+        proc.brk = 0x2000_0000;
+        proc.mmap_bump = 0x7000_0000;
 
-    // Load the new ELF
-    plugin.load(binary, &mut proc).map_err(|_| "exec: ELF load failed")?;
+        // Load the new ELF
+        plugin.load(binary, &mut proc).map_err(|_| "exec: ELF load failed")?;
 
-    // Reinit process stack
-    init_process_stack(&mut proc);
+        // Reinit process stack
+        init_process_stack(&mut proc);
 
-    // Set the entry point in CPU state
-    proc.cpu_state.rip = proc.entry_point.as_u64();
-    proc.cpu_state.rsp = proc.stack_top.as_u64();
-    proc.cpu_state.cs = crate::arch::x86_64::gdt::user_code_selector().0 as u64;
-    proc.cpu_state.ss = crate::arch::x86_64::gdt::user_data_selector().0 as u64;
-    proc.cpu_state.rflags = 0x202;
+        // Set the entry point in CPU state
+        proc.cpu_state.rip = proc.entry_point.as_u64();
+        proc.cpu_state.rsp = proc.stack_top.as_u64();
+        proc.cpu_state.cs = crate::arch::x86_64::gdt::user_code_selector().0 as u64;
+        proc.cpu_state.ss = crate::arch::x86_64::gdt::user_data_selector().0 as u64;
+        proc.cpu_state.rflags = 0x202;
 
-    // Set argv/envp on the stack (simplified: just push null)
-    // A proper implementation would push argv/envp arrays onto the user stack
-    proc.state = ProcessState::Ready;
+        // Set argv/envp on the stack (simplified: just push null)
+        proc.state = ProcessState::Ready;
 
-    // Free old page table frames (best-effort)
-    let _ = old_frame;
+        // Free old page table frames (best-effort)
+        let _ = old_frame;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn init_kthread_stack(proc: &mut Process) {

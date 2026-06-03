@@ -97,8 +97,8 @@ const PCI_QUEUE_SIZE:     u16 = 0x0C;
 const PCI_QUEUE_SEL:      u16 = 0x0E;
 const PCI_QUEUE_NOTIFY:   u16 = 0x10;
 const PCI_DEVICE_STATUS:  u16 = 0x12;
-const PCI_ISR:            u16 = 0x14;
-const PCI_DEVICE_CFG:     u16 = 0x18;
+const PCI_ISR:            u16 = 0x13;
+const PCI_DEVICE_CFG:     u16 = 0x14;
 
 // ── VirtIO device status bits ─────────────────────────────────────────────
 const STATUS_RESET:       u8 = 0x00;

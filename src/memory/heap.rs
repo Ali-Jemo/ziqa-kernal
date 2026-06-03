@@ -12,6 +12,7 @@ pub const HEAP_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
+
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,

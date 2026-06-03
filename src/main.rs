@@ -18,7 +18,36 @@ extern crate alloc;
 
 entry_point!(kernel_main);
 
+fn print_hex(val: u64) {
+    let chars = b"0123456789ABCDEF";
+    let mut buf = [0u8; 18];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for i in 0..16 {
+        buf[17 - i] = chars[((val >> (i * 4)) & 0xF) as usize];
+    }
+    unsafe {
+        let mut serial = uart_16550::SerialPort::new(0x3f8);
+        serial.init();
+        let _ = core::fmt::Write::write_str(&mut serial, core::str::from_utf8_unchecked(&buf));
+        let _ = core::fmt::Write::write_str(&mut serial, "\n");
+    }
+}
+
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    unsafe {
+        let mut serial = uart_16550::SerialPort::new(0x3f8);
+        serial.init();
+        let _ = core::fmt::Write::write_str(&mut serial, "=== KERNEL_MAIN ENTRY ===\n");
+        let _rsp_val: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) _rsp_val);
+        let _ = core::fmt::Write::write_str(&mut serial, "rsp at entry: ");
+    }
+    unsafe {
+        let rsp: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) rsp);
+        print_hex(rsp);
+    }
     // 1. Core Init
     ziqa_kernel::init(boot_info);
     print_banner();

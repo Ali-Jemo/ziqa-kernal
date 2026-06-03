@@ -2,6 +2,7 @@ use super::device::ZiqaDevice;
 /// TCP/IP stack powered by smoltcp
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::boxed::Box;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::{dhcpv4, tcp, udp};
 use smoltcp::time::Instant;
@@ -14,9 +15,9 @@ const GATEWAY: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
 const MAC: [u8; 6] = [0x52, 0x54, 0x12, 0x34, 0x56, 0x78];
 
 pub struct TcpIpStack {
-    pub iface: Interface,
+    pub iface: Box<Interface>,
     pub device: ZiqaDevice,
-    pub sockets: SocketSet<'static>,
+    pub sockets: Box<SocketSet<'static>>,
     pub dhcp_handle: SocketHandle,
     pub dhcp_configured: bool,
     pub dns_servers: Vec<Ipv4Address>,
@@ -29,7 +30,7 @@ impl TcpIpStack {
         let hw_addr = HardwareAddress::Ethernet(EthernetAddress(MAC));
         let config = Config::new(hw_addr);
         // Set random/default ports and keep packet buffers simple
-        let mut iface = Interface::new(config, &mut device, Self::now());
+        let mut iface = Box::new(Interface::new(config, &mut device, Self::now()));
 
         // Set IP address
         iface.update_ip_addrs(|addrs| {
@@ -39,7 +40,7 @@ impl TcpIpStack {
         // Set default gateway
         iface.routes_mut().add_default_ipv4_route(GATEWAY).ok();
 
-        let mut sockets = SocketSet::new(vec![]);
+        let mut sockets = Box::new(SocketSet::new(vec![]));
         let dhcp_handle = sockets.add(dhcpv4::Socket::new());
 
         Self {
@@ -60,7 +61,7 @@ impl TcpIpStack {
     pub fn poll(&mut self) -> bool {
         let timestamp = Self::now();
         let changed = self.iface
-            .poll(timestamp, &mut self.device, &mut self.sockets);
+            .poll(timestamp, &mut self.device, &mut *self.sockets);
         self.poll_dhcp();
         changed
     }
