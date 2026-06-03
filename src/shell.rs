@@ -1049,15 +1049,15 @@ impl Shell {
     }
 
     fn cmd_ps(&mut self, _args: &[String]) -> i32 {
-        use crate::process::scheduler::SCHEDULER;
-        let rows: alloc::vec::Vec<(u64, crate::process::ProcessState, u8, u64, crate::process::AbiKind, u64)> = {
-            SCHEDULER.list_pids().into_iter().filter_map(|pid| {
-                SCHEDULER.get_process(pid).map(|p_arc| {
-                    let p = p_arc.lock();
-                    (p.pid.0, p.state, p.priority, p.parent, p.abi, p.entry_point.as_u64())
-                })
-            }).collect()
-        };
+        let pids = crate::process::scheduler::list_pids();
+        let mut rows = alloc::vec::Vec::new();
+        for pid in pids {
+            if let Some(row) = crate::process::scheduler::with_process(pid, |p| {
+                (p.pid.0, p.state, p.priority, p.parent, p.abi, p.entry_point.as_u64())
+            }) {
+                rows.push(row);
+            }
+        }
         println!("{}{}  PROCESSES  ({} total){}", C_YELLOW, C_BOLD, rows.len(), C_RESET);
         println!("  ┌──────┬──────────────┬──────┬────────┬──────────┬────────────────┐");
         println!("  │ {}PID  │ STATE        │ PRI  │ PARENT │ ABI      │ ENTRY          {}│", C_CYAN, C_RESET);
