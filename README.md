@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License"/>
   <img src="https://img.shields.io/badge/arch-x86__64-purple" alt="x86_64"/>
   <img src="https://img.shields.io/badge/status-experimental-yellow" alt="Status"/>
+  <img src="https://img.shields.io/badge/version-0.1--dev-blueviolet" alt="Version 0.1"/>
   <img src="https://img.shields.io/badge/documentation-graph-brightgreen" alt="Knowledge Graph"/>
   <img src="https://img.shields.io/badge/Maintained%3F-yes-green.svg" alt="Maintenance"/>
   <img src="https://img.shields.io/badge/graph_benchmark-75x-brightgreen" alt="75x Token Reduction"/>
@@ -19,9 +20,12 @@
 ---
 
 ## 🔬 Executive Summary
-ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **Instant Capability Revocation**, **A-Tier Scalable Architecture**, **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF "Obsidian-Tier" VM (Maps/Helpers/Stack)**, **io_uring**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
+ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **SMP + APIC**, **ACPI/PCI enumeration**, **Instant Capability Revocation**, **A-Tier Scalable Architecture**, **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF "Obsidian-Tier" VM (Maps/Helpers/Stack/Tail Calls/Tracepoints)**, **io_uring**, **Per-Process Page Tables + COW Fork**, **VMA-based Memory Management**, **PS/2 Mouse**, **FAT32 (read-only)**, **Userspace Drivers (DRM/Net)**, **TCP/UDP Socket Stack**, **NWCC Desktop Demo (6 apps)**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
 
 **Key Architectural Insights (May 2026):**
+- **SMP + APIC (Complete)**: Symmetric Multi-Processing with full AP boot via INIT-SIPI-SIPI protocol (16-bit → 64-bit trampoline), per-CPU structs via GS.base MSR (64-CPU support), Local APIC + I/O APIC interrupt management, IPI delivery (reschedule, TLB shootdown), and PIT-calibrated APIC timer. See [`src/arch/x86_64/smp.rs`](src/arch/x86_64/smp.rs) and [`src/arch/x86_64/apic.rs`](src/arch/x86_64/apic.rs).
+- **ACPI + PCI Enumeration (Complete)**: Full ACPI table parsing (RSDP/MADT/FADT via the `acpi` crate) for processor topology and interrupt routing. Legacy PCI bus scan (CF8/CFC), BAR decoding, and class-based device discovery. [`src/drivers/acpi.rs`](src/drivers/acpi.rs), [`src/drivers/pci.rs`](src/drivers/pci.rs).
+- **Device Driver Model (Complete)**: Generic `Driver` trait with PCI match/init lifecycle and a global `DeviceManager` that auto-probes discovered hardware. Block devices registered by name in a shared `BlockRegistry`. [`src/drivers/device_manager.rs`](src/drivers/device_manager.rs), [`src/drivers/block_registry.rs`](src/drivers/block_registry.rs).
 - **Instant Capability Revocation (A+ Tier)**: Implemented a recursive **Revocation Tree**. Parents can instantly "pull the plug" on delegated capabilities, severing access system-wide across all descendant processes in real-time.
 - **A-Tier Scalability**: Transitioned from global kernel locks to **Fine-Grained Locking**. IPC, VFS, and Scheduler now support parallel execution across multiple CPUs, eliminating the 'Big Kernel Lock' bottleneck.
 - **Core Abstractions**: Shell (44), Editor (23), Scheduler (23), and ZiqaFs (23) form the central nervous system — the graph reveals these as the most structurally coupled components.
@@ -31,6 +35,54 @@ ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_6
 - **Community Boundaries**: 122 architectural communities identified with a published refactoring map in [`docs/architecture/community-boundaries.md`](docs/architecture/community-boundaries.md).
 
 It is **not** a production-ready OS, but an architectural laboratory for exploring the limits of safety-critical systems.
+
+---
+
+## 🩹 What We've Fixed
+
+| Issue | Fix |
+| :--- | :--- |
+| **VGA color mapping** | Corrected syntax error in VGA color palette initialization for proper CP437-safe rendering. |
+| **Linear framebuffer (LFB)** | Enabled and initialized LFB for high-res graphics; fixed hardware blitting path. |
+| **nwm-test compilation** | Resolved linker errors and compilation failures; ensured kernel threads have proper stacks. |
+| **nwm-test compositor hang** | Fixed deadlock by spawning compositor and client as separate tasks instead of blocking on the same thread. |
+| **Missing SHM/IPC syscalls** | Implemented missing native SHM and IPC syscalls; synchronized Zig client ABI with kernel. |
+| **Compositor heap exhaustion** | Resolved heap exhaustion panic by pre-registering the demo surface. |
+| **Kernel heap size** | Increased kernel heap to 32MiB to support compositor backbuffers and prevent OOM. |
+| **Recursive syscall dispatch** | Removed recursive `dispatch_syscall` from `LinuxAbiPlugin` to prevent stack overflow. |
+| **SMP/APIC/Memory compilation errors** | Fixed kernel compilation errors across SMP, APIC, and Memory subsystems during eBPF integration. |
+| **Scheduler hardening** | Added `without_interrupts` blocks and interrupt-safe scheduling to prevent race conditions. |
+| **Boot sequence logging** | Added extensive serial logging to `init.rs` and `main.rs` for debugging boot failures. |
+| **VirtIO PCI register offsets** | Corrected VirtIO network device PCI register offsets for proper device detection. |
+| **Exit handling in syscall dispatch** | After `sys_exit`, drops process lock and calls `SCHEDULER.schedule()` to prevent return trampoline resuming a dead process. |
+
+---
+
+## ✨ What We've Added
+
+| Feature | Description |
+| :--- | :--- |
+| **SMP (Multi-Processor)** | AP boot via INIT-SIPI-SIPI protocol, per-CPU data via GS.base MSR, IPI reschedule/TLB shootdown, APIC timer. |
+| **ACPI Table Parsing** | RSDP/MADT/FADT parsing for processor topology and interrupt routing (KernelAcpiHandler). |
+| **PCI Enumeration** | Full CF8/CFC bus scan (0–255 × 0–31 × 0–7), BAR decoding, class-based device discovery. |
+| **Device Driver Model** | Generic `Driver` trait with PCI match/init lifecycle, global `DeviceManager`, block device registry. |
+| **PS/2 Mouse Driver** | 3-byte packet decode, signed delta clamping, integrated with NWCC desktop for cursor/window interaction. |
+| **FAT32 (Read-Only)** | Pure Rust FAT32: MBR/BPB parsing, cluster chain walking, short-name directory parsing, recursive VFS mount. |
+| **Socket Stack (TCP/UDP)** | Socket state machine via smoltcp, connect/send/recv/close, AF_UNIX loopback, UDP datagrams. |
+| **eBPF Hash Maps** | Linear-probing hash map type with insert/update/delete, shared via `Arc<BpfMap>`. |
+| **eBPF Tail Calls** | `bpf_tail_call` with ProgArray map type for chaining eBPF programs. |
+| **eBPF Tracepoints** | Attach/detach/run for SyscallEntry/SyscallExit tracepoints with verifier gating. |
+| **eBPF Bounded Loops** | Instruction-limit-based loop detection instead of strict backward-jump ban. |
+| **eBPF Helpers** | `bpf_get_current_comm`, `bpf_probe_read` for safe kernel memory access. |
+| **COW Fork** | Full copy-on-write fork with per-process page table cloning, `handle_cow_fault()`. |
+| **VMA System** | `Vma` struct with `find_free_range()`, replacing static region model for mmap/brk. |
+| **NWCC Desktop Demo** | 80×25 VGA text-mode window manager with 6 apps, mouse/keyboard interaction, double-buffered rendering, animated starfield, taskbar, start menu. |
+| **Userspace DRM Driver** | Skeleton userspace DRM driver with IPC ioctl dispatch and MMIO mapping via `syscall_dev_map`. |
+| **Userspace Net Driver** | Skeleton userspace VirtIO-Net driver with port I/O and IRQ wait via `syscall_dev_irq_wait`. |
+| **sys_stat / sys_pipe** | Finalized POSIX syscall additions for filesystem stat and inter-process pipe communication. |
+| **sys_waitpid status** | Corrected child exit status reporting in `sys_waitpid`. |
+| **POSIX ABI Cleanup** | Synchronized waitpid options, fixed compiler issues, consolidated POSIX implementation. |
+| **Debug Instrumentation** | Serial logging across boot sequence, missing exception handlers, `without_interrupts` scheduler hardening. |
 
 ---
 
@@ -143,19 +195,27 @@ Following a comprehensive forensic audit, the project status has been updated to
 
 | Component | Maturity | Engineering Assessment |
 | :--- | :--- | :--- |
-| **Microkernel** | **Hardened** | **Ring 3 Userspace Drivers.** Graphics (DRM) and Network drivers transitioned to Ring 3. Hardware Capability system (`DeviceIo`) enforces secure access to MMIO and I/O ports. |
+| **SMP** | **Complete** | **Multi-Processor Boot & IPI Infrastructure.** AP boot via INIT-SIPI-SIPI (16-bit→64-bit real-mode trampoline at 0x7000). Per-CPU structs via GS.base MSR with O(1) lock-free access. Up to 64 CPUs. Dedicated IPI vectors for rescheduling (0x34) and TLB shootdown (0x35) with busy-wait ACK. APIC timer calibration against the PIT. |
+| **APIC** | **Complete** | **Local APIC + I/O APIC.** Memory-mapped register access, interrupt redirection (IRQ→vector→APIC ID), masking/unmasking, four IPI modes (INIT/SIPI/Fixed/Broadcast), timer setup. Dedicated `enable_lapic_in_bsp()` via IA32_APIC_BASE MSR. |
+| **ACPI** | **Complete** | **Table Parsing Stack.** RSDP search (EBDA/BIOS), RSDT/XSDT walk, MADT parsing (Local APIC address, I/O APIC list with GSI bases, interrupt source overrides, legacy PIC presence), processor topology extraction. Global `ACPI_INFO` singleton. |
+| **PCI** | **Complete** | **Legacy PCI Bus Enumeration.** CF8/CFC config space access, bus 0–255 × device 0–31 × function 0–7 scan, vendor/device ID, class/subclass/prog-if, BAR decoding (6 BARs), interrupt line/pin. `find_device()`, `find_by_class()`, bus mastering helpers. |
+| **Device Model** | **Complete** | **Generic Driver Framework.** `Driver` trait (`name()`, `pci_match()`, `init()`) with PCI auto-probe. Global `DeviceManager` iterates drivers in order, first match wins. Block devices registered by name in `BlockRegistry`. Drivers: VirtIO Net, VirtIO Block (new + legacy). |
+| **Microkernel** | **Hardened** | **Ring 3 Userspace Drivers.** Graphics (DRM) and Network drivers transitioned to Ring 3. Hardware Capability system (`DeviceIo`) enforces secure access to MMIO and I/O ports. Userspace driver skeletons for DRM (IPC-based ioctl dispatch) and VirtIO-Net (port I/O + IRQ wait). |
 | **Boot & HAL** | **Functional** | Reliable BIOS/UEFI boot. **Three-stage VGA boot pipeline with CP437-safe animation.** |
 | **Capability** | **A+ Tier** | **Instant Recursive Revocation.** Implemented a system-wide Revocation Tree tracking parent-child capability delegation. `sys_cap_revoke` instantly severs access for all descendants across all processes. |
-| **Scheduler** | **A-Tier** | **Scalable Decoupled Architecture.** Transitioned from global Mutex to fine-grained per-process locking + RwLock process table. Supports multi-core scheduling without global lock contention. |
+| **Scheduler** | **A-Tier** | **Scalable Decoupled Architecture.** Transitioned from global Mutex to fine-grained per-process locking + RwLock process table. Supports multi-core scheduling without global lock contention. Interrupt-safe scheduling with `without_interrupts` blocks. |
 | **Scalability** | **Hardened** | **Eliminated Big Kernel Lock.** Fine-grained locking implemented across IPC (per-channel), VFS (per-file lookup), and Scheduler. Ready for massive multi-core scaling. |
 | **Privilege** | **Hardened** | Full Ring 3 user/kernel isolation complete. TSS/context-switch hardening, ELF memory mapping audit, and `rflags` sanitization (IOPL/TF/DF/NT/RF/VM/AC cleared, IF enforced) across all kernel→user paths (`iretq`, `sysretq`, Rust handler). Paranoid register zeroing on every transition. **SMEP (CR4.20), SMAP (CR4.21), UMIP (CR4.11)** enabled after CPUID detection with CR4 write-back verification. `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets. |
-| **Syscall ABI** | **Complete** | 111+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation completed. Userspace process launch (`spawn_elf`, `exec_process`), `sys_brk` with page allocation, `sys_execve` with VFS binary loading, and int 0x80 rewritten in assembly (replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline). |
-| **Memory** | **Enhanced** | **VMA Tracking System.** Refactored memory management from static regions to a flexible VMA collection. **`sys_mmap` now uses VMA manager** for robust address range allocation. **`sys_brk` implemented** with page-alignment validation for dynamic heap expansion. |
-| **VirtIO** | **Experimental** | Added `virtio-drivers` crate support for comparative driver development alongside custom VirtIO net/block drivers. |
+| **Syscall ABI** | **Complete** | 115+ syscalls (incl. native ZIQA_CAP/SIG handlers); full libposix ABI foundation (finalized `sys_waitpid` status reporting, `sys_stat`, `sys_pipe`). Userspace process launch (`spawn_elf`, `exec_process`), `sys_brk` with page allocation, `sys_execve` with VFS binary loading, and int 0x80 rewritten in assembly (replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline). |
+| **Memory** | **Enhanced** | **Per-Process Page Tables + COW Fork + VMA.** Full per-process address spaces with shared kernel entries (indices 256–511). COW fork: `make_user_leaf_readonly()`, `clone_user_table_tree()`, `cow_fork_parent()`, `handle_cow_fault()`. VMA collection replacing static regions. `sys_mmap` uses VMA manager. `sys_brk` with page-aligned heap expansion. |
+| **VirtIO** | **Experimental** | `virtio-drivers` crate MMIO transport for block devices alongside custom VirtIO net/block drivers. Comparative driver development path. |
 | **Hybrid FFI** | **Functional** | Rust → Zig C-ABI blitter for framebuffer ops; linked via build.rs + build.zig. |
-| **eBPF VM** | **Obsidian-Tier** | Advanced VM with **Array/Hash Maps**, **512B VM Stack**, **SMP-aware helpers**, and **64-bit immediate loads**. Supports stateful tracing and kernel-space data aggregation. |
+| **eBPF VM** | **Obsidian-Tier** | Advanced VM with **Array/Hash/RingBuf/ProgArray Maps**, **512B VM Stack**, **SMP-aware helpers** (`bpf_get_smp_processor_id`), **64-bit immediate loads**, **bounded loops**, **tail calls** (`bpf_tail_call` w/ ProgArray), **tracepoint attach/detach** (SyscallEntry/SyscallExit), **kCFI verification**, and **`bpf_probe_read`** for safe kernel memory access. |
+| **FAT32** | **Experimental** | **Read-only FAT32 filesystem driver** (pure Rust, no external crate). MBR partition scanning, BPB parsing, cluster chain traversal, short-name directory entries. Recursive VFS mounting under `/fat`. |
+| **PS/2 Mouse** | **Complete** | **PS/2 Mouse Driver.** 3-byte packet decode with button state (left/right), signed delta X/Y clamping to 1920×1080. Integrated with the NWCC desktop for cursor control. |
+| **Socket Stack** | **Experimental** | **TCP/UDP socket layer** via smoltcp. Socket state machine (Created→Bound→Listening→Connected→Closed). `AF_UNIX` loopback pairs, `AF_INET`/`SOCK_STREAM` TCP with connect/send/recv/close, `SOCK_DGRAM` UDP. Lazy socket creation. |
 | **Shell** | **Modernized** | Zero-alloc prompt, real parser (quotes/escapes/env expansion), 40+ builtins via command registry, job control (`bg`/`fg`/`jobs`), tab completion, arrow history, ANSI colors. |
-| **Graphics** | **Demos** | DOOM fire + Tetris on bare metal; DRM/KMS driver for future compositor support. |
+| **Graphics** | **Demos** | DOOM fire + Tetris on bare metal; **NWCC Desktop Demo** — 80×25 VGA text-mode floating window manager with 6 application views (Terminal, System Monitor, File Manager, Network Dashboard, Text Editor, About), full mouse/keyboard interaction, double-buffered rendering with dirty-rectangle flush, animated starfield desktop, taskbar, start menu, and scanline effect. DRM/KMS driver for future compositor support. |
 
 > **Audit Conclusion**: ZiqaKernel is a sophisticated architectural scaffold. It is ideally suited for **OS research, compiler-assisted OS design, and hardware-software interface experimentation**.
 
@@ -205,7 +265,9 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 
 ### 1. Memory Model
 *   **4-Level Paging**: Standard x86_64 paging implementation.
-*   **Per-Process Page Tables**: Each user process gets its own L4 page table with kernel entries (256–511) shared by pointer and user entries (0–255) cloned for COW fork.
+*   **Per-Process Page Tables**: Each user process gets its own L4 page table with kernel entries (256–511) shared by pointer and user entries (0–255) cloned for COW fork. `create_process_page_table()` allocates and initializes per-process L4 frames.
+*   **COW Fork**: Full copy-on-write fork support — `make_user_leaf_readonly()` clears writable bits on all user pages, `clone_user_table_tree()` recursively copies user entries, `cow_fork_parent()` orchestrates the sequence (readonly + clone + TLB flush), and `handle_cow_fault()` allocates a new frame, copies data, and remaps as writable.
+*   **VMA System**: `Vma` struct (`start`, `end`, `flags`, file-backing info) with `find_free_range()` for mmap allocation. Per-process VMA collections replace the old static region model.
 *   **Pre-Mapped ELF Segments**: `map_process_regions()` allocates physical frames and copies ELF binary data into new user pages at load time — no demand paging needed for initial code/data.
 *   **Safe Access**: `copy_from_user` routine validates all user-space memory access via page-table walkers.
 *   **Demand Paging**: Placeholder mechanism for lazy page allocation and COW resolution.
@@ -223,6 +285,7 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 *   **Signals**: SignalState with default dispositions and custom action handlers.
 *   **User Process Launch**: `spawn_elf()` loads a static ELF binary into a new per-process page table, resets CPU state and kernel stack, and context-switches to Ring 3.
 *   **`exec_process()`**: Full address-space replacement — clears old mappings, creates a fresh page table, loads a new ELF, resets kernel stack and register state.
+*   **COW Fork**: Full fork support via per-process page tables. Parent pages marked read-only, child gets cloned user entries, and faults trigger `handle_cow_fault()` to allocate+copy frames.
 *   **Exit Handling**: After `sys_exit` dispatch, the handler drops the process lock and calls `SCHEDULER.schedule()`, preventing any return trampoline from resuming a dead process.
 
 <div align="center">
@@ -270,33 +333,72 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 *   **Capability Space**: Per-process capability tokens with grant, revoke, and permission checking.
 *   **Resource Kinds**: Different resource types (files, devices, IPC) with read/write/full permissions.
 
-### 8. IPC Mechanisms
+### 8. SMP / Multi-Processor
+*   **AP Boot**: Real-mode trampoline at 0x7000 transitioning 16-bit → 32-bit → 64-bit long mode, following the INIT-SIPI-SIPI protocol. APs enter `ap_entry()` and initialize their GDT, APIC timer, then idle-schedule.
+*   **Per-CPU Data**: `PerCpu` struct (cpu_id, apic_id, current_pid, kernel stack, CR3, ticks) accessed O(1) lock-free via GS.base MSR. Supports up to 64 CPUs tracked in a static pointer array.
+*   **IPI Infrastructure**: Dedicated IPI vectors for rescheduling (0x34) and TLB shootdown (0x35). `send_reschedule_ipi_all()`, `tlb_shootdown_all()` with per-CPU flag + busy-wait ACK. `handle_tlb_shootdown()` flushes remote TLB.
+*   **APIC Timer**: PIT-calibrated per-CPU APIC timer for local interrupt generation. See [`src/arch/x86_64/apic.rs`](src/arch/x86_64/apic.rs), [`src/arch/x86_64/smp.rs`](src/arch/x86_64/smp.rs), [`src/arch/x86_64/per_cpu.rs`](src/arch/x86_64/per_cpu.rs).
+
+### 9. ACPI & PCI Enumeration
+*   **ACPI Tables**: RSDP search (EBDA/BIOS area 0xE0000–0xFFFFF), RSDT/XSDT walk. MADT parsing for Local APIC address, I/O APIC list with GSI bases, interrupt source overrides, legacy PIC presence. Processor topology (BSP + AP list with APIC IDs). [`src/drivers/acpi.rs`](src/drivers/acpi.rs).
+*   **PCI Bus Scan**: Legacy CF8/CFC config space access enumerating buses 0–255 × devices 0–31 × functions 0–7. Reads vendor/device ID, class/subclass, BARs (6 per function), interrupt line/pin. `find_device()`, `find_by_class()`, BAR decoding helpers. [`src/drivers/pci.rs`](src/drivers/pci.rs).
+
+### 10. Device Driver Model
+*   **Driver Trait**: `Driver { name(), pci_match(), init() }` — drivers register via `DEVICE_MANAGER.register_driver()`. `scan_and_match()` iterates PCI devices and probes each driver in order; first match wins.
+*   **Block Registry**: `BLOCK_DEVICES` global registry maps device names (`"vda"`, `"hda"`) to `Arc<dyn BlockDevice>`. `register()`, `get()`, `first()`, `print_devices()`. Decouples filesystem code from specific block drivers.
+*   **VirtIO Block (New)**: MMIO-based VirtIO block driver via the `virtio-drivers` crate. Matches vendor 0x1AF4 / device 0x1001, maps MMIO BAR, initializes `VirtIOBlk`, registers as `"vda"`.
+*   **Userspace Drivers**: Skeleton DRM driver (IPC-based ioctl dispatch with MMIO mapping via `syscall_dev_map`) and VirtIO-Net driver (port I/O + IRQ wait via `syscall_dev_irq_wait`), demonstrating the microkernel driver isolation model. See [`src/userspace/drm_driver.rs`](src/userspace/drm_driver.rs), [`src/userspace/net_driver.rs`](src/userspace/net_driver.rs).
+
+### 11. IPC Mechanisms
 *   **Channels**: Bounded buffer channels with send/recv operations.
 *   **Signals**: Signal queue with push/pop.
 *   **Shared Memory**: SHM regions with real physical frame mapping and cross-process attachment.
 *   **io_uring**: High-performance asynchronous ring buffer for I/O and IPC.
 
-### 9. Unified Zero-Copy Pipeline (Fast Path)
+### 12. Unified Zero-Copy Pipeline (Fast Path)
 Implemented a "Single-Copy" architecture that unifies **io_uring**, **SHM**, and **VirtIO** drivers:
 - **Direct DMA**: Network packets and disk blocks are DMA'd directly into Shared Memory (SHM) regions.
 - **Bypassing CPU**: Data flows from hardware to the compositor/database without the CPU ever touching the payload.
 - **Fast-Path Syscalls**: Native `shm_get`, `shm_at`, and `io_uring_submit` syscalls provide a low-latency path for high-throughput userspace apps.
 - **Performance**: Achieves near-hardware speeds for network-to-graphics data flow.
 
-### 10. DOOM Fire Effect
+### 13. FAT32 Filesystem
+A pure Rust (no external crate) read-only FAT32 driver ([`src/fs/fat32.rs`](src/fs/fat32.rs)):
+- **MBR Parsing**: Scans 4 primary partition entries for FAT32 types (0x0B/0x0C CHS/LBA).
+- **BPB Parsing**: Bytes per sector, sectors per cluster, FAT regions, root cluster.
+- **Cluster Chain Walking**: 4-byte FAT entries (masked 28-bit), chain traversal with EOC detection (≥ 0x0FFFFFF8) and infinite-loop guard.
+- **Directory Parsing**: Short 8.3 names (skips LFNs, deleted entries 0xE5, end sentinel 0x00), extracts name, directory flag, first cluster, file size.
+- **Recursive Mounting**: `walk_and_mount()` recursively walks the directory tree and mounts files into the VFS at a configurable prefix (e.g., `/fat`).
+
+### 14. PS/2 Mouse Driver
+Full PS/2 mouse initialization and interrupt handler ([`src/drivers/ps2_mouse.rs`](src/drivers/ps2_mouse.rs)):
+- **Initialization**: Enable auxiliary device (port 0x64 command 0xA8), enable interrupts, set defaults (0xF6), enable reporting (0xF4).
+- **3-Byte Packet Decode**: Button flags (left/right), signed delta X/Y clamped to 1920×1080.
+- **Public API**: `get_mouse_pos()` → (i32, i32), `get_mouse_btn()` → u8 bitmask.
+- Integrated with the NWCC desktop for cursor control and window interaction.
+
+### 15. Socket Stack (TCP/UDP)
+Network socket layer ([`src/net/socket.rs`](src/net/socket.rs)) built on smoltcp:
+- **Socket State Machine**: Created → Bound → Listening → Connected → Closed. Supports `AF_UNIX` (loopback pairs) and `AF_INET`/`SOCK_STREAM` (TCP) + `SOCK_DGRAM` (UDP).
+- **TCP Operations**: `tcp_connect()` (3-way handshake with 5s timeout), `tcp_send()` (`send_slice`), `tcp_recv()` (`recv_slice` with polling), graceful `close()` (FIN).
+- **UDP Operations**: `udp_send()` / `udp_recv()` with sender metadata, lazy socket creation.
+- **Listener API**: `find_listener()` / `find_any_listener()` for incoming connection acceptance.
+- Global singleton `SOCKETS: Mutex<SocketManager>`.
+
+### 16. DOOM Fire Effect
 A classic fire propagation algorithm ([`src/doom.rs`](src/doom.rs)) using the Zig blitter for the hot-path fire step and rendering:
 - 37-color palette: black → red → orange → yellow → white
 - Renders to either a real framebuffer or ASCII serial output
 - Driven by the Zig `zig_fill_rect` / `zig_blit_bitmap` routines
 
-### 10. Tetris Game
+### 17. Tetris Game
 Full graphical Tetris ([`src/tetris.rs`](src/tetris.rs)) running on bare metal:
 - 7 standard Tetris pieces (I, O, T, S, Z, J, L)
 - Calls the optimized Zig blitter FFI for clear/draw/fill_rect
 - Downsampled from a virtual 32-bit framebuffer to the VGA text screen at `0xb8000`
 - Score tracking, piece locking, line clearing
 
-### 11. Text Editor
+### 18. Text Editor
 A nano-like console text editor ([`src/edit.rs`](src/edit.rs)) with:
 - Open, edit, and save files on ZiqaFS
 - Cursor navigation (arrows, home, end)
@@ -304,31 +406,33 @@ A nano-like console text editor ([`src/edit.rs`](src/edit.rs)) with:
 - Modified-file indicator, scroll support
 - 80×24 character grid
 
-### 12. DRM/KMS Driver
+### 19. DRM/KMS Driver
 A minimal Direct Rendering Manager / Kernel Mode Setting driver ([`src/drivers/drm.rs`](src/drivers/drm.rs)) providing the core ioctls needed for graphics compositors:
 - `DRM_IOCTL_MODE_FB_CREATE` / `DESTROY` — framebuffer object management
 - `DRM_IOCTL_MODE_PAGE_FLIP` — vsync page flipping
 - `DRM_IOCTL_MODE_GETRESOURCES` — enumerate CRTCs, connectors, encoders
 - Pixel formats: XRGB8888, ARGB8888, RGB565
 
-### 13. eBPF "Obsidian-Tier" VM
+### 20. eBPF "Obsidian-Tier" VM
 Extended Berkeley Packet Filter subsystem ([`src/ebpf/`](src/ebpf/)) for running safe, verified kernel-space programs:
-- **Verifier** — kCFI (Control-Flow Integrity), bounded loop detection, and **stack-relative bounds checking** (ensuring safe R10 access).
+- **Verifier** — kCFI (Control-Flow Integrity), bounded loop detection (instruction limit, not strict backward-jump ban), and **stack-relative bounds checking** (safe R10 access).
 - **VM Infrastructure** — interpreter for verified eBPF bytecode with:
     - **512B Local Stack** for local variables and structure passing.
-    - **Array & Hash Maps** for stateful tracing and cross-CPU data aggregation.
+    - **4 Map Types**: `Array` (O(1) index), `Hash` (linear-probing with used-byte flag), `RingBuf` (raw byte buffer), `ProgArray` (for tail calls) — all shared via `Arc<BpfMap>`.
+    - **Tail Calls**: `bpf_tail_call` with `ProgArray` map type, allowing eBPF program chaining.
     - **64-bit Immediates** (`LD_IMM_64`) for pointer manipulation.
-    - **Advanced Helpers**: `bpf_map_lookup/update`, `bpf_get_current_pid_tgid`, `bpf_get_smp_processor_id`, and `bpf_probe_read`.
-- **Use cases**: SMP-aware tracing, networking filters, and real-time security auditing.
+    - **Advanced Helpers**: `bpf_map_lookup/update`, `bpf_get_current_pid_tgid`, `bpf_get_smp_processor_id`, `bpf_get_current_comm`, and `bpf_probe_read` (safe kernel memory reads).
+- **Tracepoint Attachment**: `EbpfAttachments` singleton with `attach()` (verifies before adding), `detach()` (removes by index), and `run()` (executes all programs matching a `TracepointType`: `SyscallEntry`/`SyscallExit`).
+- **Use cases**: SMP-aware tracing, dynamic kernel instrumentation, networking filters, and real-time security auditing.
 
-### 14. Performance Suite
+### 21. Performance Suite
 Built-in benchmarking utilities ([`src/perf.rs`](src/perf.rs)) using x86_64 RDTSC:
 - Cycle-accurate measurement of scheduler, memory, and I/O operations
 - Page cache hit/miss benchmarks
 - Heap profiling (allocation count, current/peak usage, fragmentation)
 - Heap profiler tracks allocation sites
 
-### 15. Shell Features
+### 22. Shell Features
 The interactive shell ([`src/shell.rs`](src/shell.rs) — ~2120 lines) provides a full-featured command environment:
 - **Real parser** — character-level tokenizer with single/double quote handling, backslash escapes, `|`/`>`/`<`/`&` operators, and `Err("unclosed quote")` on parse errors
 - **Environment variable expansion** — `$?`, `$$`, `$VAR`, `${VAR}` during parse phase
@@ -405,34 +509,45 @@ make zig-check   # Verify Zig blitter compiles independently
 
 ---
 
-## 📈 Updated Technical Roadmap (Based on Graph Analysis)
+## 📈 Technical Roadmap
 
-### Immediate Priorities (P0)
-1.  ~~**Privilege Separation**: Add Ring 3 user/kernel isolation to fix broken privilege model.~~ ✅ **COMPLETED (May 2026)**
-2.  ~~**Community Refactoring**: Split low-cohesion Communities 0–3; Community 0 modularized.~~ ✅ **COMPLETED**
-3.  ~~**Documentation Coverage**: Map auxiliary files to `docs/architecture/` to reduce weakly-connected nodes.~~ ✅ **COMPLETED**
-4.  ~~**Zig Integration**: Expand Zig FFI surface beyond graphics blitter.~~ ✅ **COMPLETED**
+### Completed Milestones (May–June 2026)
 
-### Medium Term (P1)
-1.  **Capability Space Enforcement**: ✅ **COMPLETED** — Enforced `ResourceKind` checks on all syscall paths (Files, IPC, Network, DeviceIO).
-2.  **Bridge Point Refactoring**: ✅ **COMPLETED** — Monolithic `kernel_main` refactored into modular initialization routines.
-3.  **Cross-Community Validation**: ✅ **COMPLETED** — All 19 inferred block access paths in ZiqaFS verified, documented with ARCH annotations, and formalized in [`docs/architecture/ziqafs-block-access-audit.md`](docs/architecture/ziqafs-block-access-audit.md).
-4.  **Input System Maturity**: ✅ **COMPLETED** — Interrupt-driven console input with buffer support and extended navigation (Delete key) added.
-5.  **Wayland Compositor Support**: ✅ **COMPLETED** — Native Wayland-Compatible Compositor (NWCC) implemented with SHM-backed buffer sharing and high-performance **VGA-Downsampled architecture**.
-6.  **Unified Zero-Copy Pipeline**: ✅ **COMPLETED (May 2026)** — Unified `io_uring` + `SHM` + `VirtIO` into a single high-performance Fast Path. Enabled direct DMA from hardware to shared memory regions.
-7.  **Per-Process Page Tables + ELF Pre-Mapping**: ✅ **COMPLETED** — `map_process_regions()` allocates physical frames and copies ELF binary data into per-process page tables at load time.
-8.  **`sys_brk` with Page Allocation**: ✅ **COMPLETED** — `handle_brk()` maps user-accessible RW pages when the program break expands, replacing the no-op stub.
-9.  **`sys_execve` + `exec_process`**: ✅ **COMPLETED** — Full address-space replacement via `exec_process()`; `sys_execve` reads a binary from VFS and dispatches to the ELF loader.
-10. **int 0x80 Assembly Rewrite**: ✅ **COMPLETED** — Replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline compatible with per-process kernel stacks and context switches.
-11. **Exit Handling in Syscall Dispatch**: ✅ **COMPLETED** — After `sys_exit`, the handler drops the process lock and calls `SCHEDULER.schedule()`, preventing return to a dead process.
+- **SMP + APIC** — Multi-processor boot (INIT-SIPI-SIPI), per-CPU data via GS.base, IPI infrastructure (reschedule + TLB shootdown), APIC timer.
+- **ACPI + PCI** — Full RSDP/MADT/FADT table parsing, PCI CF8/CFC bus enumeration with BAR decoding.
+- **Device Driver Model** — Generic `Driver` trait with PCI match/init lifecycle, block device registry, VirtIO block (MMIO).
+- **PS/2 Mouse Driver** — 3-byte packet decode, signed delta, 1920×1080 clamping, integrated with NWCC.
+- **FAT32 (Read-Only)** — Pure Rust FAT32: MBR/BPB parsing, cluster chains, short-name directories, recursive VFS mounting.
+- **Socket Stack** — TCP/UDP via smoltcp, socket state machine, AF_UNIX loopback, connect/send/recv/close.
+- **eBPF Maps** — Array, Hash (linear-probing), RingBuf, ProgArray map types with `Arc<BpfMap>` sharing.
+- **eBPF Tail Calls** — `bpf_tail_call` with ProgArray dispatch, bounded loops via instruction limit.
+- **eBPF Tracepoints** — Attach/detach/run lifecycle for `SyscallEntry`/`SyscallExit` tracepoints.
+- **NWCC Desktop Demo** — 80×25 VGA text-mode window manager with 6 apps, mouse/keyboard interaction, double-buffered rendering, starfield desktop, taskbar, start menu.
+- **COW Fork** — Per-process page table cloning, `make_user_leaf_readonly()`, `clone_user_table_tree()`, `handle_cow_fault()`.
+- **VMA System** — `Vma` struct with `find_free_range()` for mmap allocation, replacing static region model.
+- **Userspace Drivers (Skeleton)** — DRM driver (IPC ioctl dispatch + MMIO mapping) and VirtIO-Net driver (port I/O + IRQ wait).
+- **Debug Instrumentation** — Extensive serial logging in boot sequence, missing exception handlers, interrupt-safe scheduler hardening with `without_interrupts` blocks.
+- **POSIX Finalization** — `sys_waitpid` status reporting, `sys_stat`, `sys_pipe`, POSIX ABI cleanup.
+- **SMEP/SMAP/UMIP** — CR4 bits enabled after CPUID, `copy_from_user`/`copy_to_user` with STAC/CLAC, CR4 write-back verification.
+- **Privilege Separation** — Full Ring 3 user/kernel isolation, `rflags` sanitization, register zeroing on all kernel→user transitions.
+- **A-Tier Scalability** — Big Kernel Lock eliminated; fine-grained locking in IPC (per-channel), VFS (per-file), Scheduler (per-process).
+- **Microkernel Phase 1** — `DeviceIo` capability, hardware access syscalls (port I/O, MMIO map, IRQ wait), kernel DRM gateway.
+- **Capability Space Enforcement** — `ResourceKind` checks on all syscall paths (Files, IPC, Network, DeviceIO).
+- **Instant Recursive Revocation** — Revocation Tree with `sys_cap_revoke` system-wide capability severance.
+- **Unified Zero-Copy Pipeline** — `io_uring` + `SHM` + `VirtIO` DMA bypassing CPU for network-to-graphics flow.
+- **Syscall ABI** — 115+ syscalls, int 0x80 assembly rewrite, `exec_process`, `sys_brk`, `sys_execve`.
+- **int 0x80 Assembly Rewrite** — Replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline.
+- **eBPF "Obsidian-Tier" VM** — kCFI verifier, 512B stack, maps, helpers, bounded loops, tail calls.
+- **NWCC Compositor** — SHM-backed buffer sharing, VGA-downsampled architecture, window dragging.
 
-### Long Term (P2)
-1. **SMEP/SMAP Enforcement**: ✅ **COMPLETED (May 2026)** — SMEP (CR4.20), SMAP (CR4.21), and UMIP (CR4.11) enabled after CPUID detection; `copy_from_user`/`copy_to_user` with page-table validation + STAC/CLAC brackets; CR4 write-back verification; `rt_sigaction` hardened.
-2. **A-Tier Scalability Refactor**: ✅ **COMPLETED (May 2026)** — Eliminated the Big Kernel Lock. Refactored Scheduler (decoupled MLFQ), VFS (concurrent table), and IPC (per-channel locking) for multi-core scaling.
-3. **Microkernel Transition**: ✅ **PHASE 1 COMPLETE** — Implemented `ZIQA_DEV_PORT_IN/OUT`, `ZIQA_DEV_MAP`, and `ZIQA_DEV_IRQ_WAIT` hardware access syscalls. Established `DeviceIo` capability. Refactored kernel DRM driver into a minimal microkernel gateway. Scaffolded userspace DRM driver in `src/userspace/drm_driver.rs`.
-4. **Performance Tooling Decoupling**: ✅ **COMPLETED** — `pagecache::bench()` encapsulates hit/miss measurements; `perf.rs` no longer imports `PageKey`, `cache_page`, or `get_cached_page`.
-5. ~~**ELF Loader Isolation**: Improve ELF loader cohesion by better encapsulating binary format parsing.~~ ✅ **COMPLETED** — `ElfBytes` cursor extracted; `parse_header`/`parse_phdr` are pure (no I/O or logging); all logging confined to `load_elf` boundary.
-6. **Multi-architecture Support**: Explore aarch64 or RISC-V as additional targets.
+### Future Work (P2)
+
+1. **Userspace Drivers (Production)** — Complete the DRM and VirtIO-Net userspace drivers with real virtqueue management, packet processing, and GPU operation support.
+2. **Multi-architecture Support** — Explore aarch64 or RISC-V as additional targets beyond x86_64.
+3. **Network Stack Maturity** — Fully wire up TCP listener/accept path, integrate with the shell and filesystem for a complete networking experience.
+4. **FAT32 Write Support** — Extend the FAT32 driver with write capabilities (file creation, deletion, modification).
+5. **eBPF Production Hardening** — Add concurrent map access safety, RINGBUF consumer API, wider tracepoint coverage across all syscalls.
+6. **Performance Optimization** — Profile and optimize the COW fork path, page table cloning, and TLB shootdown latency for real workloads.
 
 
 <div align="center">
@@ -512,4 +627,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: May 30, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | Boot pipeline: Stage III | A-Tier Scalability: ✅ complete | Rust + Zig hybrid | 111+ syscalls | 40+ shell commands | Ring 3 hardening: ✅ complete | SMEP/SMAP/UMIP: ✅ complete | ZiqaFS audit: ✅ complete | eBPF Obsidian-Tier: ✅ complete | P1/P2 roadmap: ✅ complete | int 0x80 assembly rewrite: ✅ complete | Per-process page tables + ELF pre-mapping: ✅ complete | sys_execve + exec_process: ✅ complete</sup>
+<sup>Last updated: June 3, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | SMP + APIC: ✅ complete | ACPI/PCI: ✅ complete | Device Model: ✅ complete | PS/2 Mouse: ✅ complete | FAT32: ✅ experimental | Socket Stack: ✅ experimental | eBPF Obsidian-Tier: ✅ complete | NWCC Desktop Demo: ✅ demo | COW Fork + VMA: ✅ complete | Userspace Drivers: ✅ skeleton | 115+ syscalls | 40+ shell commands | Ring 3 + SMEP/SMAP/UMIP: ✅ complete | A-Tier Scalability: ✅ complete | Microkernel Phase 1: ✅ complete</sup>

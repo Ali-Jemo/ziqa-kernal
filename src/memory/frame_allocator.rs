@@ -21,13 +21,14 @@ unsafe fn active_level_4_table(offset: VirtAddr) -> &'static mut PageTable {
 
 /// A bump allocator over the bootloader memory map.
 ///
-/// **Key fix**: Pre-computes all usable frames into a cached list at init time
-/// to avoid O(n²) re-iteration and ensures each frame is only handed out once.
-/// Also skips the first `SKIP_INITIAL` frames to avoid handing out frames that
-/// the bootloader may have used for its own page tables.
+/// **Key fix**: Tracks the current region index and current address in that
+/// region to provide O(1) allocation time, avoiding O(n²) re-iteration on every
+/// allocation call. Also skips the first `SKIP_INITIAL` frames to protect page
+/// tables created by the bootloader.
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
-    next: usize,
+    current_region_idx: usize,
+    current_addr: u64,
 }
 
 /// Number of initial usable frames to skip.
@@ -38,26 +39,42 @@ const SKIP_INITIAL: usize = 512;
 
 impl BootInfoFrameAllocator {
     pub unsafe fn init(memory_map: &'static MemoryMap) -> Self {
-        BootInfoFrameAllocator {
+        let mut allocator = BootInfoFrameAllocator {
             memory_map,
-            // Start past the frames the bootloader is likely using
-            next: SKIP_INITIAL,
+            current_region_idx: 0,
+            current_addr: 0,
+        };
+        // Skip the first SKIP_INITIAL frames
+        for _ in 0..SKIP_INITIAL {
+            allocator.allocate_frame();
         }
-    }
-
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        self.memory_map
-            .iter()
-            .filter(|r| r.region_type == MemoryRegionType::Usable)
-            .flat_map(|r| (r.range.start_addr()..r.range.end_addr()).step_by(4096))
-            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+        allocator
     }
 }
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        while self.current_region_idx < self.memory_map.len() {
+            let region = &self.memory_map[self.current_region_idx];
+            if region.region_type == MemoryRegionType::Usable {
+                let start = region.range.start_addr();
+                let end = region.range.end_addr();
+                if self.current_addr < start || self.current_addr >= end {
+                    self.current_addr = start;
+                }
+                
+                // Align to 4096 page boundary
+                self.current_addr = (self.current_addr + 4095) & !4095;
+                
+                if self.current_addr < end {
+                    let frame_addr = self.current_addr;
+                    self.current_addr += 4096;
+                    return Some(PhysFrame::containing_address(PhysAddr::new(frame_addr)));
+                }
+            }
+            self.current_region_idx += 1;
+            self.current_addr = 0;
+        }
+        None
     }
 }
