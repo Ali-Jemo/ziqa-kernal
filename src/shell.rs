@@ -1619,12 +1619,14 @@ impl Shell {
         println!("\n\x1b[33m  ▸ PROCESSES\x1b[0m");
         use crate::process::scheduler::SCHEDULER;
         let proc_rows: alloc::vec::Vec<(u64, crate::process::ProcessState, u8)> = {
-            SCHEDULER.list_pids().into_iter().filter_map(|pid| {
-                SCHEDULER.get_process(pid).map(|p_arc| {
-                    let p = p_arc.lock();
-                    (p.pid.0, p.state, p.priority)
-                })
-            }).collect()
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                SCHEDULER.list_pids().into_iter().filter_map(|pid| {
+                    SCHEDULER.get_process(pid).map(|p_arc| {
+                        let p = p_arc.lock();
+                        (p.pid.0, p.state, p.priority)
+                    })
+                }).collect()
+            })
         };
         println!("    Total: \x1b[32m{}\x1b[0m", proc_rows.len());
         for (pid, state, pri) in &proc_rows {

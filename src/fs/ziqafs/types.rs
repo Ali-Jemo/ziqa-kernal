@@ -11,7 +11,7 @@ pub const INODE_TABLE_BLOCK: u32 = 3;
 pub const JOURNAL_BLOCK: u32 = 4;
 pub const FIRST_DATA_BLOCK: u32 = 5;
 
-pub const INODE_COUNT: u32 = 64;
+pub const INODE_COUNT: u32 = 56;
 pub const ROOT_INODE: u32 = 1;
 
 pub const INODE_MODE_FILE: u16 = 0o100000;

@@ -110,7 +110,8 @@ impl ZiqaFs {
         buf.fill(0);
         write_blocks(&*device, INODE_TABLE_BLOCK, 1, &*buf)?;
 
-        Self::create_root_dir(&*device, &sb)?;
+        let mut sb = sb;
+        Self::create_root_dir(&*device, &mut sb)?;
 
         let mut fs = Self { device, sb };
         fs.sb.flags = BMAP_CLEAN;
@@ -138,10 +139,9 @@ impl ZiqaFs {
 
     // ── Root dir init (used only during format) ───────────────────────────────
 
-    fn create_root_dir(device: &dyn BlockDevice, sb: &Superblock) -> Result<(), AbiError> {
-        let mut sb_mut = *sb;
-        let root_id = inode::alloc_inode(device, &mut sb_mut, INODE_MODE_DIR)?;
-        let root_block = block::alloc_data_block(device, &mut sb_mut)?;
+    fn create_root_dir(device: &dyn BlockDevice, sb: &mut Superblock) -> Result<(), AbiError> {
+        let root_id = inode::alloc_inode(device, sb, INODE_MODE_DIR)?;
+        let root_block = block::alloc_data_block(device, sb)?;
         let mut root_inode = inode::read_inode(device, root_id)?;
         root_inode.blocks[0] = root_block;
         root_inode.size = BLOCK_SIZE as u32;
