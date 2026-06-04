@@ -137,8 +137,7 @@ fn init_services() {
             let disk = entry.device.clone();
             println!(" ~ root disk .......................... /dev/{} ({})", entry.name, entry.driver);
 
-            // Prefer host-editable FAT32 when present. This avoids formatting a
-            // FAT32 development disk as ZiqaFS before we get a chance to mount it.
+            // 1. Try to mount FAT32 (host-editable)
             #[cfg(feature = "fat32")]
             let fat32_mounted = {
                 use ziqa_kernel::fs::fat32;
@@ -162,12 +161,21 @@ fn init_services() {
             #[cfg(not(feature = "fat32"))]
             let fat32_mounted = false;
 
-            if !fat32_mounted {
-                let ziqafs = ZiqaFs::mount(disk.clone())
-                    .unwrap_or_else(|_| ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS"));
+            // 2. Try to mount ZiqaFS
+            let ziqafs_result = ZiqaFs::mount(disk.clone());
+            
+            if let Ok(ziqafs) = ziqafs_result {
                 ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
                 ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
-                println!(" ~ ZiqaFS ............................. mounted");
+                println!(" ~ ZiqaFS ............................. mounted at /disk");
+            } else if !fat32_mounted {
+                // Disk is blank or unrecognized, and no FAT32 data to protect. Safe to format.
+                let ziqafs = ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS");
+                ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
+                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                println!(" ~ ZiqaFS ............................. formatted and mounted at /disk");
+            } else {
+                println!(" ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)");
             }
         } else {
             println!(" ~ block devices ...................... none found; skipping disk FS");

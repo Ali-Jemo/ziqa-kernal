@@ -30,6 +30,9 @@
 .gemini/
 .antigravitycli/
 .poolside/
+.omx/
+.venv/
+.graphify_venv/
 
 # Web frontend dependencies and build output
 web/node_modules/
