@@ -162,7 +162,7 @@ fn parse_wasm(data: &[u8]) -> Result<WasmInstance, &'static str> {
 
     let mut offset = 8;
     let mut functions = Vec::new();
-    let mut memory_size_pages = 1usize;
+    let mut memory_size_pages = 0usize;
     let mut data_segments = Vec::new();
     let mut start_func_idx = None;
     let mut code_bodies = Vec::new();
@@ -665,9 +665,9 @@ fn execute_function(
             if module == "wasi_snapshot_preview1" && name == "proc_exit" {
                 let status = args[0] as i64;
                 println!("[WASM Runtime] proc_exit called with status {}", status);
-                let current_pid = x86_64::instructions::interrupts::without_interrupts(|| {
-                    crate::process::scheduler::current_task().map(|t| t.lock().pid)
-                });
+                // Read pid under without_interrupts so the lock is dropped
+                // before we re-enable IRQs and call exit_process.
+                let current_pid = crate::process::scheduler::with_current_task(|p| p.pid);
                 if let Some(pid) = current_pid {
                     x86_64::instructions::interrupts::without_interrupts(|| {
                         crate::process::scheduler::SCHEDULER
@@ -951,13 +951,10 @@ fn execute_function(
 
 // ─── Entry Point Helper ─────────────────────────────────────────────────────
 pub extern "C" fn wasm_interpreter_entry() {
-    let binary_opt: Option<alloc::vec::Vec<u8>> = x86_64::instructions::interrupts::without_interrupts(|| {
-        if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
-            Some(proc_arc.lock().binary_data.clone())
-        } else {
-            None
-        }
-    });
+    // Clone the binary out under the process lock with interrupts disabled.
+    // The clone happens inside the closure, so the lock is released before
+    // we proceed to interpret the module.
+    let binary_opt: Option<alloc::vec::Vec<u8>> = crate::process::scheduler::with_current_task(|p| p.binary_data.clone());
 
     let binary = match binary_opt {
         Some(b) => b,
@@ -998,13 +995,10 @@ pub extern "C" fn wasm_interpreter_entry() {
     }
 
     // Terminate process
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let sched = &crate::process::scheduler::SCHEDULER;
-        let current_pid = crate::process::scheduler::current_task_mut().map(|t| t.lock().pid);
-        if let Some(pid) = current_pid {
-            sched.exit_process(pid, exit_code);
-        }
-    });
+    let current_pid = crate::process::scheduler::with_current_task(|p| p.pid);
+    if let Some(pid) = current_pid {
+        crate::process::scheduler::SCHEDULER.exit_process(pid, exit_code);
+    }
 }
 
 // ─── Standard Demo WASM Binary ───────────────────────────────────────────────

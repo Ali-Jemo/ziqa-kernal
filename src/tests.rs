@@ -229,85 +229,101 @@ pub fn run_all() {
             if let Some(id) = chan {
                 let ok = ipc::send(id, Pid(1), b"hello").is_ok();
                 let msg = ipc::recv(id);
-                ok && msg.is_ok() && &msg.unwrap().data[..5] == b"hello"
+                let result = ok && msg.is_ok() && &msg.unwrap().data[..5] == b"hello";
+                ipc::destroy_channel(id);
+                result
             } else {
                 false
             }
         });
 
         test!("pipe: recv on empty channel returns error", {
-            let chan = crate::ipc::create_channel().unwrap();
-            crate::ipc::recv(chan).is_err()
+            let id = crate::ipc::create_channel().unwrap();
+            let result = crate::ipc::recv(id).is_err();
+            crate::ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: sender pid preserved", {
             use crate::ipc;
             use crate::process::Pid;
-            let chan = ipc::create_channel().unwrap();
-            ipc::send(chan, Pid(42), b"test").unwrap();
-            let msg = ipc::recv(chan).unwrap();
-            msg.sender == Pid(42)
+            let id = ipc::create_channel().unwrap();
+            ipc::send(id, Pid(42), b"test").unwrap();
+            let msg = ipc::recv(id).unwrap();
+            let result = msg.sender == Pid(42);
+            ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: multiple messages queued", {
             use crate::ipc;
             use crate::process::Pid;
-            let chan = ipc::create_channel().unwrap();
-            ipc::send(chan, Pid(1), b"first").unwrap();
-            ipc::send(chan, Pid(2), b"second").unwrap();
-            let m1 = ipc::recv(chan).unwrap();
-            let m2 = ipc::recv(chan).unwrap();
-            &m1.data[..5] == b"first" && &m2.data[..6] == b"second"
+            let id = ipc::create_channel().unwrap();
+            ipc::send(id, Pid(1), b"first").unwrap();
+            ipc::send(id, Pid(2), b"second").unwrap();
+            let m1 = ipc::recv(id).unwrap();
+            let m2 = ipc::recv(id).unwrap();
+            let result = &m1.data[..5] == b"first" && &m2.data[..6] == b"second";
+            ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: channel queue fills and blocks", {
             use crate::ipc;
             use crate::process::Pid;
-            let chan = ipc::create_channel().unwrap();
+            let id = ipc::create_channel().unwrap();
             let mut full = false;
             for _ in 0..17 {
-                if ipc::send(chan, Pid(1), b"x").is_err() {
+                if ipc::send(id, Pid(1), b"x").is_err() {
                     full = true;
                     break;
                 }
             }
-            full // Should be full after 17 messages (capacity 16)
+            let result = full; // Should be full after 17 messages (capacity 16)
+            ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: message data truncated at MSG_MAX", {
             use crate::process::Pid;
-            let chan = crate::ipc::create_channel().unwrap();
+            let id = crate::ipc::create_channel().unwrap();
             let large_msg = vec![0xAAu8; 512]; // Larger than MSG_MAX (256)
-            crate::ipc::send(chan, Pid(1), &large_msg).unwrap();
-            let msg = crate::ipc::recv(chan).unwrap();
-            msg.len == 256
+            crate::ipc::send(id, Pid(1), &large_msg).unwrap();
+            let msg = crate::ipc::recv(id).unwrap();
+            let result = msg.len == 256;
+            crate::ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: recv after full queue", {
             use crate::ipc;
             use crate::process::Pid;
-            let chan = ipc::create_channel().unwrap();
+            let id = ipc::create_channel().unwrap();
             // Fill the queue
             for i in 0..16 {
-                let _ = ipc::send(chan, Pid(i), b"x");
+                let _ = ipc::send(id, Pid(i), b"x");
             }
             // Recv one to make space
-            ipc::recv(chan).unwrap();
+            ipc::recv(id).unwrap();
             // Now we should be able to send again
-            ipc::send(chan, Pid(99), b"after").is_ok()
+            let result = ipc::send(id, Pid(99), b"after").is_ok();
+            ipc::destroy_channel(id);
+            result
         });
 
         test!("pipe: different senders in queue", {
             use crate::ipc;
             use crate::process::Pid;
-            let chan = ipc::create_channel().unwrap();
-            ipc::send(chan, Pid(1), b"from1").unwrap();
-            ipc::send(chan, Pid(2), b"from2").unwrap();
-            ipc::send(chan, Pid(3), b"from3").unwrap();
-            let m1 = ipc::recv(chan).unwrap();
-            let m2 = ipc::recv(chan).unwrap();
-            let m3 = ipc::recv(chan).unwrap();
-            m1.sender == Pid(1) && m2.sender == Pid(2) && m3.sender == Pid(3)
+            let id = ipc::create_channel().unwrap();
+            ipc::send(id, Pid(1), b"from1").unwrap();
+            ipc::send(id, Pid(2), b"from2").unwrap();
+            ipc::send(id, Pid(3), b"from3").unwrap();
+            let m1 = ipc::recv(id).unwrap();
+            let m2 = ipc::recv(id).unwrap();
+            let m3 = ipc::recv(id).unwrap();
+            let result = m1.sender == Pid(1) && m2.sender == Pid(2) && m3.sender == Pid(3);
+            ipc::destroy_channel(id);
+            result
         });
 
         // ── Network loopback tests ───────────────────────────────────────────────

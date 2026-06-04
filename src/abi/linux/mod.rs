@@ -672,14 +672,29 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 | "/etc/passwd"
                 | "/etc/localtime"
         );
+    let o_creat = (flags & 0x40) != 0;
+    if o_creat {
+        if !ctx
+            .process
+            .capabilities
+            .has_permission(ResourceKind::File, true, false)
+        {
+            return Err(AbiError::PermissionDenied);
+        }
+        let mut vfs = crate::fs::vfs::VFS.write();
+        if !vfs.exists(path_str) {
+            vfs.create(path_str);
+        }
+    }
 
     if is_known
+        || o_creat
         || crate::fs::vfs::VFS
             .read()
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
-        let fd = ctx.process.fds.alloc_file(&tmp[..n], flags).unwrap_or(3);
+        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).unwrap_or(3);
         return Ok(fd as u64);
     }
     Ok((-2_i64) as u64) // -ENOENT
@@ -1098,14 +1113,29 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 | "/etc/passwd"
                 | "/etc/localtime"
         );
+    let o_creat = (flags & 0x40) != 0;
+    if o_creat {
+        if !ctx
+            .process
+            .capabilities
+            .has_permission(ResourceKind::File, true, false)
+        {
+            return Err(AbiError::PermissionDenied);
+        }
+        let mut vfs = crate::fs::vfs::VFS.write();
+        if !vfs.exists(path_str) {
+            vfs.create(path_str);
+        }
+    }
 
     if is_known
+        || o_creat
         || crate::fs::vfs::VFS
             .read()
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
-        let fd = ctx.process.fds.alloc_file(&tmp[..n], flags).unwrap_or(3);
+        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).unwrap_or(3);
         return Ok(fd as u64);
     }
     Ok((-2_i64) as u64) // -ENOENT
@@ -1660,9 +1690,29 @@ fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_symlink(target, linkpath) → 0 (stub)
 fn sys_symlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let _target_addr = ctx.args[0] as *const u8;
-    let _link_addr = ctx.args[1] as *const u8;
-    Ok(0) // pretend symlink succeeded
+    let target_addr = ctx.args[0] as *const u8;
+    let link_addr = ctx.args[1] as *const u8;
+    let mut link_tmp = [0u8; 128];
+    let ln = (0..127)
+        .take_while(|&i| unsafe { *link_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(link_addr, link_tmp.as_mut_ptr(), ln);
+    }
+    let raw = core::str::from_utf8(&link_tmp[..ln]).unwrap_or("");
+    if raw.is_empty() {
+        return Ok((-22_i64) as u64);
+    }
+    let _link_path = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
+    let mut target_tmp = [0u8; 128];
+    let tn = (0..127)
+        .take_while(|&i| unsafe { *target_addr.add(i) != 0 })
+        .count();
+    unsafe {
+        core::ptr::copy_nonoverlapping(target_addr, target_tmp.as_mut_ptr(), tn);
+    }
+    let _target_str = core::str::from_utf8(&target_tmp[..tn]).unwrap_or("");
+    Ok(0) // stub: no symlink support in VFS yet
 }
 
 /// sys_statfs(path, buf) → 0 / -ENOENT
@@ -1681,9 +1731,9 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
     let raw = core::str::from_utf8(&tmp[..n]).unwrap_or("");
     let path_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
-    let exists = crate::fs::vfs::VFS.read().exists(path_str);
+    let exists = crate::fs::vfs::VFS.read().exists(&path_str);
     if !exists {
-        if !crate::fs::vfs::VFS.read().is_dir(path_str) {
+        if !crate::fs::vfs::VFS.read().is_dir(&path_str) {
             return Ok((-2_i64) as u64); // -ENOENT
         }
     }

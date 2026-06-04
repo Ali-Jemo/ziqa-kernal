@@ -115,7 +115,7 @@ impl CapabilityToken {
 }
 
 /// Maximum capabilities a single process can hold
-const MAX_CAPS_PER_PROCESS: usize = 64;
+const MAX_CAPS_PER_PROCESS: usize = 32;
 
 /// A process's capability space — the set of all capabilities it holds
 pub struct CapabilitySpace {

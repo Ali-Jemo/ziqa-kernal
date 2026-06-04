@@ -174,16 +174,22 @@ fn init_services() {
         }
     }
 
-    // Microkernel Transition: Grant Hardware Access Capability
-    if let Some(proc) = ziqa_kernel::process::scheduler::current_task() {
-        let mut p = proc.lock();
+    // Microkernel Transition: Grant Hardware Access Capability.
+    // Must run inside the closure-based helper so the process lock is
+    // held with interrupts DISABLED — otherwise the APIC timer ISR
+    // spins on the same lock and deadlocks the kernel.
+    let granted = ziqa_kernel::process::scheduler::with_current_task_mut(|p| {
         p.capabilities.grant(
             ziqa_kernel::capability::ResourceKind::DeviceIo,
             ziqa_kernel::capability::Permissions::full(),
             0,
             None,
         );
+    });
+    if granted.is_some() {
         println!(" ~ DeviceIo Capability ................ granted to init");
+    } else {
+        println!(" ~ DeviceIo Capability ................ NOT granted (no current task)");
     }
 
     set_fg(Color::White);

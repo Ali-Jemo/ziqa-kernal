@@ -377,11 +377,14 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
     ];
 
     let registry = crate::init_abi_registry();
-    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
-        let mut proc = proc_arc.lock();
+    // Use the safe closure-based helper so the process lock is held with
+    // interrupts DISABLED for the duration of the syscall. Holding the lock
+    // across a non-trivial dispatch (file I/O, IPC, eBPF) is a recipe for a
+    // timer-ISR deadlock; the old `current_task_mut()` path did exactly that.
+    let outcome = crate::process::scheduler::with_current_task_mut(|proc| {
         proc.cpu_state = *frame;
 
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, &mut proc);
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
         let handler = crate::abi::handler::KernelSyscallHandler;
 
         let res = crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx);
@@ -402,19 +405,19 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         // Sanitize rflags before returning to Ring 3:
         proc.cpu_state.rflags &= 0xFFF88AFF;
         proc.cpu_state.rflags |= 0x200;
-        *frame = proc.cpu_state;
 
-        // If process exited, schedule another process instead of returning
-        // to the assembly trampoline (which would try to return to user mode).
-        // We drop the process lock first, then schedule.
-        let pid = proc.pid;
         let is_exited = matches!(proc.state, crate::process::ProcessState::Exited(_));
-        drop(proc);
-        drop(proc_arc);
+        (proc.cpu_state, is_exited)
+    });
+
+    if let Some((cpu_state, is_exited)) = outcome {
+        *frame = cpu_state;
 
         if is_exited {
+            // The process lock was already released by `with_current_task_mut`.
+            // Schedule another process instead of returning to user mode.
             crate::process::scheduler::SCHEDULER.schedule();
-            // If schedule returns, we have no more work to do — loop halt
+            // If schedule returns, we have no more work to do — loop halt.
             loop { x86_64::instructions::hlt(); }
         }
     }

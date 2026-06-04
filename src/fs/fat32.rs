@@ -971,6 +971,120 @@ fn write_dir_entry(
     Ok(())
 }
 
+fn find_dir_entry<'a>(
+    disk: &dyn BlockDevice,
+    bpb: &Fat32Bpb,
+    dir_cluster: u32,
+    name: &str,
+) -> Option<(u32, usize, u32, u32)> {
+    let chain = collect_cluster_chain(disk, bpb, dir_cluster);
+    let bytes_per_cluster =
+        (bpb.sectors_per_cluster as usize) * (bpb.bytes_per_sector as usize);
+    let mut lfn_buf: Vec<[u8; 32]> = Vec::new();
+
+    for &cluster in &chain {
+        let sector = bpb.cluster_to_sector(cluster);
+        let mut cluster_buf = vec![0u8; bytes_per_cluster];
+
+        if disk
+            .read_sectors(sector, bpb.sectors_per_cluster as u32, &mut cluster_buf)
+            .is_err()
+        {
+            break;
+        }
+
+        let mut offset = 0;
+        while offset + 32 <= bytes_per_cluster {
+            let raw = &cluster_buf[offset..offset + 32];
+            let first_byte = raw[0];
+
+            if first_byte == 0x00 {
+                return None;
+            }
+
+            if first_byte == 0xE5 {
+                lfn_buf.clear();
+                offset += 32;
+                continue;
+            }
+
+            let attr = raw[11];
+
+            if attr == ATTR_LFN {
+                let mut buf = [0u8; 32];
+                buf.copy_from_slice(raw);
+                lfn_buf.push(buf);
+                offset += 32;
+                continue;
+            }
+
+            if (attr & ATTR_VOLUME_ID) != 0 {
+                lfn_buf.clear();
+                offset += 32;
+                continue;
+            }
+
+            let name_str = core::str::from_utf8(&raw[0..8])
+                .unwrap_or("")
+                .trim_end();
+            let ext_str = core::str::from_utf8(&raw[8..11])
+                .unwrap_or("")
+                .trim_end();
+
+            let short_name = if ext_str.is_empty() {
+                alloc::string::String::from(name_str)
+            } else {
+                let mut s = alloc::string::String::from(name_str);
+                s.push('.');
+                s.push_str(ext_str);
+                s
+            };
+
+            let full_name = if !lfn_buf.is_empty() {
+                decode_lfn_name(&lfn_buf).unwrap_or_else(|| short_name.to_ascii_lowercase())
+            } else {
+                short_name.to_ascii_lowercase()
+            };
+
+            if full_name.eq_ignore_ascii_case(name) {
+                let cluster_hi = u16::from_le_bytes([raw[20], raw[21]]);
+                let cluster_lo = u16::from_le_bytes([raw[26], raw[27]]);
+                let first_cluster = ((cluster_hi as u32) << 16) | (cluster_lo as u32);
+                let file_size = u32::from_le_bytes([raw[28], raw[29], raw[30], raw[31]]);
+                return Some((cluster, offset, first_cluster, file_size));
+            }
+
+            lfn_buf.clear();
+            offset += 32;
+        }
+    }
+
+    None
+}
+
+fn free_cluster_chain(
+    disk: &dyn BlockDevice,
+    bpb: &Fat32Bpb,
+    start_cluster: u32,
+) -> Result<(), Fat32Error> {
+    let max_clusters = (bpb.sectors_per_fat_32 as usize) * (bpb.bytes_per_sector as usize) / 4;
+    let limit = if max_clusters > 0 { max_clusters } else { 1_048_576 };
+
+    let mut cluster = start_cluster;
+    for _ in 0..limit {
+        if cluster < 2 {
+            break;
+        }
+        let next = follow_cluster_chain(disk, bpb, cluster);
+        write_fat_entry(disk, bpb, cluster, 0)?;
+        match next {
+            Some(n) if n < 0x0FFF_FFF8 => cluster = n,
+            _ => break,
+        }
+    }
+    Ok(())
+}
+
 fn resolve_parent_dir(
     disk: &dyn BlockDevice,
     bpb: &Fat32Bpb,
@@ -1052,6 +1166,60 @@ pub fn create_file_on_disk(path: &str) -> Result<Fat32File, &'static str> {
     Ok(fat_file)
 }
 
+pub fn rmdir_on_disk(path: &str) -> Result<(), &'static str> {
+    let fs_guard = FAT32.lock();
+    let fs_arc = fs_guard.as_ref().ok_or("FAT32 filesystem not mounted")?;
+    let fs = fs_arc.lock();
+
+    let (parent_cluster, leaf_name) =
+        resolve_parent_dir(&*fs.disk, &fs.bpb, &fs.mount_point, path)?;
+
+    let entry_info = find_dir_entry(&*fs.disk, &fs.bpb, parent_cluster, &leaf_name)
+        .ok_or("Directory not found")?;
+
+    let (entry_cluster, entry_offset, first_cluster, _file_size) = entry_info;
+
+    let is_dir = read_directory(&*fs.disk, &fs.bpb, parent_cluster)
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case(&leaf_name))
+        .map(|e| e.is_dir)
+        .unwrap_or(false);
+
+    if !is_dir {
+        return Err("Not a directory (use unlink for files)");
+    }
+
+    let dir_entries = read_directory(&*fs.disk, &fs.bpb, first_cluster);
+    let non_dot_entries: Vec<_> = dir_entries
+        .iter()
+        .filter(|e| e.name != "." && e.name != "..")
+        .collect();
+
+    if !non_dot_entries.is_empty() {
+        return Err("Directory not empty");
+    }
+
+    free_cluster_chain(&*fs.disk, &fs.bpb, first_cluster)
+        .map_err(|_| "Failed to free directory cluster")?;
+
+    let bytes_per_cluster =
+        (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
+    let mut cluster_buf = vec![0u8; bytes_per_cluster];
+
+    let sector = fs.bpb.cluster_to_sector(entry_cluster);
+    fs.disk
+        .read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
+        .map_err(|_| "Failed to read directory sector")?;
+
+    cluster_buf[entry_offset] = 0xE5;
+
+    fs.disk
+        .write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
+        .map_err(|_| "Failed to write directory sector")?;
+
+    Ok(())
+}
+
 pub fn mkdir_on_disk(path: &str) -> Result<(), &'static str> {
     let fs_guard = FAT32.lock();
     let fs_arc = fs_guard.as_ref().ok_or("FAT32 filesystem not mounted")?;
@@ -1124,6 +1292,92 @@ pub fn mkdir_on_disk(path: &str) -> Result<(), &'static str> {
     .map_err(|_| "Failed to write directory entry in parent")?;
 
     Ok(())
+}
+
+pub fn unlink_on_disk(path: &str) -> Result<(), &'static str> {
+    let fs_guard = FAT32.lock();
+    let fs_arc = fs_guard.as_ref().ok_or("FAT32 filesystem not mounted")?;
+    let fs = fs_arc.lock();
+
+    let (parent_cluster, leaf_name) =
+        resolve_parent_dir(&*fs.disk, &fs.bpb, &fs.mount_point, path)?;
+
+    let entry_info = find_dir_entry(&*fs.disk, &fs.bpb, parent_cluster, &leaf_name)
+        .ok_or("File not found")?;
+
+    let (entry_cluster, entry_offset, first_cluster, _file_size) = entry_info;
+
+    let is_dir = read_directory(&*fs.disk, &fs.bpb, parent_cluster)
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case(&leaf_name))
+        .map(|e| e.is_dir)
+        .unwrap_or(false);
+
+    if is_dir {
+        return Err("Cannot unlink a directory (use rmdir)");
+    }
+
+    free_cluster_chain(&*fs.disk, &fs.bpb, first_cluster)
+        .map_err(|_| "Failed to free cluster chain")?;
+
+    let bytes_per_cluster =
+        (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
+    let mut cluster_buf = vec![0u8; bytes_per_cluster];
+
+    let sector = fs.bpb.cluster_to_sector(entry_cluster);
+    fs.disk
+        .read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
+        .map_err(|_| "Failed to read directory sector")?;
+
+    cluster_buf[entry_offset] = 0xE5;
+
+    fs.disk
+        .write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
+        .map_err(|_| "Failed to write directory sector")?;
+
+    Ok(())
+}
+
+pub fn rename_on_disk(_old: &str, _new: &str) -> Result<(), &'static str> {
+    Err("rename is not supported for FAT32 yet")
+}
+
+pub fn truncate_on_disk(path: &str, new_size: usize) -> Result<(), &'static str> {
+    let fs_guard = FAT32.lock();
+    let fs_arc = fs_guard.as_ref().ok_or("FAT32 filesystem not mounted")?;
+    let fs = fs_arc.lock();
+
+    let (parent_cluster, leaf_name) =
+        resolve_parent_dir(&*fs.disk, &fs.bpb, &fs.mount_point, path)?;
+
+    let entry_info = find_dir_entry(&*fs.disk, &fs.bpb, parent_cluster, &leaf_name)
+        .ok_or("File not found")?;
+
+    let (entry_cluster, entry_offset, first_cluster, _file_size) = entry_info;
+
+    if new_size == 0 {
+        free_cluster_chain(&*fs.disk, &fs.bpb, first_cluster)
+            .map_err(|_| "Failed to free cluster chain")?;
+
+        let bytes_per_cluster =
+            (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
+        let mut cluster_buf = vec![0u8; bytes_per_cluster];
+        let sector = fs.bpb.cluster_to_sector(entry_cluster);
+        fs.disk
+            .read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
+            .map_err(|_| "Failed to read directory sector")?;
+        let hi: u16 = 0;
+        let lo: u16 = 0;
+        cluster_buf[entry_offset + 20..entry_offset + 22].copy_from_slice(&hi.to_le_bytes());
+        cluster_buf[entry_offset + 26..entry_offset + 28].copy_from_slice(&lo.to_le_bytes());
+        cluster_buf[entry_offset + 28..entry_offset + 32].copy_from_slice(&0u32.to_le_bytes());
+        fs.disk
+            .write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
+            .map_err(|_| "Failed to write directory sector")?;
+        return Ok(());
+    }
+
+    Err("truncate to non-zero is not supported for FAT32 yet")
 }
 
 // ─── Trait helpers ───────────────────────────────────────────────────────────

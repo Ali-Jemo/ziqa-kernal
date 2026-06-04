@@ -44,8 +44,20 @@ pub struct VirtioBlockDriverNew;
 impl crate::drivers::device_manager::Driver for VirtioBlockDriverNew {
     fn name(&self) -> &str { "Experimental VirtIO Block (virtio-drivers)" }
     fn pci_match(&self, device: &PciDevice) -> bool {
-        // 0x1AF4 = Red Hat / VirtIO; 0x1001 = VirtIO Block
-        device.vendor_id == 0x1AF4 && device.device_id == 0x1001
+        // 0x1AF4 = Red Hat / VirtIO; 0x1001 = VirtIO Block.
+        // Only claim devices that expose a *memory* BAR — modern (MMIO-based)
+        // virtio devices. Legacy virtio devices (QEMU's default `-device
+        // virtio-blk-pci` before the modern flag is set) expose I/O-port BARs
+        // only; MmioTransport will then fail with BadMagic. Skipping those
+        // here lets the legacy `virtio_block` driver take over cleanly and
+        // avoids a noisy "Failed to create MmioTransport" log line.
+        if device.vendor_id != 0x1AF4 || device.device_id != 0x1001 {
+            return false;
+        }
+        device.bars.iter().any(|bar| {
+            let (addr, is_io) = bar_address(*bar);
+            !is_io && addr != 0
+        })
     }
     fn init(&self, device: &PciDevice) -> Result<(), ()> {
         crate::println!("[VirtIO-block-new] Initializing device at {:02X}:{:02X}.{}", device.bus, device.dev, device.func);

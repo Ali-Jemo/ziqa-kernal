@@ -169,30 +169,32 @@ extern "x86-interrupt" fn page_fault_handler(
     );
 
     // Handle demand paging
-    if let Some(proc_arc) = crate::process::scheduler::current_task() {
-        let proc = proc_arc.lock();
+    let region_info = crate::process::scheduler::with_current_task(|proc| {
         println!("[MM] Current process {} found", proc.pid.0);
         // Check if fault address is within any of the process's memory regions
         let has_region = proc.vmas.iter().any(|vma| vma.contains(fault_addr));
-        
+
         if has_region {
             println!("[MM] Found region for address {:?}", fault_addr);
         } else {
             println!("[MM] No region found for address {:?}", fault_addr);
         }
+    });
+    if region_info.is_none() {
+        println!("[MM] No current task in page-fault handler");
     }
+    // region_info intentionally unused (logging only) but the call exercises
+    // the safe helper so we hit the timer-IRS-while-locked bug visibly if it returns.
 
     if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
         // Check if this is a COW page — allocate a private copy and remap writable
         let cow_handled = {
-            let is_cow = crate::process::scheduler::current_task()
-                .map(|proc_arc| {
-                    let proc = proc_arc.lock();
-                    proc.vmas.iter().any(|vma| {
-                        vma.flags.copy_on_write && vma.contains(fault_addr)
-                    })
+            let is_cow = crate::process::scheduler::with_current_task(|proc| {
+                proc.vmas.iter().any(|vma| {
+                    vma.flags.copy_on_write && vma.contains(fault_addr)
                 })
-                .unwrap_or(false);
+            })
+            .unwrap_or(false);
             if is_cow {
                 crate::memory::paging::handle_cow_fault(fault_addr)
             } else {
@@ -213,27 +215,23 @@ extern "x86-interrupt" fn page_fault_handler(
 
         // Extract region info while holding the scheduler lock,
         // then drop it before taking memory locks to avoid deadlocks.
-        let demand_info = {
-            if let Some(proc_arc) = crate::process::scheduler::current_task() {
-                let proc = proc_arc.lock();
-                let vma_entry = proc.vmas.iter().find(|vma| vma.contains(fault_addr));
+        let demand_info = crate::process::scheduler::with_current_task(|proc| {
+            let vma_entry = proc.vmas.iter().find(|vma| vma.contains(fault_addr));
 
-                if let Some(vma) = vma_entry {
-                    let binary_ptr = if !proc.binary_data.is_empty() {
-                        Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
-                    } else {
-                        None
-                    };
-                    let flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
-                    Some((vma.start.as_u64(), vma.file_offset, binary_ptr, flags))
+            if let Some(vma) = vma_entry {
+                let binary_ptr = if !proc.binary_data.is_empty() {
+                    Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
                 } else {
-                    println!("[MM] Invalid access - no region found");
                     None
-                }
+                };
+                let flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
+                Some((vma.start.as_u64(), vma.file_offset, binary_ptr, flags))
             } else {
+                println!("[MM] Invalid access - no region found");
                 None
             }
-        }; // scheduler lock dropped here
+        })
+        .flatten(); // scheduler lock dropped here
 
         if let Some((region_start, file_offset, binary_info, flags)) = demand_info {
             let page = x86_64::structures::paging::Page::containing_address(fault_addr);
@@ -374,9 +372,12 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
     }
 
     let registry = crate::init_abi_registry();
-    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
-        let mut proc = proc_arc.lock();
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, &mut proc);
+    // Use the safe closure-based helper so the process lock is bracketed by
+    // `without_interrupts`. The lock is only held while we're inside the
+    // closure; once it returns, the timer ISR can safely re-lock the process
+    // (or skip it via try_lock).
+    let dispatch_result = crate::process::scheduler::with_current_task_mut(|proc| {
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
 
         // Run entry tracepoints
         #[cfg(feature = "ebpf")]
@@ -395,11 +396,6 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
             }
         };
 
-        // Set RAX to the return value
-        unsafe {
-            core::arch::asm!("mov {}, rax", in(reg) retval, options(preserves_flags));
-        }
-
         // Update the context with the return value for exit tracepoints
         ctx.retval = retval;
 
@@ -407,18 +403,29 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
         #[cfg(feature = "ebpf")]
         EBPF_ATTACHMENTS.run(TracepointType::SyscallExit, &mut ctx);
 
-        // Log the result (optional)
-        match &res {
-            Ok(v) => {
-                println!("[ZIQA] syscall {} -> OK({})", num, v);
+        (retval, res)
+    });
+
+    match dispatch_result {
+        Some((retval, res)) => {
+            // Set RAX to the return value
+            unsafe {
+                core::arch::asm!("mov {}, rax", in(reg) retval, options(preserves_flags));
             }
-            Err(e) => {
-                println!("[ZIQA] syscall {} -> ERR({:?})", num, e);
+            // Log the result (optional)
+            match &res {
+                Ok(v) => {
+                    println!("[ZIQA] syscall {} -> OK({})", num, v);
+                }
+                Err(e) => {
+                    println!("[ZIQA] syscall {} -> ERR({:?})", num, e);
+                }
             }
         }
-    } else {
-        println!("[ZIQA] int 0x80 but no current process");
-        // No EOI needed — software interrupt, not PIC-sourced.
+        None => {
+            println!("[ZIQA] int 0x80 but no current process");
+            // No EOI needed — software interrupt, not PIC-sourced.
+        }
     }
 }
 

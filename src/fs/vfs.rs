@@ -302,7 +302,7 @@ impl Vfs {
         }
     }
 
-    /// Rename a file (move from old path to new path)
+    /// Rename/move a file
     pub fn rename(&mut self, old: &str, new: &str) -> Result<(), AbiError> {
         let node = self.resolve_node(old)?;
         let (old_parent, old_leaf) = self.resolve_parent(old)?;
@@ -323,7 +323,7 @@ impl Vfs {
                 children.insert(new_leaf, node);
             }
         }
-        
+
         Ok(())
     }
 

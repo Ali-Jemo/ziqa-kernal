@@ -113,7 +113,7 @@ pub struct FileDesc {
     pub offset: usize,
 }
 
-const MAX_FDS: usize = 16;
+const MAX_FDS: usize = 8;
 
 pub struct FdTable {
     entries: [Option<FileDesc>; MAX_FDS],

@@ -106,32 +106,12 @@ impl Shell {
         if path.is_empty() {
             return self.cwd_str().to_string();
         }
-        if path.starts_with('/') {
-            Self::normalize(path)
-        } else {
-            let base = self.cwd_str();
-            if base == "/" {
-                Self::normalize(&alloc::format!("/{}", path))
-            } else {
-                Self::normalize(&alloc::format!("{}/{}", base, path))
-            }
-        }
+        let cwd_bytes = self.cwd_str().as_bytes();
+        crate::fs::resolve_path(cwd_bytes, cwd_bytes.len(), path)
     }
 
     fn normalize(path: &str) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        for seg in path.split('/') {
-            match seg {
-                "" | "." => continue,
-                ".." => { parts.pop(); }
-                s => parts.push(s),
-            }
-        }
-        if parts.is_empty() {
-            "/".to_string()
-        } else {
-            alloc::format!("/{}", parts.join("/"))
-        }
+        crate::fs::normalize_path(path)
     }
 
     fn skip_ws(input: &str, pos: &mut usize) {

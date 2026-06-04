@@ -145,18 +145,20 @@ extern "C" {
 /// through the same dispatcher as user-mode processes.
 #[no_mangle]
 pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
-    if let Some(proc_arc) = crate::process::scheduler::current_task_mut() {
-        let mut proc = proc_arc.lock();
-        let mut ctx = crate::abi::syscall::SyscallContext::new(num, [a1, a2, a3, a4, a5, a6], &mut proc);
+    // Use the safe closure-based helper: the process lock is held with
+    // interrupts disabled only for the duration of the dispatch. Holding
+    // it across dispatch_syscall (which can do file/IPC I/O) would risk a
+    // timer-ISR deadlock.
+    let result = crate::process::scheduler::with_current_task_mut(|proc| {
+        let mut ctx = crate::abi::syscall::SyscallContext::new(num, [a1, a2, a3, a4, a5, a6], proc);
         let registry = crate::init_abi_registry();
         let handler = crate::abi::handler::KernelSyscallHandler;
         match crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx) {
             Ok(v) => v,
             Err(_) => u64::MAX, // Simplified error for FFI
         }
-    } else {
-        u64::MAX
-    }
+    });
+    result.unwrap_or(u64::MAX)
 }
 
 // ── Safe wrappers ───────────────────────────────────────────────────────────

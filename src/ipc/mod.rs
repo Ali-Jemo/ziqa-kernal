@@ -162,6 +162,10 @@ pub fn create_channel() -> Option<u32> {
     IPC.write().create()
 }
 
+pub fn destroy_channel(id: u32) {
+    IPC.write().destroy(id);
+}
+
 pub fn send(channel_id: u32, sender: Pid, data: &[u8]) -> Result<(), IpcError> {
     // Read-lock the table to find the channel, then perform per-channel locked send
     let chan = IPC.read().get(channel_id).ok_or(IpcError::InvalidChannel)?;

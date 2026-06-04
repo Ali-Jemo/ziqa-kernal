@@ -286,17 +286,27 @@ impl Scheduler {
         false
     }
 
+    /// Called from the APIC/PIT timer ISR (interrupt context).
+    /// MUST NOT block on a process lock — the kernel often holds a process
+    /// lock with interrupts enabled, and an ISR that spins on it is a
+    /// classic hard deadlock (the holder can never run to release the lock
+    /// because this ISR is hogging the CPU). Use `try_lock` and skip work
+    /// we can't grab right now — the next tick will retry.
     pub fn tick(&self) {
         let t = self.ticks.fetch_add(1, Ordering::Relaxed) + 1;
 
         if let Some(pid) = self.current_pid() {
             if let Some(proc_arc) = self.get_process(pid) {
-                let mut proc = proc_arc.lock();
-                if t % 10 == 0 {
-                    if proc.priority < PRIORITY_LEVELS - 1 {
-                        proc.priority += 1;
+                if let Some(mut proc) = proc_arc.try_lock() {
+                    if t % 10 == 0 {
+                        if proc.priority < PRIORITY_LEVELS - 1 {
+                            proc.priority += 1;
+                        }
                     }
                 }
+                // else: another CPU/context holds the lock; drop the tick's
+                // MLFQ promotion and let the next tick handle it. Process
+                // state is otherwise consistent because we never mutated it.
             }
         }
 
@@ -304,7 +314,9 @@ impl Scheduler {
             let table = self.process_table.read();
             for slot in table.tasks.iter() {
                 if let Some(p) = slot {
-                    p.lock().priority = 0;
+                    if let Some(mut proc) = p.try_lock() {
+                        proc.priority = 0;
+                    }
                 }
             }
         }
@@ -433,10 +445,79 @@ pub fn spawn_kthread(entry: fn()) -> Option<Pid> { x86_64::instructions::interru
 pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
 pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
 pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
-pub fn current_task() -> Option<Arc<Mutex<Process>>> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid))) }
-pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
 pub fn wake_sleeping(woken_mask: u64) { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }
 pub fn init() { SCHEDULER.init_boot_process(); }
+
+// ── Safe current-task accessors ───────────────────────────────────────────────
+//
+// `current_task()` / `current_task_mut()` return an `Arc<Mutex<Process>>` whose
+// lock is then held by the caller **with interrupts enabled**. If the APIC
+// timer ISR fires before the caller drops the lock, `scheduler::tick()` would
+// try to re-lock the same process and spin forever, deadlocking the kernel.
+//
+// Use the `with_current_task` / `with_current_task_mut` helpers below instead:
+// they run the closure with interrupts disabled AND the process lock held, so
+// the lock is never observable to the ISR in an inconsistent state.
+//
+// The raw `current_task` accessors are kept for now (with a `try_lock` flavor
+// for ISR context) but new code should prefer the closure-based helpers.
+
+/// Run `f` with a shared borrow of the current process. Interrupts are
+/// disabled for the duration of the call so the timer ISR can't observe
+/// (or deadlock on) the process lock.
+pub fn with_current_task<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&Process) -> R,
+{
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let pid = SCHEDULER.current_pid()?;
+        let proc_arc = SCHEDULER.get_process(pid)?;
+        let proc = proc_arc.lock();
+        Some(f(&proc))
+    })
+}
+
+/// Run `f` with an exclusive borrow of the current process. See
+/// `with_current_task` for the rationale.
+pub fn with_current_task_mut<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut Process) -> R,
+{
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let pid = SCHEDULER.current_pid()?;
+        let proc_arc = SCHEDULER.get_process(pid)?;
+        let mut proc = proc_arc.lock();
+        Some(f(&mut proc))
+    })
+}
+
+/// Try to lock the current process without blocking. Returns `None` if the
+/// lock is contended — safe to call from interrupt context.
+pub fn try_current_task<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut Process) -> R,
+{
+    let pid = SCHEDULER.current_pid()?;
+    let proc_arc = SCHEDULER.get_process(pid)?;
+    // spin::Mutex::try_lock returns `Option<MutexGuard>` (not Result), so
+    // we pattern-match directly.
+    let mut proc = proc_arc.try_lock()?;
+    Some(f(&mut proc))
+}
+
+/// Read-only access to a non-current process. Safe in any context.
+pub fn current_task() -> Option<Arc<Mutex<Process>>> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid))
+    })
+}
+
+/// **Unsafe** raw accessor for the current process — kept only for legacy
+/// callers. The returned `Arc<Mutex<Process>>` lock is held with interrupts
+/// ENABLED, which can deadlock against the APIC timer ISR if held for any
+/// non-trivial work. Prefer `with_current_task` / `with_current_task_mut`.
+#[deprecated(note = "process lock is held with IRQs on; can deadlock against timer ISR. Use with_current_task(_mut) instead.")]
+pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
 pub fn list_pids() -> Vec<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.list_pids()) }
 pub fn yield_now() { unsafe { core::arch::asm!("int 0x20"); } }
 
