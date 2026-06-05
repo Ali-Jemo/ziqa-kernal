@@ -285,12 +285,34 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) {
                 return Err(AbiError::PermissionDenied);
             }
-            // VFS write — update offset, return count
+            let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
+            let path_bytes = match ctx.process.fds.path_of(fd) {
+                Some(p) => {
+                    let mut t = [0u8; 64];
+                    let n = p.len().min(63);
+                    t[..n].copy_from_slice(&p[..n]);
+                    (t, n)
+                }
+                None => return Ok((-9_i64) as u64),
+            };
+            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
             let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
-            if let Some(desc) = ctx.process.fds.get_mut(fd) {
-                desc.offset += bytes.len();
+            
+            match crate::fs::vfs::VFS
+                .read()
+                .write_raw(path_str, bytes, offset)
+            {
+                Ok(n) => {
+                    if let Some(desc) = ctx.process.fds.get_mut(fd) {
+                        desc.offset += n;
+                    }
+                    Ok(n as u64)
+                }
+                Err(e) => {
+                    crate::println!("[ABI] sys_write failed: {:?}", e);
+                    Ok(0)
+                }
             }
-            Ok(count as u64)
         }
         _ => Ok((-9_i64) as u64), // -EBADF
     }

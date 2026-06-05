@@ -4,8 +4,6 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::paging::{FrameAllocator, Mapper};
-#[cfg(feature = "ebpf")]
-use crate::ebpf::attach::{EBPF_ATTACHMENTS, TracepointType};
 use crate::abi::syscall::abi_error_to_errno;
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -167,6 +165,11 @@ extern "x86-interrupt" fn page_fault_handler(
         "EXCEPTION: PAGE FAULT\n  addr={:?}  code={:?}\n{:#?}",
         fault_addr, error_code, frame
     );
+
+    // Fast path: Check if this is a compressed page fault
+    if crate::memory::compression::fault::handle_compressed_fault(fault_addr, error_code) {
+        return;
+    }
 
     // Handle demand paging
     let region_info = crate::process::scheduler::with_current_task(|proc| {
@@ -381,7 +384,10 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
 
         // Run entry tracepoints
         #[cfg(feature = "ebpf")]
-        EBPF_ATTACHMENTS.run(TracepointType::SyscallEntry, &mut ctx);
+        {
+            use crate::ebpf::attach::{TracepointType, TracepointCtx};
+            crate::ebpf::attach::EBPF_ATTACHMENTS.run(TracepointType::SyscallEntry, TracepointCtx::Syscall(ctx.info()));
+        }
 
         let handler = crate::abi::handler::KernelSyscallHandler;
         let res = crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx);
@@ -401,7 +407,10 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
 
         // Run exit tracepoints
         #[cfg(feature = "ebpf")]
-        EBPF_ATTACHMENTS.run(TracepointType::SyscallExit, &mut ctx);
+        {
+            use crate::ebpf::attach::{TracepointType, TracepointCtx};
+            crate::ebpf::attach::EBPF_ATTACHMENTS.run(TracepointType::SyscallExit, TracepointCtx::Syscall(ctx.info()));
+        }
 
         (retval, res)
     });

@@ -48,29 +48,27 @@ pub fn init() -> CpuFeatures {
     let (ebx, ecx) = cpuid7();
     let mut enabled = CpuFeatures::empty();
 
+    let mut cr4 = Cr4::read();
+
+    if ebx & CPUID_LEAF7_EBX_SMEP != 0 {
+        cr4 |= Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION;
+        enabled |= CpuFeatures::SMEP;
+    }
+    if ebx & CPUID_LEAF7_EBX_SMAP != 0 {
+        cr4 |= Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION;
+        enabled |= CpuFeatures::SMAP;
+    }
+    if ecx & CPUID_LEAF7_ECX_UMIP != 0 {
+        cr4 |= Cr4Flags::USER_MODE_INSTRUCTION_PREVENTION;
+        enabled |= CpuFeatures::UMIP;
+    }
+
+    // Temporarily disabled CR4 write to check if SMAP/SMEP is causing the hang
+    // Cr4::write(cr4);
     unsafe {
-        let mut cr4 = Cr4::read();
-
-        if ebx & CPUID_LEAF7_EBX_SMEP != 0 {
-            cr4 |= Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION;
-            enabled |= CpuFeatures::SMEP;
-        }
-        if ebx & CPUID_LEAF7_EBX_SMAP != 0 {
-            cr4 |= Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION;
-            enabled |= CpuFeatures::SMAP;
-        }
-        if ecx & CPUID_LEAF7_ECX_UMIP != 0 {
-            cr4 |= Cr4Flags::USER_MODE_INSTRUCTION_PREVENTION;
-            enabled |= CpuFeatures::UMIP;
-        }
-
-        // Temporarily disabled CR4 write to check if SMAP/SMEP is causing the hang
-        // Cr4::write(cr4);
-        unsafe {
-            let mut serial = uart_16550::SerialPort::new(0x3f8);
-            serial.init();
-            let _ = core::fmt::Write::write_str(&mut serial, "cpu_features::init: bypassed CR4 write\n");
-        }
+        let mut serial = uart_16550::SerialPort::new(0x3f8);
+        serial.init();
+        let _ = core::fmt::Write::write_str(&mut serial, "cpu_features::init: bypassed CR4 write\n");
     }
 
     enabled

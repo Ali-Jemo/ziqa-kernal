@@ -223,6 +223,14 @@ fn run_startup() {
         println!(" ! Failed to spawn user process");
     }
 
+    // Restore any saved snapshots for instant-on resume
+    let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(binary);
+    if restored > 0 {
+        set_fg(Color::LightGreen);
+        println!(" ✓ Instant-on resume: {} processes restored from snapshot", restored);
+        set_fg(Color::White);
+    }
+
     println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");
     set_fg(Color::White);
 }

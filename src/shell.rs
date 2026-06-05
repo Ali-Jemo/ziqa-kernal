@@ -34,6 +34,7 @@ const COMMANDS: &[&str] = &[
     "mv", "cp", "touch", "stat", "du",
     "dashboard", "top", "history", "alias", "export",
     "jobs", "bg", "fg", "nwm-test",
+    "snap", "ls-snap", "rm-snap",
 ];
 
 const MAX_HISTORY: usize = 50;
@@ -73,6 +74,7 @@ pub struct Shell {
     env: BTreeMap<String, String>,
     jobs: Vec<Job>,
     fg_job: Option<usize>,
+    last_daemon_ms: u64,
 }
 
 impl Default for Shell {
@@ -95,6 +97,7 @@ impl Shell {
             env: BTreeMap::new(),
             jobs: Vec::new(),
             fg_job: None,
+            last_daemon_ms: 0,
         }
     }
 
@@ -320,6 +323,10 @@ impl Shell {
             "nwm-test"  => Some(Self::cmd_nwm_test),
             "bench"     => Some(Self::cmd_bench),
             "test"      => Some(Self::cmd_test),
+            "compress"  => Some(Self::cmd_compress),
+            "snap"      => Some(Self::cmd_snap),
+            "ls-snap"   => Some(Self::cmd_ls_snap),
+            "rm-snap"   => Some(Self::cmd_rm_snap),
             _ => None,
         }
     }
@@ -394,6 +401,13 @@ impl Shell {
         loop {
             crate::net::stack::poll_network();
             self.poll_jobs();
+
+            // Background compression daemon (every 5 s, up to 64 pages)
+            let now = crate::timer::uptime_ms();
+            if now.wrapping_sub(self.last_daemon_ms) > 5000 {
+                self.last_daemon_ms = now;
+                crate::memory::compression::daemon::run_daemon_cycle(64);
+            }
 
             // ── Zero-alloc prompt ──
             let cwd = self.cwd_str();
@@ -1290,6 +1304,9 @@ impl Shell {
         println!("  expand_vars: {} iters  avg={} cyc",
             n_expands, expand_total / n_expands);
 
+        // ── Memory Compression Benchmarks ──
+        crate::memory::compression::bench::run_benchmarks();
+
         println!("{}{}  END BENCHMARK{}", C_GREEN, C_BOLD, C_RESET);
         0
     }
@@ -1367,6 +1384,9 @@ impl Shell {
         test!("dispatch: unknown", Self::find_builtin("foobar42").is_none());
         test!("dispatch: alias", Self::find_builtin("alias").is_some());
         test!("dispatch: bg", Self::find_builtin("bg").is_some());
+
+        // ── Memory Compression Tests ──
+        crate::memory::compression::tests::run_tests();
 
         let total = passed + failed;
         println!("  {}{}  {}/{} passed{}",
@@ -2433,6 +2453,97 @@ impl Shell {
             println!("fg: job {} is not in a valid state", job_num + 1);
         }
         0
+    }
+
+    fn cmd_compress(&mut self, args: &[String]) -> i32 {
+        let max_pages: usize = args.first()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(256);
+        let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+        let compressed = crate::memory::compression::daemon::run_daemon_cycle(max_pages);
+        let t1 = unsafe { core::arch::x86_64::_rdtsc() };
+        let elapsed = t1.wrapping_sub(t0);
+        println!("Compressed {} pages in {} cycles ({:.0} cyc/page)",
+            compressed, elapsed,
+            if compressed > 0 { elapsed as f64 / compressed as f64 } else { 0.0 });
+        println!("{}", crate::memory::compression::daemon::daemon_status());
+        0
+    }
+
+    fn cmd_snap(&mut self, args: &[String]) -> i32 {
+        if args.is_empty() {
+            println!("Usage: snap <pid>        - Create a snapshot of process PID");
+            println!("       snap restore <pid> - Restore process from snapshot PID");
+            return 1;
+        }
+
+        if args[0] == "restore" {
+            if args.len() < 2 { println!("Usage: snap restore <pid>"); return 1; }
+            let pid_val = match args[1].parse::<u64>() {
+                Ok(v) => v,
+                Err(_) => { println!("Invalid PID: {}", args[1]); return 1; }
+            };
+
+            let dummy_binary = include_bytes!("../assets/test_elf.bin");
+            if let Some(pid) = crate::process::scheduler::spawn_elf(dummy_binary) {
+                println!("[Snapshot] Spawning target process PID={}...", pid.0);
+                let success = crate::process::scheduler::with_process_mut(pid, |proc| {
+                    crate::process::snapshot::SnapshotManager::load(pid_val, proc)
+                }).unwrap_or(false);
+
+                if success {
+                    println!("[Snapshot] Successfully restored state from snapshot {} into process {}", pid_val, pid.0);
+                    0
+                } else {
+                    println!("[Snapshot] Failed to restore from snapshot {}", pid_val);
+                    crate::process::scheduler::SCHEDULER.send_signal(pid, 9);
+                    1
+                }
+            } else {
+                println!("Failed to spawn target process for restoration.");
+                1
+            }
+        } else {
+            let pid_val = match args[0].parse::<u64>() {
+                Ok(v) => v,
+                Err(_) => { println!("Invalid PID: {}", args[0]); return 1; }
+            };
+            let pid = crate::process::Pid(pid_val);
+
+            let success = crate::process::scheduler::with_process(pid, |proc| {
+                crate::process::snapshot::SnapshotManager::save(proc)
+            }).unwrap_or(false);
+
+            if success { 0 } else { 1 }
+        }
+    }
+
+    fn cmd_ls_snap(&mut self, _args: &[String]) -> i32 {
+        let pids = crate::process::snapshot::SnapshotManager::list();
+        println!("{}{}  SAVED SNAPSHOTS  ({} total){}", C_YELLOW, C_BOLD, pids.len(), C_RESET);
+        if pids.is_empty() {
+            println!("  (none)");
+        } else {
+            for pid in pids {
+                let path = alloc::format!("/fat/snapshots/{}.snap", pid);
+                let size = VFS.read().file_size(&path).unwrap_or(0);
+                println!("  PID {:>4}  ({} bytes)", pid, size);
+            }
+        }
+        0
+    }
+
+    fn cmd_rm_snap(&mut self, args: &[String]) -> i32 {
+        let pid_val = match args.first().and_then(|s| s.parse::<u64>().ok()) {
+            Some(v) => v,
+            None => { println!("Usage: rm-snap <pid>"); return 1; }
+        };
+        if crate::process::snapshot::SnapshotManager::delete(pid_val) {
+            0
+        } else {
+            println!("Failed to delete snapshot for {}", pid_val);
+            1
+        }
     }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

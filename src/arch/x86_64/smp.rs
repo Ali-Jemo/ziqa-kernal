@@ -105,7 +105,7 @@ trampoline_end:
 "#,
 );
 
-static APS_READY: AtomicU32 = AtomicU32::new(0);
+pub static APS_READY: AtomicU32 = AtomicU32::new(0);
 static _AP_BOOT_ERROR: AtomicBool = AtomicBool::new(false);
 
 pub fn boot_aps(acpi_info: &crate::drivers::acpi::AcpiInfo) {

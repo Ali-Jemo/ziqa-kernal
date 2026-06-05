@@ -5,6 +5,7 @@ pub mod frame_allocator;
 pub mod heap;
 pub mod heapstats;
 pub mod paging;
+pub mod compression;
 
 pub use frame_allocator::BootInfoFrameAllocator;
 pub use paging::{AddressSpace, MemoryRegion, MemoryRegionFlags};

@@ -82,6 +82,11 @@ It is **not** a production-ready OS, but an architectural laboratory for explori
 | **sys_stat / sys_pipe** | Finalized POSIX syscall additions for filesystem stat and inter-process pipe communication. |
 | **sys_waitpid status** | Corrected child exit status reporting in `sys_waitpid`. |
 | **POSIX ABI Cleanup** | Synchronized waitpid options, fixed compiler issues, consolidated POSIX implementation. |
+| **Memory Compression** | LZ4-based page compression with Shannon-entropy classifier. Pages analyzed for compressibility (zero-page, short-pattern, text/code, random detection) and transparently decompressed on page fault via COMPRESSED_BIT PTE flag. |
+| **Compression Daemon** | Background daemon (5s cycle, 64-page budget) scanning all live processes, classifying pages, and compressing cold pages into a `CompressedPageStore`. On-demand via `compress [N]` shell command. |
+| **Snapshot Persistence** | Full process state serialization (CPU registers, VMAs + page contents, FD table, metadata) to FAT32 in ZSNP binary format. LZ4-compressed before write. `snap`, `ls-snap`, `rm-snap` shell commands. |
+| **Instant-On Resume** | Boot-time restoration of all saved snapshots — `restore_all_at_boot()` spawns placeholder processes and overwrites their state from `/fat/snapshots/*.snap` files, resuming execution where left off. |
+| **eBPF Hooks for Compression** | `ShouldCompress`, `AfterDecompression`, `PageAccess` hook points for eBPF-driven compression policy. |
 | **Debug Instrumentation** | Serial logging across boot sequence, missing exception handlers, `without_interrupts` scheduler hardening. |
 
 ---
@@ -214,8 +219,9 @@ Following a comprehensive forensic audit, the project status has been updated to
 | **FAT32** | **Experimental** | **Read-only FAT32 filesystem driver** (pure Rust, no external crate). MBR partition scanning, BPB parsing, cluster chain traversal, short-name directory entries. Recursive VFS mounting under `/fat`. |
 | **PS/2 Mouse** | **Complete** | **PS/2 Mouse Driver.** 3-byte packet decode with button state (left/right), signed delta X/Y clamping to 1920×1080. Integrated with the NWCC desktop for cursor control. |
 | **Socket Stack** | **Experimental** | **TCP/UDP socket layer** via smoltcp. Socket state machine (Created→Bound→Listening→Connected→Closed). `AF_UNIX` loopback pairs, `AF_INET`/`SOCK_STREAM` TCP with connect/send/recv/close, `SOCK_DGRAM` UDP. Lazy socket creation. |
-| **Shell** | **Modernized** | Zero-alloc prompt, real parser (quotes/escapes/env expansion), 40+ builtins via command registry, job control (`bg`/`fg`/`jobs`), tab completion, arrow history, ANSI colors. |
+| **Shell** | **Modernized** | Zero-alloc prompt, real parser (quotes/escapes/env expansion), 40+ builtins via command registry, job control (`bg`/`fg`/`jobs`), tab completion, arrow history, ANSI colors. **New: `bench`, `test`, `compress`, `snap`, `ls-snap`, `rm-snap` commands.** |
 | **Graphics** | **Demos** | DOOM fire + Tetris on bare metal; **NWCC Desktop Demo** — 80×25 VGA text-mode floating window manager with 6 application views (Terminal, System Monitor, File Manager, Network Dashboard, Text Editor, About), full mouse/keyboard interaction, double-buffered rendering with dirty-rectangle flush, animated starfield desktop, taskbar, start menu, and scanline effect. DRM/KMS driver for future compositor support. |
+| **Memory Compression** | **Experimental** | LZ4-based page compression with Shannon-entropy classifier. `CompressedPageStore` with per-page tracking. `COMPRESSED_BIT` PTE flag for transparent on-fault decompression. Background daemon scanning all processes every 5 s (64-page budget). Snapshot persistence to FAT32 with instant-on boot resume. |
 
 > **Audit Conclusion**: ZiqaKernel is a sophisticated architectural scaffold. It is ideally suited for **OS research, compiler-assisted OS design, and hardware-software interface experimentation**.
 
@@ -443,7 +449,7 @@ The interactive shell ([`src/shell.rs`](src/shell.rs) — ~2120 lines) provides 
 - **Arrow key history** — browse last 50 commands via `Vec<String>` (no fixed-size byte arrays)
 - **Redirection** — `>` (truncate), `>>` (append), `<` (read) via VFS
 - **ANSI color output** — syntax-highlighted prompts and errors
-- **All commands**: `help`, `uptime`, `ps`, `spawn`, `spawnelf`, `exec`, `kill`, `sleep`, `meminfo`, `diskinfo`, `netstat`, `klog`, `doom`, `tetris`, `reboot`, `echo`, `clear`, `edit`, `ls`, `cd`, `pwd`, `mkdir`, `dir`, `rm`, `rmdir`, `cat`, `ping`, `wget`, `ifconfig`, `mv`, `cp`, `touch`, `stat`, `du`, `alias`, `export`, `history`, `bg`, `fg`, `jobs`
+- **All commands**: `help`, `uptime`, `ps`, `spawn`, `spawnelf`, `exec`, `kill`, `sleep`, `meminfo`, `diskinfo`, `netstat`, `klog`, `doom`, `tetris`, `reboot`, `echo`, `clear`, `edit`, `ls`, `cd`, `pwd`, `mkdir`, `dir`, `rm`, `rmdir`, `cat`, `ping`, `wget`, `ifconfig`, `mv`, `cp`, `touch`, `stat`, `du`, `alias`, `export`, `history`, `bg`, `fg`, `jobs`, `bench`, `test`, `compress`, `snap`, `ls-snap`, `rm-snap`
 
 ---
 
@@ -539,15 +545,21 @@ make zig-check   # Verify Zig blitter compiles independently
 - **int 0x80 Assembly Rewrite** — Replaced `extern "x86-interrupt"` with `int80_entry` global_asm trampoline.
 - **eBPF "Obsidian-Tier" VM** — kCFI verifier, 512B stack, maps, helpers, bounded loops, tail calls.
 - **NWCC Compositor** — SHM-backed buffer sharing, VGA-downsampled architecture, window dragging.
+- **Memory Compression Infrastructure** — LZ4 compression via `lz4_flex`, page content classifier (entropy/pattern detection), `CompressedPageStore` with per-page location tracking, `COMPRESSED_BIT` PTE flag for transparent decompression on page fault.
+- **Compression Daemon** — Background process scanner (`daemon.rs`) with 5s cycle timer, 64-page budget per cycle, automatic classification + compression of cold pages. Invocable via `compress [N]` shell command.
+- **Snapshot Persistence** — Process state serialization (ZSNP v1 binary format: CpuState, VMAs, page contents, FD table, metadata) with LZ4 compression to `/fat/snapshots/{pid}.snap`. Shell commands: `snap <pid>`, `ls-snap`, `rm-snap`.
+- **Instant-On Boot Resume** — `restore_all_at_boot()` scans `/fat/snapshots/` at startup, restores all saved process states into spawned placeholders, enabling system state recovery across reboots.
 
 ### Future Work (P2)
 
-1. **Userspace Drivers (Production)** — Complete the DRM and VirtIO-Net userspace drivers with real virtqueue management, packet processing, and GPU operation support.
-2. **Multi-architecture Support** — Explore aarch64 or RISC-V as additional targets beyond x86_64.
-3. **Network Stack Maturity** — Fully wire up TCP listener/accept path, integrate with the shell and filesystem for a complete networking experience.
-4. **FAT32 Write Support** — Extend the FAT32 driver with write capabilities (file creation, deletion, modification).
-5. **eBPF Production Hardening** — Add concurrent map access safety, RINGBUF consumer API, wider tracepoint coverage across all syscalls.
-6. **Performance Optimization** — Profile and optimize the COW fork path, page table cloning, and TLB shootdown latency for real workloads.
+1. **Memory Compression Production** — Wire the compression daemon into the eBPF hooks system for dynamic policy, add multi-tier compression (LZ4 + Zstd), implement free-list frame deallocation to reclaim compressed-store frames on release.
+2. **Snapshot Scheduling** — Add automatic periodic snapshots via a kernel timer, snapshot versioning (keep last N), and incremental snapshots for minimal write overhead.
+3. **Userspace Drivers (Production)** — Complete the DRM and VirtIO-Net userspace drivers with real virtqueue management, packet processing, and GPU operation support.
+4. **Multi-architecture Support** — Explore aarch64 or RISC-V as additional targets beyond x86_64.
+5. **Network Stack Maturity** — Fully wire up TCP listener/accept path, integrate with the shell and filesystem for a complete networking experience.
+6. **FAT32 Write Support** — Extend the FAT32 driver with write capabilities (file creation, deletion, modification).
+7. **eBPF Production Hardening** — Add concurrent map access safety, RINGBUF consumer API, wider tracepoint coverage across all syscalls.
+8. **Performance Optimization** — Profile and optimize the COW fork path, page table cloning, and TLB shootdown latency for real workloads.
 
 
 <div align="center">
@@ -627,4 +639,4 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 MIT
 
 ---
-<sup>Last updated: June 3, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | SMP + APIC: ✅ complete | ACPI/PCI: ✅ complete | Device Model: ✅ complete | PS/2 Mouse: ✅ complete | FAT32: ✅ experimental | Socket Stack: ✅ experimental | eBPF Obsidian-Tier: ✅ complete | NWCC Desktop Demo: ✅ demo | COW Fork + VMA: ✅ complete | Userspace Drivers: ✅ skeleton | 115+ syscalls | 40+ shell commands | Ring 3 + SMEP/SMAP/UMIP: ✅ complete | A-Tier Scalability: ✅ complete | Microkernel Phase 1: ✅ complete</sup>
+<sup>Last updated: June 5, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | SMP + APIC: ✅ complete | ACPI/PCI: ✅ complete | Device Model: ✅ complete | PS/2 Mouse: ✅ complete | FAT32: ✅ experimental | Socket Stack: ✅ experimental | eBPF Obsidian-Tier: ✅ complete | NWCC Desktop Demo: ✅ demo | COW Fork + VMA: ✅ complete | Userspace Drivers: ✅ skeleton | 115+ syscalls | 40+ shell commands | Ring 3 + SMEP/SMAP/UMIP: ✅ complete | A-Tier Scalability: ✅ complete | Microkernel Phase 1: ✅ complete | Memory Compression: ✅ experimental | Snapshot Persistence: ✅ experimental | Instant-On Resume: ✅ experimental</sup>

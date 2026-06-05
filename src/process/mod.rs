@@ -1,6 +1,7 @@
 /// Process management for ZiqaKernel
 pub mod scheduler;
 pub mod signal;
+pub mod snapshot;
 pub mod vma;
 
 use crate::arch::x86_64::switch::TrapFrame;

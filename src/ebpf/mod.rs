@@ -95,7 +95,7 @@ pub mod helpers {
 /// The result of eBPF program execution
 pub type BpfResult = Result<u64, BpfError>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BpfError {
     /// Verifier rejected the program
     VerificationFailed(&'static str),

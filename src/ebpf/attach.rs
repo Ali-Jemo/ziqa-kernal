@@ -3,7 +3,6 @@
 /// Allows attaching eBPF programs to kernel tracepoints (e.g., syscall entry/exit)
 // Useful for tracing, monitoring, and security auditing.
 
-use crate::abi::syscall::{SyscallContext};
 use crate::ebpf::BpfInstruction;
 use crate::ebpf::vm::BpfVm;
 use crate::klog::Level;
@@ -18,7 +17,28 @@ pub enum TracepointType {
     SyscallEntry,
     /// Called at the end of a syscall, after processing.
     SyscallExit,
-    // TODO: Add more tracepoints (sched_switch, irq_handler, etc.)
+    /// Context switch event
+    SchedSwitch,
+    /// Page fault event
+    PageFault,
+    /// IRQ handler entry
+    IrqEntry,
+}
+
+/// Decoupled syscall information for eBPF tracepoints.
+#[derive(Debug, Clone, Copy)]
+pub struct SyscallInfo {
+    pub number: u64,
+    pub args: [u64; 6],
+    pub retval: u64,
+}
+
+/// Event data passed to eBPF programs at each tracepoint.
+pub enum TracepointCtx {
+    Syscall(SyscallInfo),
+    SchedSwitch { prev_pid: u64, next_pid: u64 },
+    PageFault { addr: u64, error_code: u64 },
+    Irq { vector: u8 },
 }
 
 /// An eBPF program that has been loaded and verified.
@@ -51,7 +71,6 @@ impl BpfProgram {
 /// Global state for eBPF attach points.
 pub struct EbpfAttachments {
     /// Programs attached to each tracepoint type.
-    /// We use a simple Vec for now; could be a list.
     pub entries: Mutex<Vec<(TracepointType, BpfProgram)>>,
 }
 
@@ -73,7 +92,6 @@ impl EbpfAttachments {
     }
 
     /// Detach an eBPF program by ID.
-    /// Returns true if successful.
     pub fn detach(&self, id: usize) -> bool {
         let mut lock = self.entries.lock();
         if id < lock.len() {
@@ -88,24 +106,43 @@ impl EbpfAttachments {
     }
 
     /// Run all eBPF programs attached to a given tracepoint.
-    /// Returns true if any program executed successfully.
-    pub fn run(&self, tp: TracepointType, ctx: &mut SyscallContext) -> bool {
+    pub fn run(&self, tp: TracepointType, ctx: TracepointCtx) -> bool {
         let lock = self.entries.lock();
         let mut any = false;
         for (tp_ref, prog) in lock.iter() {
             if *tp_ref == tp {
-                // Execute the program
                 let mut vm = BpfVm::new();
                 
-                // Execute using the unified context initialization
-                match vm.execute_with_syscall_context(&prog.instructions, ctx) {
-                    Ok(_retval) => {
-                        // Optionally collect retval? For now, just count as success.
-                        any = true;
+                // Initialize VM registers based on tracepoint context
+                match &ctx {
+                    TracepointCtx::Syscall(sc) => {
+                        vm.registers[0] = 0;
+                        vm.registers[1] = sc.number;
+                        vm.registers[2] = sc.args[0];
+                        vm.registers[3] = sc.args[1];
+                        vm.registers[4] = sc.args[2];
+                        vm.registers[5] = sc.args[3];
+                        vm.registers[6] = sc.args[4];
+                        vm.registers[7] = sc.args[5];
+                        vm.registers[8] = sc.retval;
                     }
+                    TracepointCtx::SchedSwitch { prev_pid, next_pid } => {
+                        vm.registers[1] = *prev_pid;
+                        vm.registers[2] = *next_pid;
+                    }
+                    TracepointCtx::PageFault { addr, error_code } => {
+                        vm.registers[1] = *addr;
+                        vm.registers[2] = *error_code;
+                    }
+                    TracepointCtx::Irq { vector } => {
+                        vm.registers[1] = *vector as u64;
+                    }
+                }
+
+                match vm.execute(&prog.instructions) {
+                    Ok(_) => any = true,
                     Err(e) => {
-                        // Log error but continue
-                        crate::klog!(Level::Error, "eBPF program execution failed: {:?}", e);
+                        crate::klog!(Level::Error, "eBPF run failed: {:?}", e);
                     }
                 }
             }

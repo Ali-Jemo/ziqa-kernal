@@ -586,6 +586,8 @@ pub fn run_all() {
         crate::tests_net::run_socket_tests();
         }
 
+        crate::tests_fix::run_all();
+
         println!("[TEST] Results: {}/{} passed", passed, passed + failed);
 
         if failed > 0 {

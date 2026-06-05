@@ -1,6 +1,6 @@
 use crate::memory::compression::engine::AdaptiveCompressor;
 use crate::memory::compression::tier::CompressionTier;
-use crate::memory::compression::COMPRESSED_STORE;
+use crate::memory::compression::PAGE_STORE;
 use crate::memory::PAGE_SIZE;
 use x86_64::VirtAddr;
 use alloc::vec::Vec;
@@ -53,17 +53,17 @@ fn test_page_store() {
     let data = [0xAAu8; 100];
     
     // Store
-    let success = COMPRESSED_STORE.store(vaddr, &data, CompressionTier::Lz4);
+    let success = PAGE_STORE.store(vaddr, &data, CompressionTier::Lz4);
     assert!(success);
-    assert!(COMPRESSED_STORE.is_compressed(vaddr));
+    assert!(PAGE_STORE.is_compressed(vaddr));
     
     // Retrieve
-    let retrieved = COMPRESSED_STORE.retrieve(vaddr).expect("Failed to retrieve from store");
+    let retrieved = PAGE_STORE.retrieve(vaddr).expect("Failed to retrieve from store");
     assert_eq!(&retrieved, &data);
     
     // Release
-    COMPRESSED_STORE.release(vaddr);
-    assert!(!COMPRESSED_STORE.is_compressed(vaddr));
+    PAGE_STORE.release(vaddr);
+    assert!(!PAGE_STORE.is_compressed(vaddr));
     
     println!("[TEST]     PASS  page store operations");
 }

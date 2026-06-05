@@ -13,6 +13,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::vec;
 use spin::{Mutex, RwLock};
 
 /// A node in the VFS tree
@@ -164,6 +165,14 @@ impl Vfs {
         }
     }
 
+    /// Read an entire file into memory (kernel-internal use)
+    pub fn read_raw_all(&self, path: &str) -> Result<Vec<u8>, AbiError> {
+        let size = self.file_size(path).ok_or(AbiError::Other("File not found"))?;
+        let mut buf = vec![0u8; size];
+        self.read_raw(path, &mut buf, 0)?;
+        Ok(buf)
+    }
+
     /// Write to a file, checking for a valid Write-enabled File capability
     pub fn write(
         &self,
@@ -222,7 +231,7 @@ impl Vfs {
         }
     }
 
-    /// Create a new empty RamFile at the given path (kernel-internal)
+    /// Create a new empty file at the given path (kernel-internal)
     pub fn create(&mut self, path: &str) {
         if self.exists(path) { return; }
         
@@ -288,6 +297,16 @@ impl Vfs {
 
     /// Remove a file from VFS
     pub fn remove(&mut self, path: &str) -> Result<(), AbiError> {
+        if path.starts_with("/fat/") {
+            #[cfg(feature = "fat32")]
+            {
+                use crate::fs::fat32;
+                if let Err(e) = fat32::unlink_on_disk(path) {
+                    return Err(AbiError::Other(e));
+                }
+            }
+        }
+
         let (parent_node, leaf) = self.resolve_parent(path)?;
         let mut guard = parent_node.write();
         match &mut *guard {
@@ -340,6 +359,17 @@ impl Vfs {
     /// Remove a directory
     pub fn rmdir(&mut self, path: &str) -> Result<(), AbiError> {
         let p = path.trim_end_matches('/');
+        
+        if p.starts_with("/fat/") {
+            #[cfg(feature = "fat32")]
+            {
+                use crate::fs::fat32;
+                if let Err(e) = fat32::rmdir_on_disk(p) {
+                    return Err(AbiError::Other(e));
+                }
+            }
+        }
+
         self.remove(p)
     }
 
@@ -347,6 +377,15 @@ impl Vfs {
     pub fn mkdir(&mut self, path: &str) {
         let p = path.trim_end_matches('/');
         if p.is_empty() || self.exists(p) { return; }
+
+        if p.starts_with("/fat/") {
+            #[cfg(feature = "fat32")]
+            {
+                use crate::fs::fat32;
+                let _ = fat32::mkdir_on_disk(p);
+            }
+        }
+
         self.mount_dir(p);
     }
 

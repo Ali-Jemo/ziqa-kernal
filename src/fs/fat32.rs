@@ -214,6 +214,7 @@ struct DirEntry {
 // ─── LFN helpers ─────────────────────────────────────────────────────────────
 
 /// Compute the VFAT checksum over an 8.3 short name (11 bytes).
+#[allow(dead_code)]
 fn lfn_checksum(short_name: &[u8; 11]) -> u8 {
     let mut sum = 0u8;
     for i in 0..11 {

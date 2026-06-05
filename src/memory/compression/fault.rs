@@ -2,7 +2,6 @@ use x86_64::VirtAddr;
 use x86_64::structures::paging::{PageTableFlags, FrameAllocator};
 use x86_64::structures::idt::PageFaultErrorCode;
 use crate::memory::paging::get_leaf_entry_mut;
-use super::tier::Compressor;
 
 /// OS-specific PTE bit indicating the page is compressed and stored.
 pub const COMPRESSED_BIT: PageTableFlags = PageTableFlags::BIT_9;
@@ -21,16 +20,8 @@ pub fn handle_compressed_fault(addr: VirtAddr, _error_code: PageFaultErrorCode) 
     
     crate::println!("[MM] Compressed page fault at {:?}", addr);
     
-    // Dispatch eBPF hook
-    crate::memory::compression::ebpf_hooks::dispatch_hook(
-        crate::memory::compression::ebpf_hooks::CompressionHook::PageAccess {
-            vaddr: addr,
-            is_write: _error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE),
-        }
-    );
-    
     // 1. Extract location and compressed data from the CompressedPageStore
-    let location = match crate::memory::compression::COMPRESSED_STORE.get_location(addr) {
+    let location = match crate::memory::compression::PAGE_STORE.get_location(addr) {
         Some(loc) => loc,
         None => {
             crate::println!("[MM] Fatal: Compressed page not found in store for {:?}", addr);
@@ -38,7 +29,7 @@ pub fn handle_compressed_fault(addr: VirtAddr, _error_code: PageFaultErrorCode) 
         }
     };
     
-    let compressed_data = match crate::memory::compression::COMPRESSED_STORE.retrieve(addr) {
+    let compressed_data = match crate::memory::compression::PAGE_STORE.retrieve(addr) {
         Some(data) => data,
         None => {
             crate::println!("[MM] Fatal: Failed to retrieve compressed data for {:?}", addr);
@@ -88,7 +79,7 @@ pub fn handle_compressed_fault(addr: VirtAddr, _error_code: PageFaultErrorCode) 
     crate::memory::paging::smp_tlb_flush(addr);
     
     // 7. Call `store.release()` to free the compressed store slot
-    crate::memory::compression::COMPRESSED_STORE.release(addr);
+    crate::memory::compression::PAGE_STORE.release(addr);
     
     true
 }

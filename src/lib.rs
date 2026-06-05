@@ -19,6 +19,9 @@ pub mod memory;
 pub mod perf;
 pub mod process;
 pub mod timer;
+pub mod tracepoints;
+pub mod bench_fork;
+pub mod bench_tlb;
 
 #[cfg(feature = "ebpf")]
 pub mod ebpf;
@@ -40,6 +43,7 @@ pub mod zig_kernel_ops;
 // tests always available but some test bodies may be cfg-gated
 pub mod tests;
 pub mod tests_net;
+pub mod tests_fix;
 
 pub use init::{init, init_abi_registry};
 

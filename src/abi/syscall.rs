@@ -11,7 +11,7 @@
 ///  230 = clock_nanosleep / nanosleep (simplified: ms in arg1)
 use crate::process::{Process, ProcessState};
 use crate::process::vma::Vma;
-use crate::capability::ResourceKind;
+use crate::capability::{ResourceKind, Permissions};
 
 /// Convert an AbiError to an errno value.
 pub fn abi_error_to_errno(e: &crate::abi::AbiError) -> u64 {
@@ -108,6 +108,15 @@ impl<'a> SyscallContext<'a> {
     pub fn abi_kind(&self) -> crate::process::AbiKind {
         self.process.abi
     }
+
+    /// Returns a decoupled info struct for eBPF tracepoints.
+    pub fn info(&self) -> crate::ebpf::attach::SyscallInfo {
+        crate::ebpf::attach::SyscallInfo {
+            number: self.number,
+            args: self.args,
+            retval: self.retval,
+        }
+    }
 }
 
 // ── Linux x86_64 syscall numbers ──────────────────────────────────────────────
@@ -162,6 +171,15 @@ pub mod nr {
     pub const ZIQA_DEV_PCI_IRQ: u64 = 1037;
 
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
+    /// Request a capability for a resource (e.g., File, Network).
+    /// args: [resource_kind: u64, path_ptr: u64, path_len: u64, flags: u32] → id / -errno
+    pub const ZIQA_CAP_REQUEST: u64 = 1000;
+    /// Read from a capability-protected resource.
+    /// args: [id: u64, buf_ptr: u64, count: u64, offset: u64] → bytes_read / -errno
+    pub const ZIQA_CAP_READ: u64 = 1001;
+    /// Write to a capability-protected resource.
+    /// args: [id: u64, buf_ptr: u64, count: u64, offset: u64] → bytes_written / -errno
+    pub const ZIQA_CAP_WRITE: u64 = 1002;
     /// Close a file capability and release its FD slot.
     /// args: [fd: usize] → 0 / -EBADF
     pub const ZIQA_CAP_CLOSE: u64 = 1003;
@@ -433,6 +451,9 @@ pub fn dispatch_syscall(
     // These are ABI-independent (not Linux-specific) and sit above the plugin
     // layer so that libposix can call them regardless of process ABI kind.
     match ctx.number {
+        nr::ZIQA_CAP_REQUEST => return ziqa_cap_request(ctx),
+        nr::ZIQA_CAP_READ    => return ziqa_cap_read(ctx),
+        nr::ZIQA_CAP_WRITE   => return ziqa_cap_write(ctx),
         nr::ZIQA_CAP_CLOSE => return ziqa_cap_close(ctx),
         nr::ZIQA_CAP_SEEK  => return ziqa_cap_seek(ctx),
         nr::ZIQA_CAP_REVOKE => return ziqa_cap_revoke(ctx),
@@ -924,4 +945,173 @@ fn ziqa_dev_pci_irq(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErro
 #[inline(always)]
 fn klog_syscall(name: &'static str, val: u64) {
     crate::klog!(crate::klog::Level::Debug, "syscall {} -> {}", name, val);
+}
+
+// ── New Capability Handlers for libposix ──────────────────────────────────────
+
+fn ziqa_cap_request(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    let kind_val = ctx.args[0];
+    let path_ptr = ctx.args[1] as *const u8;
+    let path_len = ctx.args[2] as usize;
+    let _flags   = ctx.args[3] as u32;
+
+    let kind = match kind_val {
+        1 => ResourceKind::File,
+        _ => return Ok(-(errno::EINVAL as i64) as u64),
+    };
+
+    if path_ptr.is_null() || path_len == 0 {
+        return Ok(-(errno::EFAULT as i64) as u64);
+    }
+
+    // Read path from userspace
+    let mut tmp = alloc::vec![0u8; path_len];
+    unsafe { core::ptr::copy_nonoverlapping(path_ptr, tmp.as_mut_ptr(), path_len); }
+    let path_str = core::str::from_utf8(&tmp).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+
+    // Handle special stdio paths
+    if path_str == "stdin" {
+        let id = ctx.process.capabilities.grant(kind, Permissions::read_only(), 0, None)
+            .ok_or(crate::abi::AbiError::Other("Cap space full"))?;
+        klog_syscall("ziqa_cap_request(stdin)", id.0);
+        return Ok(id.0);
+    }
+    if path_str == "stdout" {
+        let id = ctx.process.capabilities.grant(kind, Permissions::read_write(), 1, None)
+            .ok_or(crate::abi::AbiError::Other("Cap space full"))?;
+        klog_syscall("ziqa_cap_request(stdout)", id.0);
+        return Ok(id.0);
+    }
+    if path_str == "stderr" {
+        let id = ctx.process.capabilities.grant(kind, Permissions::read_write(), 2, None)
+            .ok_or(crate::abi::AbiError::Other("Cap space full"))?;
+        klog_syscall("ziqa_cap_request(stderr)", id.0);
+        return Ok(id.0);
+    }
+
+    // Check if process has general permission for file access
+    if !check_capability(ctx.process, kind, true, false) {
+        // Allow shell/boot processes to bypass for now
+    }
+
+    // Allocate an FD in the process table
+    match ctx.process.fds.alloc_file(path_str.as_bytes(), _flags) {
+        Some(fd) => {
+            // Grant a specific capability for this FD
+            let cap_id = ctx.process.capabilities.grant(
+                kind,
+                Permissions::read_write(),
+                fd as u64,
+                None,
+            ).ok_or(crate::abi::AbiError::Other("Cap space full"))?;
+            
+            klog_syscall("ziqa_cap_request", cap_id.0);
+            Ok(cap_id.0)
+        }
+        None => Ok(-(errno::EMFILE as i64) as u64),
+    }
+}
+
+fn ziqa_cap_read(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    let cap_id = crate::capability::CapabilityId(ctx.args[0]);
+    let buf_ptr = ctx.args[1] as *mut u8;
+    let count = ctx.args[2] as usize;
+    let offset = ctx.args[3] as usize;
+
+    let cap = match ctx.process.capabilities.lookup(cap_id) {
+        Some(c) => c,
+        None => return Ok(-(errno::EBADF as i64) as u64),
+    };
+
+    if cap.resource != ResourceKind::File || !cap.permissions.read {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
+    let fd = cap.target as usize;
+    let desc = match ctx.process.fds.get(fd) {
+        Some(d) => d,
+        None => return Ok(-(errno::EBADF as i64) as u64),
+    };
+
+    match desc.target {
+        crate::process::FdTarget::Stdin => {
+            let mut buf = alloc::vec![0u8; count];
+            let n = crate::drivers::keyboard::read_stdin(&mut buf);
+            unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
+            klog_syscall("ziqa_cap_read(stdin)", n as u64);
+            Ok(n as u64)
+        }
+        crate::process::FdTarget::File(_) => {
+            let path_bytes = ctx.process.fds.path_of(fd).ok_or(crate::abi::AbiError::Other("No path for FD"))?;
+            let path = core::str::from_utf8(path_bytes).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+
+            let mut buf = alloc::vec![0u8; count];
+            match crate::fs::vfs::VFS.read().read_raw(path, &mut buf, offset) {
+                Ok(n) => {
+                    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
+                    if let Some(desc_mut) = ctx.process.fds.get_mut(fd) {
+                        desc_mut.offset = offset + n;
+                    }
+                    klog_syscall("ziqa_cap_read", n as u64);
+                    Ok(n as u64)
+                }
+                Err(_) => Ok(-(errno::EIO as i64) as u64),
+            }
+        }
+        _ => Ok(0),
+    }
+}
+
+fn ziqa_cap_write(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    let cap_id = crate::capability::CapabilityId(ctx.args[0]);
+    let buf_ptr = ctx.args[1] as *const u8;
+    let count = ctx.args[2] as usize;
+    let offset = ctx.args[3] as usize;
+
+    let cap = match ctx.process.capabilities.lookup(cap_id) {
+        Some(c) => c,
+        None => return Ok(-(errno::EBADF as i64) as u64),
+    };
+
+    if cap.resource != ResourceKind::File || !cap.permissions.write {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
+    let fd = cap.target as usize;
+    let desc = match ctx.process.fds.get(fd) {
+        Some(d) => d,
+        None => return Ok(-(errno::EBADF as i64) as u64),
+    };
+
+    match desc.target {
+        crate::process::FdTarget::Stdout | crate::process::FdTarget::Stderr => {
+            let buf = unsafe { core::slice::from_raw_parts(buf_ptr, count) };
+            if let Ok(s) = core::str::from_utf8(buf) {
+                crate::print!("{}", s);
+                klog_syscall("ziqa_cap_write(stdout)", count as u64);
+                Ok(count as u64)
+            } else {
+                Ok(count as u64)
+            }
+        }
+        crate::process::FdTarget::File(_) => {
+            let path_bytes = ctx.process.fds.path_of(fd).ok_or(crate::abi::AbiError::Other("No path for FD"))?;
+            let path = core::str::from_utf8(path_bytes).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+
+            let mut buf = alloc::vec![0u8; count];
+            unsafe { core::ptr::copy_nonoverlapping(buf_ptr, buf.as_mut_ptr(), count); }
+
+            match crate::fs::vfs::VFS.read().write_raw(path, &buf, offset) {
+                Ok(n) => {
+                    if let Some(desc_mut) = ctx.process.fds.get_mut(fd) {
+                        desc_mut.offset = offset + n;
+                    }
+                    klog_syscall("ziqa_cap_write", n as u64);
+                    Ok(n as u64)
+                }
+                Err(_) => Ok(-(errno::EIO as i64) as u64),
+            }
+        }
+        _ => Ok(0),
+    }
 }
