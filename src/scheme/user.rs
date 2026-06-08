@@ -1,9 +1,3 @@
-/// User Scheme for ZiqaKernel
-/// This allows userspace processes to implement their own schemes.
-/// Ported and simplified from Redox OS.
-
-use alloc::sync::Arc;
-use spin::Mutex;
 use crate::scheme::{Scheme, SchemeResult};
 use crate::sync::WaitQueue;
 
@@ -43,15 +37,15 @@ impl Scheme for UserScheme {
         Ok(0)
     }
 
-    fn read(&self, id: usize, buf: &mut [u8]) -> SchemeResult<usize> {
+    fn read(&self, _id: usize, _buf: &mut [u8]) -> SchemeResult<usize> {
         Ok(0)
     }
 
-    fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize> {
+    fn write(&self, _id: usize, _buf: &[u8]) -> SchemeResult<usize> {
         Ok(0)
     }
 
-    fn close(&self, id: usize) -> SchemeResult<()> {
+    fn close(&self, _id: usize) -> SchemeResult<()> {
         Ok(())
     }
 }

@@ -30,7 +30,7 @@ pub fn run_mouse_server(channel_id: usize) {
     loop {
         if let Ok(msg) = channel.recv() {
             let req = Serializable::deserialize(&msg.data[..msg.len]);
-            let res = server.handle_request(req);
+            let _res = server.handle_request(req);
             // In a full implementation, res would be serialized and sent to a response channel
         }
         crate::process::scheduler::yield_now();

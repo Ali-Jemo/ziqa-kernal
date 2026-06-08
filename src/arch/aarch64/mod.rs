@@ -122,8 +122,50 @@ pub struct TrapFrame {
     pub sp_el0: u64,
 }
 
-pub fn update_trap_stacks(_stack_top: u64) {
-    // ARM64 specific: update TPIDR_EL1 or similar if used for per-cpu data
+pub fn update_trap_stacks(stack_top: u64) {
+    // On AArch64, we might want to store the kernel stack top in a per-cpu register
+    // or use it during exception entry.
+    unsafe {
+        core::arch::asm!("msr tpidr_el1, {}", in(reg) stack_top);
+    }
+}
+
+pub unsafe fn jump_to_user(trap_frame: *const TrapFrame) -> ! {
+    // Restore state from TrapFrame and ERET to EL0
+    unsafe {
+        core::arch::asm!(
+            "
+            mov sp, {tf}
+            ldp x0, x1, [sp], #16
+            ldp x2, x3, [sp], #16
+            ldp x4, x5, [sp], #16
+            ldp x6, x7, [sp], #16
+            ldp x8, x9, [sp], #16
+            ldp x10, x11, [sp], #16
+            ldp x12, x13, [sp], #16
+            ldp x14, x15, [sp], #16
+            ldp x16, x17, [sp], #16
+            ldp x18, x19, [sp], #16
+            ldp x20, x21, [sp], #16
+            ldp x22, x23, [sp], #16
+            ldp x24, x25, [sp], #16
+            ldp x26, x27, [sp], #16
+            ldp x28, x29, [sp], #16
+            ldr x30, [sp], #8
+            
+            ldr x1, [sp], #8 // elr_el1
+            msr elr_el1, x1
+            ldr x1, [sp], #8 // spsr_el1
+            msr spsr_el1, x1
+            ldr x1, [sp], #8 // sp_el0
+            msr sp_el0, x1
+            
+            eret
+            ",
+            tf = in(reg) trap_frame,
+            options(noreturn)
+        );
+    }
 }
 
 #[unsafe(naked)]
@@ -192,6 +234,75 @@ pub fn current_pid() -> Option<crate::process::Pid> {
 
 pub fn set_current_pid(_pid: Option<crate::process::Pid>) {
     // TODO: implement per-cpu data for aarch64
+}
+
+pub fn interrupts_enabled() -> bool {
+    let daif: u64;
+    unsafe {
+        core::arch::asm!("mrs {}, daif", out(reg) daif);
+    }
+    (daif & (1 << 7)) == 0 // I bit (IRQ mask)
+}
+
+pub fn enable_interrupts() {
+    unsafe {
+        core::arch::asm!("msr daifclr, #2");
+    }
+}
+
+pub fn disable_interrupts() {
+    unsafe {
+        core::arch::asm!("msr daifset, #2");
+    }
+}
+
+pub fn without_interrupts<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let enabled = interrupts_enabled();
+    if enabled {
+        disable_interrupts();
+    }
+    let ret = f();
+    if enabled {
+        enable_interrupts();
+    }
+    ret
+}
+
+pub fn yield_now() {
+    unsafe { core::arch::asm!("svc #0x20"); }
+}
+
+pub fn init_process_stack(proc: &mut crate::process::Process) {
+    // TODO: Implement page mapping for stack on AArch64
+    if proc.kernel_stack_top != 0 {
+        unsafe {
+            let kstack_top = proc.kernel_stack_top;
+            // Setup CpuState on kernel stack for jump_to_user_stub
+            let mut sp = kstack_top;
+            sp -= 8; *(sp as *mut u64) = 0; // tpidr_el0
+            sp -= 8; *(sp as *mut u64) = 0x05; // spsr_el1 (EL1h) - dummy user state should be 0
+            sp -= 8; *(sp as *mut u64) = proc.entry_point.as_u64(); // elr_el1
+            sp -= 8; *(sp as *mut u64) = proc.stack_top.as_u64(); // sp_el0
+            
+            // Registers x30 down to x19 (12 registers)
+            for _ in 0..12 {
+                sp -= 8; *(sp as *mut u64) = 0;
+            }
+            
+            let ret_addr_ptr = (sp - 8) as *mut u64;
+            ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
+            
+            // Context switch preserved registers (x30 down to x19 - 12 registers)
+            let mut ctx_sp = sp - 8;
+            for _ in 0..12 {
+                ctx_sp -= 8; *(ctx_sp as *mut u64) = 0;
+            }
+            proc.kernel_stack_ptr = ctx_sp;
+        }
+    }
 }
 
 #[unsafe(naked)]

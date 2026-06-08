@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::ptr::NonNull;
 use spin::Mutex;
@@ -199,6 +198,7 @@ pub fn draw_test_pattern() {
 
 pub static GPU_IPC_CHANNEL: Mutex<Option<u32>> = Mutex::new(None);
 
+#[allow(dead_code)]
 fn gpu_ipc_listener(_arg: *const ()) {
     let chan_id = *GPU_IPC_CHANNEL.lock().as_ref().unwrap();
     loop {

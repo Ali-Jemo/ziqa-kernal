@@ -10,7 +10,6 @@ pub mod driver;
 use crate::process::Pid;
 use spin::{Mutex, RwLock};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
 /// Maximum bytes in a single IPC message
 pub const MSG_MAX: usize = 256;

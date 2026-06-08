@@ -6,7 +6,7 @@ pub mod per_cpu;
 pub mod smp;
 pub mod switch;
 
-pub use switch::TrapFrame;
+pub use switch::{TrapFrame, switch_context, jump_to_user_stub};
 pub use per_cpu::{current_pid, set_current_pid};
 
 // Re-export the IDT init from interrupts module for backward compat
@@ -35,6 +35,69 @@ pub unsafe fn save_fpu(state: *mut FpuState) {
 
 pub unsafe fn restore_fpu(state: *const FpuState) {
     core::arch::asm!("fxrstor [{}]", in(reg) state);
+}
+
+pub fn interrupts_enabled() -> bool {
+    x86_64::instructions::interrupts::are_enabled()
+}
+
+pub fn enable_interrupts() {
+    x86_64::instructions::interrupts::enable();
+}
+
+pub fn disable_interrupts() {
+    x86_64::instructions::interrupts::disable();
+}
+
+pub fn without_interrupts<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    x86_64::instructions::interrupts::without_interrupts(f)
+}
+
+pub fn yield_now() {
+    unsafe { core::arch::asm!("int 0x20"); }
+}
+
+pub fn init_process_stack(proc: &mut crate::process::Process) {
+    use crate::memory::VirtAddr;
+    use x86_64::structures::paging::FrameAllocator;
+    let stack_top = proc.stack_top.as_u64();
+    if stack_top != 0 {
+        let page_addr = (stack_top - 4096) & !0xFFF;
+        let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
+        let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+        let fa = fa_guard.as_mut().unwrap();
+        let flags = x86_64::structures::paging::PageTableFlags::PRESENT | x86_64::structures::paging::PageTableFlags::WRITABLE | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+        if let Some(frame) = fa.allocate_frame() {
+            unsafe {
+                use x86_64::structures::paging::Mapper;
+                if let Some(pt_frame) = proc.page_table_frame {
+                    let po = crate::memory::paging::phys_offset();
+                    let l4_virt = po + pt_frame.start_address().as_u64();
+                    let l4 = &mut *(l4_virt.as_mut_ptr());
+                    let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
+                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                } else {
+                    let mut mapper = crate::memory::paging::current_mapper();
+                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                }
+            }
+        }
+    }
+    if proc.kernel_stack_top != 0 {
+        unsafe {
+            let kstack_top = proc.kernel_stack_top;
+            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64) as *mut crate::process::CpuState;
+            cpu_state_ptr.write(crate::process::CpuState { r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rdi: 0, rsi: 0, rbp: 0, rbx: 0, rdx: 0, rcx: 0, rax: 0, rip: proc.entry_point.as_u64(), cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64, rflags: 0x202, rsp: stack_top, ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64, });
+            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8) as *mut u64;
+            ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
+            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48) as *mut u64;
+            for i in 0..6 { context_ptr.add(i).write(0); }
+            proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
+        }
+    }
 }
 
 pub struct CpuState {

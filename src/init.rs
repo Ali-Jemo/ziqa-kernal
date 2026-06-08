@@ -40,7 +40,7 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     raw_serial_log("init: klogs done, starting memory init\n");
 
     // Memory and heap init.
-    use memory::BootInfoFrameAllocator;
+    
     use memory::paging::MemoryMapper;
     use x86_64::VirtAddr;
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);

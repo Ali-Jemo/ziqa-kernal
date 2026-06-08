@@ -8,7 +8,6 @@
 /// Delegates the actual copies to `crate::memory::{copy_from_user, copy_to_user}`.
 extern crate alloc;
 
-use alloc::vec::Vec;
 use crate::abi::AbiError;
 use crate::memory::copy_from_user;
 use crate::memory::copy_to_user;

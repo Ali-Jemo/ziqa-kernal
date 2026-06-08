@@ -8,11 +8,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
-use x86_64::registers::control::{Cr3, Cr3Flags};
-use x86_64::structures::paging::FrameAllocator;
-
-const PRIORITY_LEVELS: u8 = 4;
-const BOOST_INTERVAL: u64 = 1000;
 
 /// The global process table, allowing concurrent access to different processes.
 pub struct GlobalProcessTable {
@@ -183,17 +178,20 @@ impl Scheduler {
         }
     }
 
-    pub fn ptrace_read_mem(&self, pid: Pid, addr: u64, buf: &mut [u8]) -> bool {
+    pub fn ptrace_read_mem(&self, pid: Pid, _addr: u64, _buf: &mut [u8]) -> bool {
         let proc_arc = match self.get_process(pid) {
             Some(p) => p,
             None => return false,
         };
         let proc = proc_arc.lock();
-        let target_frame = match proc.page_table_frame {
+        let _target_frame = match proc.page_table_frame {
             Some(f) => f,
             None => return false, // Cannot access shared kernel table via ptrace
         };
 
+        // TODO: Implement multi-arch safe ptrace memory access
+        // x86_64 implementation was:
+        /*
         x86_64::instructions::interrupts::without_interrupts(|| {
             let old_cr3 = Cr3::read();
             unsafe { Cr3::write(target_frame, Cr3Flags::empty()); }
@@ -203,30 +201,23 @@ impl Scheduler {
 
             unsafe { Cr3::write(old_cr3.0, old_cr3.1); }
         });
-        true
+        */
+        false
     }
 
-    pub fn ptrace_write_mem(&self, pid: Pid, addr: u64, buf: &[u8]) -> bool {
+    pub fn ptrace_write_mem(&self, pid: Pid, _addr: u64, _buf: &[u8]) -> bool {
         let proc_arc = match self.get_process(pid) {
             Some(p) => p,
             None => return false,
         };
-        let mut proc = proc_arc.lock();
-        let target_frame = match proc.page_table_frame {
+        let mut _proc = proc_arc.lock();
+        let _target_frame = match _proc.page_table_frame {
             Some(f) => f,
             None => return false, // Cannot access shared kernel table via ptrace
         };
 
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let old_cr3 = Cr3::read();
-            unsafe { Cr3::write(target_frame, Cr3Flags::empty()); }
-            
-            let slice = unsafe { core::slice::from_raw_parts_mut(addr as *mut u8, buf.len()) };
-            slice.copy_from_slice(buf);
-
-            unsafe { Cr3::write(old_cr3.0, old_cr3.1); }
-        });
-        true
+        // TODO: Implement multi-arch safe ptrace memory access
+        false
     }
 
     pub fn exit_process(&self, pid: Pid, code: i64) {
@@ -339,7 +330,7 @@ impl Scheduler {
 
 
     pub fn fork(&self, parent_pid: Pid) -> Option<Pid> {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::without_interrupts(|| {
             let child_l4_frame = crate::memory::paging::cow_fork_parent();
             let parent_arc = self.get_process(parent_pid)?;
             let mut parent = parent_arc.lock();
@@ -373,9 +364,9 @@ impl Scheduler {
     }
 
     pub fn waitpid(&self, parent: Pid, child_pid: i64, _options: i32) -> Option<(Pid, i64)> {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::without_interrupts(|| {
             let table = self.process_table.read();
-            for (&pid, proc_arc) in table.tasks.iter() {
+            for (&_pid, proc_arc) in table.tasks.iter() {
                 let proc = proc_arc.lock();
                 let matches = if child_pid == -1 {
                     proc.parent == parent.0
@@ -426,7 +417,7 @@ impl Scheduler {
     /// because this ISR is hogging the CPU). Use `try_lock` and skip work
     /// we can't grab right now — the next tick will retry.
     pub fn tick(&self) {
-        let t = self.ticks.fetch_add(1, Ordering::Relaxed) + 1;
+        let _t = self.ticks.fetch_add(1, Ordering::Relaxed) + 1;
 
         if let Some(pid) = self.current_pid() {
             if let Some(proc_arc) = self.get_process(pid) {
@@ -438,9 +429,9 @@ impl Scheduler {
     }
 
     pub fn schedule(&self) {
-        let interrupts_enabled = x86_64::instructions::interrupts::are_enabled();
+        let interrupts_enabled = crate::arch::interrupts_enabled();
         if interrupts_enabled {
-            x86_64::instructions::interrupts::disable();
+            crate::arch::disable_interrupts();
         }
 
         let next_pid = self.ready_queues.lock().pop_lowest();
@@ -450,7 +441,7 @@ impl Scheduler {
             
             if old_pid == Some(new_pid) {
                 if interrupts_enabled {
-                    x86_64::instructions::interrupts::enable();
+                    crate::arch::enable_interrupts();
                 }
                 return;
             }
@@ -461,6 +452,7 @@ impl Scheduler {
             let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
 
             // Save FS/GS base of the old process
+            #[cfg(target_arch = "x86_64")]
             if let Some(old_arc) = old_proc_arc.clone() {
                 use x86_64::registers::model_specific::Msr;
                 let fs_msr = Msr::new(0xC0000100);
@@ -481,6 +473,7 @@ impl Scheduler {
             let new_sp = new_proc_arc.lock().kernel_stack_ptr;
 
             // Load FS/GS base of the new process
+            #[cfg(target_arch = "x86_64")]
             {
                 use x86_64::registers::model_specific::Msr;
                 let new_proc = new_proc_arc.lock();
@@ -493,13 +486,14 @@ impl Scheduler {
             }
 
             if let Some(frame) = new_cr3 {
-                unsafe { Cr3::write(frame, Cr3Flags::empty()); }
+                #[cfg(target_arch = "x86_64")]
+                unsafe { x86_64::registers::control::Cr3::write(frame, x86_64::registers::control::Cr3Flags::empty()); }
+                // TODO: Add ASID/TTBR switching for aarch64, SATP for riscv64
             }
-            crate::arch::x86_64::update_trap_stacks(new_kstack_top);
+            crate::arch::update_trap_stacks(new_kstack_top);
             if let Some(old_arc) = old_proc_arc {
                 let old_sp_ptr = {
                     let mut old_proc = old_arc.lock();
-                    unsafe { crate::arch::x86_64::save_fpu(&mut old_proc.fpu_state); }
                     if old_proc.state == ProcessState::Running {
                         old_proc.state = ProcessState::Ready;
                         self.ready_queues.lock().push(old_proc.pid, old_proc.vruntime);
@@ -507,7 +501,7 @@ impl Scheduler {
                     &mut old_proc.kernel_stack_ptr as *mut u64
                 };
                 unsafe {
-                    crate::arch::x86_64::switch::switch_context(
+                    crate::arch::switch_context(
                         old_sp_ptr,
                         new_sp,
                     );
@@ -515,24 +509,16 @@ impl Scheduler {
             } else {
                 let mut dummy: u64 = 0;
                 unsafe {
-                    crate::arch::x86_64::switch::switch_context(
+                    crate::arch::switch_context(
                         &mut dummy as *mut u64,
                         new_sp,
                     );
                 }
             }
-            
-            // Restore FPU state for the newly scheduled process
-            if let Some(current_pid) = self.current_pid() {
-                if let Some(proc_arc) = self.get_process(current_pid) {
-                    let proc = proc_arc.lock();
-                    unsafe { crate::arch::x86_64::restore_fpu(&proc.fpu_state); }
-                }
-            }
         }
 
         if interrupts_enabled {
-            x86_64::instructions::interrupts::enable();
+            crate::arch::enable_interrupts();
         }
     }
 
@@ -569,7 +555,7 @@ impl Scheduler {
     }
 
     pub fn init_boot_process(&self) {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        crate::arch::without_interrupts(|| {
             let pid = self.pid_allocator.lock().alloc_pid();
             let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
             let kstack = alloc::vec![0u8; 65536];
@@ -588,12 +574,12 @@ impl Scheduler {
 pub static SCHEDULER: Scheduler = Scheduler::new();
 
 pub fn tick() { SCHEDULER.tick(); }
-pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
-pub fn spawn_kthread(entry: fn(*const ()), arg: *const ()) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_kthread(entry, arg)) }
-pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
-pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
-pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
-pub fn wake_sleeping(woken_mask: u64) { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }
+pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
+pub fn spawn_kthread(entry: fn(*const ()), arg: *const ()) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn_kthread(entry, arg)) }
+pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
+pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { crate::arch::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
+pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { crate::arch::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
+pub fn wake_sleeping(woken_mask: u64) { crate::arch::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }
 // ── Kernel-thread public API ──────────────────────────────────────────────────
 //
 // Free-function shims around the scheduler's kthread methods. These exist
@@ -605,13 +591,13 @@ pub fn wake_sleeping(woken_mask: u64) { x86_64::instructions::interrupts::withou
 /// Block the current task until `pid` exits (or is canceled) and return
 /// its exit code. Returns `-1` if the pid is unknown.
 pub fn join_kthread(pid: Pid) -> i64 {
-    x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.join_kthread(pid))
+    crate::arch::without_interrupts(|| SCHEDULER.join_kthread(pid))
 }
 
 /// Force a kthread (or any task) into `Canceled` state and unblock its
 /// joiners. Returns `false` if the pid is unknown or already exited.
 pub fn cancel_kthread(pid: Pid) -> bool {
-    x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.cancel_kthread(pid))
+    crate::arch::without_interrupts(|| SCHEDULER.cancel_kthread(pid))
 }
 
 /// Voluntarily terminate the current kthread. Never returns.
@@ -648,7 +634,7 @@ pub fn with_current_task<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&Process) -> R,
 {
-    x86_64::instructions::interrupts::without_interrupts(|| {
+    crate::arch::without_interrupts(|| {
         let pid = SCHEDULER.current_pid()?;
         let proc_arc = SCHEDULER.get_process(pid)?;
         let proc = proc_arc.lock();
@@ -662,7 +648,7 @@ pub fn with_current_task_mut<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut Process) -> R,
 {
-    x86_64::instructions::interrupts::without_interrupts(|| {
+    crate::arch::without_interrupts(|| {
         let pid = SCHEDULER.current_pid()?;
         let proc_arc = SCHEDULER.get_process(pid)?;
         let mut proc = proc_arc.lock();
@@ -686,7 +672,7 @@ where
 
 /// Read-only access to a non-current process. Safe in any context.
 pub fn current_task() -> Option<Arc<Mutex<Process>>> {
-    x86_64::instructions::interrupts::without_interrupts(|| {
+    crate::arch::without_interrupts(|| {
         SCHEDULER.current_pid().and_then(|pid| SCHEDULER.get_process(pid))
     })
 }
@@ -697,8 +683,8 @@ pub fn current_task() -> Option<Arc<Mutex<Process>>> {
 /// non-trivial work. Prefer `with_current_task` / `with_current_task_mut`.
 #[deprecated(note = "process lock is held with IRQs on; can deadlock against timer ISR. Use with_current_task(_mut) instead.")]
 pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
-pub fn list_pids() -> Vec<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.list_pids()) }
-pub fn yield_now() { unsafe { core::arch::asm!("int 0x20"); } }
+pub fn list_pids() -> Vec<Pid> { crate::arch::without_interrupts(|| SCHEDULER.list_pids()) }
+pub fn yield_now() { crate::arch::yield_now(); }
 
 /// Replace a process with a new ELF binary (execve).
 /// This clears old mappings, loads the new binary, and resets CPU state.
@@ -708,7 +694,7 @@ pub fn exec_process(
     _args: &[&[u8]],
     _env: &[&[u8]],
 ) -> Result<(), &'static str> {
-    x86_64::instructions::interrupts::without_interrupts(|| {
+    crate::arch::without_interrupts(|| {
         let registry = crate::init_abi_registry();
         let plugin = registry.detect(binary).ok_or("exec: unrecognized binary format")?;
 
@@ -778,40 +764,5 @@ pub fn kthread_exit(code: i64) -> ! {
 }
 
 fn init_process_stack(proc: &mut Process) {
-    let stack_top = proc.stack_top.as_u64();
-    if stack_top != 0 {
-        let page_addr = (stack_top - 4096) & !0xFFF;
-        let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
-        let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
-        let fa = fa_guard.as_mut().unwrap();
-        let flags = x86_64::structures::paging::PageTableFlags::PRESENT | x86_64::structures::paging::PageTableFlags::WRITABLE | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
-        if let Some(frame) = fa.allocate_frame() {
-            unsafe {
-                use x86_64::structures::paging::Mapper;
-                if let Some(pt_frame) = proc.page_table_frame {
-                    let po = crate::memory::paging::phys_offset();
-                    let l4_virt = po + pt_frame.start_address().as_u64();
-                    let l4 = &mut *(l4_virt.as_mut_ptr());
-                    let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
-                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
-                } else {
-                    let mut mapper = crate::memory::paging::current_mapper();
-                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
-                }
-            }
-        }
-    }
-    if proc.kernel_stack_top != 0 {
-        unsafe {
-            let kstack_top = proc.kernel_stack_top;
-            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64) as *mut crate::process::CpuState;
-            cpu_state_ptr.write(crate::process::CpuState { r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rdi: 0, rsi: 0, rbp: 0, rbx: 0, rdx: 0, rcx: 0, rax: 0, rip: proc.entry_point.as_u64(), cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64, rflags: 0x202, rsp: stack_top, ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64, });
-            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8) as *mut u64;
-            extern "C" { fn jump_to_user_stub(); }
-            ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
-            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48) as *mut u64;
-            for i in 0..6 { context_ptr.add(i).write(0); }
-            proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
-        }
-    }
+    crate::arch::init_process_stack(proc);
 }

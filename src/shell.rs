@@ -49,6 +49,7 @@ const C_YELLOW: &str = "\x1b[33m";
 const C_BLUE: &str = "\x1b[34m";
 const C_MAGENTA: &str = "\x1b[35m";
 const C_CYAN: &str = "\x1b[36m";
+#[allow(dead_code)]
 const C_WHITE: &str = "\x1b[37m";
 
 /// A parsed command with redirection and background info

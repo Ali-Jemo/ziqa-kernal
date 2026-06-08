@@ -3,9 +3,7 @@ use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use x86_64::structures::paging::{FrameAllocator, Mapper, PageTableFlags};
-#[cfg(feature = "ebpf")]
-use crate::ebpf::attach::{EBPF_ATTACHMENTS, TracepointType};
+use x86_64::structures::paging::PageTableFlags;
 use crate::abi::syscall::abi_error_to_errno;
 
 pub const PIC_1_OFFSET: u8 = 32;

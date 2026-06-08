@@ -1,12 +1,10 @@
 //! Process blocking and wakeup mechanism.
 //! Ported and simplified from Redox OS.
 
-use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use spin::Mutex;
 use crate::process::Pid;
 use crate::process::scheduler::SCHEDULER;
-use crate::sync::ordered::{L1, L2, L0, LockToken, CleanLockToken};
 
 #[derive(Debug)]
 pub struct WaitCondition {

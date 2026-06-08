@@ -1,5 +1,4 @@
-use crate::ipc::driver::protocol::{DriverRequest, DriverResponse};
-use crate::ipc::Message;
+use crate::ipc::driver::protocol::DriverRequest;
 use alloc::vec::Vec;
 
 pub trait Serializable {

@@ -105,8 +105,64 @@ pub struct TrapFrame {
     pub sstatus: u64,
 }
 
-pub fn update_trap_stacks(_stack_top: u64) {
-    // RISC-V specific: update sscratch or similar if used for kernel stack
+pub fn update_trap_stacks(stack_top: u64) {
+    // On RISC-V, we often use sscratch to store the kernel stack top
+    unsafe {
+        core::arch::asm!("csrw sscratch, {}", in(reg) stack_top);
+    }
+}
+
+pub unsafe fn jump_to_user(trap_frame: *const TrapFrame) -> ! {
+    // Restore state from TrapFrame and SRET to User Mode
+    unsafe {
+        core::arch::asm!(
+            "
+            mv sp, {tf}
+            ld t0, 0(sp)    // pc
+            csrw sepc, t0
+            ld t0, 256(sp)  // sstatus
+            csrw sstatus, t0
+            
+            ld ra, 8(sp)
+            // skip user sp (16) until the very end
+            ld gp, 24(sp)
+            ld tp, 32(sp)
+            ld t0, 40(sp)
+            ld t1, 48(sp)
+            ld t2, 56(sp)
+            ld s0, 64(sp)
+            ld s1, 72(sp)
+            ld a0, 80(sp)
+            ld a1, 88(sp)
+            ld a2, 96(sp)
+            ld a3, 104(sp)
+            ld a4, 112(sp)
+            ld a5, 120(sp)
+            ld a6, 128(sp)
+            ld a7, 136(sp)
+            ld s2, 144(sp)
+            ld s3, 152(sp)
+            ld s4, 160(sp)
+            ld s5, 168(sp)
+            ld s6, 176(sp)
+            ld s7, 184(sp)
+            ld s8, 192(sp)
+            ld s9, 200(sp)
+            ld s10, 208(sp)
+            ld s11, 216(sp)
+            ld t3, 224(sp)
+            ld t4, 232(sp)
+            ld t5, 240(sp)
+            ld t6, 248(sp)
+            
+            ld sp, 16(sp) // restore user sp
+            
+            sret
+            ",
+            tf = in(reg) trap_frame,
+            options(noreturn)
+        );
+    }
 }
 
 #[unsafe(naked)]
@@ -183,6 +239,79 @@ pub fn current_pid() -> Option<crate::process::Pid> {
 
 pub fn set_current_pid(_pid: Option<crate::process::Pid>) {
     // TODO: implement per-cpu data for riscv64
+}
+
+pub fn interrupts_enabled() -> bool {
+    let sstatus: u64;
+    unsafe {
+        core::arch::asm!("csrr {}, sstatus", out(reg) sstatus);
+    }
+    (sstatus & (1 << 1)) != 0 // SIE bit
+}
+
+pub fn enable_interrupts() {
+    unsafe {
+        core::arch::asm!("csrrs zero, sstatus, {}", in(reg) (1 << 1));
+    }
+}
+
+pub fn disable_interrupts() {
+    unsafe {
+        core::arch::asm!("csrrc zero, sstatus, {}", in(reg) (1 << 1));
+    }
+}
+
+pub fn without_interrupts<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let enabled = interrupts_enabled();
+    if enabled {
+        disable_interrupts();
+    }
+    let ret = f();
+    if enabled {
+        enable_interrupts();
+    }
+    ret
+}
+
+pub fn yield_now() {
+    unsafe { core::arch::asm!("ecall"); }
+}
+
+pub fn init_process_stack(proc: &mut crate::process::Process) {
+    // TODO: Implement page mapping for stack on RISC-V
+    if proc.kernel_stack_top != 0 {
+        unsafe {
+            let kstack_top = proc.kernel_stack_top;
+            // Setup CpuState on kernel stack for jump_to_user_stub
+            let mut sp = kstack_top;
+            sp -= 8; *(sp as *mut u64) = 0x20; // sstatus (User mode + SPIE)
+            sp -= 8; *(sp as *mut u64) = proc.entry_point.as_u64(); // sepc
+            
+            // Registers x31 down to x0 (32 registers)
+            // x2 is user sp
+            for i in (0..32).rev() {
+                sp -= 8;
+                if i == 2 {
+                    *(sp as *mut u64) = proc.stack_top.as_u64();
+                } else {
+                    *(sp as *mut u64) = 0;
+                }
+            }
+            
+            let ret_addr_ptr = (sp - 8) as *mut u64;
+            ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
+            
+            // Context switch preserved registers (ra, s0-s11 - 13 registers)
+            let mut ctx_sp = sp - 8;
+            for _ in 0..14 { // ra + s0-s11 + padding
+                ctx_sp -= 8; *(ctx_sp as *mut u64) = 0;
+            }
+            proc.kernel_stack_ptr = ctx_sp;
+        }
+    }
 }
 
 #[unsafe(naked)]
