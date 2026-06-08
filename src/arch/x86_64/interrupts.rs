@@ -3,7 +3,9 @@ use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use x86_64::structures::paging::{FrameAllocator, Mapper};
+use x86_64::structures::paging::{FrameAllocator, Mapper, PageTableFlags};
+#[cfg(feature = "ebpf")]
+use crate::ebpf::attach::{EBPF_ATTACHMENTS, TracepointType};
 use crate::abi::syscall::abi_error_to_errno;
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -161,137 +163,54 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     use x86_64::registers::control::Cr2;
     let fault_addr = Cr2::read();
-    println!(
-        "EXCEPTION: PAGE FAULT\n  addr={:?}  code={:?}\n{:#?}",
-        fault_addr, error_code, frame
-    );
-
+    
     // Fast path: Check if this is a compressed page fault
     if crate::memory::compression::fault::handle_compressed_fault(fault_addr, error_code) {
         return;
     }
-
-    // Handle demand paging
-    let region_info = crate::process::scheduler::with_current_task(|proc| {
-        println!("[MM] Current process {} found", proc.pid.0);
-        // Check if fault address is within any of the process's memory regions
-        let has_region = proc.vmas.iter().any(|vma| vma.contains(fault_addr));
-
-        if has_region {
-            println!("[MM] Found region for address {:?}", fault_addr);
+    
+    let handled = crate::process::scheduler::with_current_task(|proc| {
+        let access_flags = if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
+             PageTableFlags::WRITABLE 
         } else {
-            println!("[MM] No region found for address {:?}", fault_addr);
-        }
-    });
-    if region_info.is_none() {
-        println!("[MM] No current task in page-fault handler");
-    }
-    // region_info intentionally unused (logging only) but the call exercises
-    // the safe helper so we hit the timer-IRS-while-locked bug visibly if it returns.
-
-    if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-        // Check if this is a COW page — allocate a private copy and remap writable
-        let cow_handled = {
-            let is_cow = crate::process::scheduler::with_current_task(|proc| {
-                proc.vmas.iter().any(|vma| {
-                    vma.flags.copy_on_write && vma.contains(fault_addr)
-                })
-            })
-            .unwrap_or(false);
-            if is_cow {
-                crate::memory::paging::handle_cow_fault(fault_addr)
-            } else {
-                false
-            }
+            PageTableFlags::empty()
         };
-        if cow_handled {
-            println!("[MM] COW fault resolved at {:?}", fault_addr);
-            return;
+
+        // Find matching VMA
+        let vma = match proc.vmas.iter().find(|v| v.contains(fault_addr)) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        // Verify permissions
+        if access_flags.contains(PageTableFlags::WRITABLE) && !vma.flags.writable {
+            return false;
         }
-        println!("[MM] Protection violation, but NOT a COW page — halting");
-    } else {
-        // Page not present - demand paging opportunity
-        println!(
-            "[MM] Page not present, attempting demand paging at addr {:?}",
-            fault_addr
-        );
 
-        // Extract region info while holding the scheduler lock,
-        // then drop it before taking memory locks to avoid deadlocks.
-        let demand_info = crate::process::scheduler::with_current_task(|proc| {
-            let vma_entry = proc.vmas.iter().find(|vma| vma.contains(fault_addr));
+        let pt_frame = match proc.page_table_frame {
+            Some(f) => f,
+            None => return false,
+        };
 
-            if let Some(vma) = vma_entry {
-                let binary_ptr = if !proc.binary_data.is_empty() {
-                    Some((proc.binary_data.as_ptr(), proc.binary_data.len()))
-                } else {
-                    None
-                };
-                let flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
-                Some((vma.start.as_u64(), vma.file_offset, binary_ptr, flags))
-            } else {
-                println!("[MM] Invalid access - no region found");
-                None
-            }
-        })
-        .flatten(); // scheduler lock dropped here
-
-        if let Some((region_start, file_offset, binary_info, flags)) = demand_info {
-            let page = x86_64::structures::paging::Page::containing_address(fault_addr);
-
-            // Hold a SINGLE lock on the frame allocator for the entire operation.
-            // This prevents map_to from getting frames that conflict with our frame.
-            let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
-            let fa = fa_guard.as_mut().unwrap();
-
-            if let Some(frame) = fa.allocate_frame() {
-                unsafe {
-                    let mut mapper = crate::memory::paging::current_mapper();
-                    // Use map_to with the SAME frame allocator reference —
-                    // no double locking, no frame reuse.
-                    match mapper.map_to(page, frame, flags, fa) {
-                        Ok(flusher) => {
-                            flusher.flush();
-
-                            // Copy ELF binary data or zero the page
-                            let page_addr = page.start_address().as_u64();
-                            if let Some((bin_ptr, bin_len)) = binary_info {
-                                let in_region_off = page_addr.saturating_sub(region_start);
-                                let binary_off = file_offset as usize + in_region_off as usize;
-                                let copy_size = 4096usize.min(bin_len.saturating_sub(binary_off));
-                                if copy_size > 0 {
-                                    core::ptr::copy_nonoverlapping(
-                                        bin_ptr.add(binary_off),
-                                        page_addr as *mut u8,
-                                        copy_size,
-                                    );
-                                    println!(
-                                        "[MM] Copied {} bytes from binary to {:x}",
-                                        copy_size, page_addr
-                                    );
-                                }
-                            } else {
-                                core::ptr::write_bytes(page_addr as *mut u8, 0, 4096);
-                            }
-
-                            println!("[MM] Demand page mapped + populated");
-                            return;
-                        }
-                        Err(_e) => {
-                            // Page was already mapped (race or stale TLB).
-                            // This is the panic you were seeing — now handled gracefully.
-                            println!("[MM] Page already mapped at {:?}, skipping", fault_addr);
-                            return;
-                        }
-                    }
-                }
-            } else {
-                println!("[MM] Out of memory - frame allocation failed");
-            }
+        // Handle COW fault
+        if vma.flags.copy_on_write && access_flags.contains(PageTableFlags::WRITABLE) {
+            return crate::memory::paging::handle_cow_fault(pt_frame, fault_addr);
         }
+
+        // Demand page
+        let page_flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
+        crate::memory::paging::demand_page_for_frame(pt_frame, fault_addr, page_flags)
+    }).unwrap_or(false);
+
+    if handled {
+        return;
     }
 
-    // For now halt on unhandled faults
+    println!(
+        "EXCEPTION: PAGE FAULT (Unresolved)\n  addr={:?}  code={:?}\n{:#?}",
+        fault_addr, error_code, frame
+    );
+
     loop {
         x86_64::instructions::hlt();
     }

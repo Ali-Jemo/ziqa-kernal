@@ -56,6 +56,18 @@ impl Vfs {
         }
     }
 
+    /// Check for a Redox-style scheme prefix (e.g. "debug:", "pipe:")
+    /// and forward to the scheme registry if found.
+    pub fn handle_scheme(&self, path: &str, flags: usize) -> Option<Result<usize, AbiError>> {
+        if let Some(pos) = path.find(':') {
+            let scheme_name = &path[..pos];
+            let registry = crate::scheme::SCHEME_REGISTRY.lock();
+            registry.get(scheme_name).map(|scheme| scheme.open(path, flags))
+        } else {
+            None
+        }
+    }
+
     fn get_root(&self) -> Arc<RwLock<VfsNode>> {
         self.root.as_ref().expect("VFS not initialized").clone()
     }

@@ -45,6 +45,9 @@ pub fn init_kernel_mapper(physical_memory_offset: VirtAddr) {
     *KERNEL_MAPPER.lock() = Some(mapper);
 }
 
+/// Alias for Grant used by ELF loader and Vma conversion.
+pub type MemoryRegion = Grant;
+
 /// A set of flags that describe the properties of a memory region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryRegionFlags {
@@ -76,27 +79,38 @@ impl MemoryRegionFlags {
     }
 }
 
-/// A memory region within an address space.
+/// A memory grant (VMA) within an address space.
 #[derive(Debug, Clone)]
-pub struct MemoryRegion {
+pub struct Grant {
     pub start: VirtAddr,
     pub size: usize,
     pub flags: MemoryRegionFlags,
     pub is_file_backed: bool,
+    pub file_path: Option<alloc::string::String>,
     pub file_offset: u64,
+    /// Optional eBPF program ID for behavioral monitoring
+    pub bco_hook: Option<u32>,
+}
+
+impl Grant {
+    pub fn contains(&self, addr: VirtAddr) -> bool {
+        let start = self.start.as_u64();
+        let end = start + self.size as u64;
+        addr.as_u64() >= start && addr.as_u64() < end
+    }
 }
 
 /// A per-process address space.
 pub struct AddressSpace {
     pub root_page_table: PageTable,
-    pub regions: Vec<MemoryRegion>,
+    pub grants: Vec<Grant>,
 }
 
 impl AddressSpace {
     pub fn new() -> Self {
         Self {
             root_page_table: PageTable::new(),
-            regions: Vec::new(),
+            grants: Vec::new(),
         }
     }
     pub unsafe fn activate(&self) {
@@ -105,18 +119,13 @@ impl AddressSpace {
         Cr3::write(frame, Cr3Flags::empty());
     }
 
-    pub fn find_region(&self, addr: VirtAddr) -> Option<&MemoryRegion> {
-        self.regions.iter().find(|r| {
-            let start = r.start.as_u64();
-            let end = start + r.size as u64;
-            addr.as_u64() >= start && addr.as_u64() < end
-        })
+    pub fn find_grant(&self, addr: VirtAddr) -> Option<&Grant> {
+        self.grants.iter().find(|g| g.contains(addr))
     }
 }
 
 // ── COW Fork helpers ──────────────────────────────────────────────────────────
 
-/// Get the physical memory offset from the boot info.
 pub fn phys_offset() -> VirtAddr {
     let boot_info = crate::BOOT_INFO.lock();
     let bi = boot_info.as_ref().expect("BOOT_INFO not initialized");
@@ -471,85 +480,145 @@ pub fn smp_tlb_flush(vaddr: VirtAddr) {
     crate::arch::x86_64::smp::tlb_shootdown_all(vaddr.as_u64());
 }
 
-/// Handle a copy-on-write page fault at `fault_addr`.
-/// Allocates a new physical frame, copies the content from the shared read-only page,
-/// and remaps it as writable in the current (faulting) process's page table.
-pub fn handle_cow_fault(fault_addr: VirtAddr) -> bool {
-    // Read the current mapping to find the old physical frame
-    let old_frame = match get_phys_frame(Cr3::read().0, fault_addr) {
-        Some(f) => f,
-        None => {
-            return false;
-        }
+/// Handle a page fault by querying the AddressSpace grants.
+pub fn handle_page_fault(addr_space: &AddressSpace, fault_addr: VirtAddr, access_flags: PageTableFlags) -> bool {
+    let grant = match addr_space.find_grant(fault_addr) {
+        Some(g) => g,
+        None => return false, // Invalid access
     };
 
-    // Allocate a new frame
-    let mut fa_guard = FRAME_ALLOCATOR.lock();
-    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
-    let new_frame = match fa.allocate_frame() {
-        Some(f) => f,
-        None => {
-            return false;
-        }
-    };
-    drop(fa_guard);
-
-    let po = phys_offset();
-
-    // Copy data from old frame to new frame
-    unsafe {
-        let src_ptr = (po + old_frame.start_address().as_u64()).as_ptr();
-        let dst_ptr = (po + new_frame.start_address().as_u64()).as_mut_ptr();
-        core::ptr::copy_nonoverlapping::<u8>(src_ptr, dst_ptr, 4096);
+    // Verify permissions
+    if access_flags.contains(PageTableFlags::WRITABLE) && !grant.flags.writable {
+        return false; // Access violation
     }
 
-    // Update the leaf entry to point to the new frame with writable permission
-    let leaf = match get_leaf_entry_mut(fault_addr) {
-        Some(e) => e,
-        None => {
-            return false;
-        }
-    };
+    // If it's a COW grant and write access is requested, handle COW fault
+    if grant.flags.copy_on_write && access_flags.contains(PageTableFlags::WRITABLE) {
+        return false; // COW not yet implemented
+    }
 
-    let mut flags = leaf.flags();
-    flags |= PageTableFlags::WRITABLE;
-    leaf.set_addr(new_frame.start_address(), flags);
-
-    // Flush TLB for this page
-    x86_64::instructions::tlb::flush(fault_addr);
-
-    crate::println!(
-        "[COW] Copied page at {:?} to new frame {:?}",
-        fault_addr,
-        new_frame
-    );
-    true
+    // Otherwise, perform demand paging (map physical frame)
+    demand_page(addr_space, fault_addr)
 }
 
-/// Map all VMA regions of a process into its page table.
-/// Copies data from `binary` for file-backed regions (identified by the
-/// file_offset field and the process's stored `binary_data`).
-pub fn map_process_regions(process: &mut crate::process::Process) -> Result<(), &'static str> {
-    let root_frame = match process.page_table_frame {
-        Some(f) => f,
-        None => return Err("no per-process page table"),
+/// Demand page by mapping a new frame into the page table based on grant.
+pub fn demand_page(addr_space: &AddressSpace, fault_addr: VirtAddr) -> bool {
+    let grant = match addr_space.find_grant(fault_addr) {
+        Some(g) => g,
+        None => return false,
     };
 
+    let frame = {
+        let mut fa_guard = FRAME_ALLOCATOR.lock();
+        let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+        fa.allocate_frame()
+    };
+    let frame = match frame {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let po = phys_offset();
+    let l4 = unsafe { frame_as_page_table_mut(PhysFrame::containing_address(PhysAddr::new(&addr_space.root_page_table as *const _ as u64))) };
+    let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
+    let page = Page::containing_address(fault_addr);
+    
+    let page_flags = region_flags_to_page_flags(&grant.flags);
+
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+    unsafe {
+        mapper
+            .map_to(page, frame, page_flags, fa)
+            .is_ok()
+    }
+}
+
+/// Handle a copy-on-write page fault by allocating a new frame, copying the
+/// faulted page content, and mapping the new frame as writable.
+pub fn handle_cow_fault(pt_frame: PhysFrame, fault_addr: VirtAddr) -> bool {
+    let new_frame = {
+        let mut fa_guard = FRAME_ALLOCATOR.lock();
+        let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+        fa.allocate_frame()
+    };
+    let new_frame = match new_frame {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let po = phys_offset();
+
+    // Copy content from the faulting (read-only COW) page to the new frame
+    let src = po + fault_addr.as_u64();
+    let dst = po + new_frame.start_address().as_u64();
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_u64() as *const u8, dst.as_u64() as *mut u8, 0x1000);
+    }
+
+    // Map the new frame as writable in the process's page table
+    let l4 = unsafe { frame_as_page_table_mut(pt_frame) };
+    let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
+    let page = Page::containing_address(fault_addr);
+
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+
+    unsafe {
+        mapper
+            .map_to(
+                page,
+                new_frame,
+                PageTableFlags::PRESENT
+                    | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER_ACCESSIBLE,
+                fa,
+            )
+            .is_ok()
+    }
+}
+
+/// Demand page using a raw page table frame directly (no AddressSpace grants lookup).
+pub fn demand_page_for_frame(
+    pt_frame: PhysFrame,
+    fault_addr: VirtAddr,
+    page_flags: PageTableFlags,
+) -> bool {
+    let new_frame = {
+        let mut fa_guard = FRAME_ALLOCATOR.lock();
+        let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+        fa.allocate_frame()
+    };
+    let new_frame = match new_frame {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let po = phys_offset();
+    let l4 = unsafe { frame_as_page_table_mut(pt_frame) };
+    let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
+    let page = Page::containing_address(fault_addr);
+
+    let mut fa_guard = FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+
+    unsafe { mapper.map_to(page, new_frame, page_flags, fa).is_ok() }
+}
+
+/// Map all Grant regions of a process into its page table.
+pub fn map_process_regions(addr_space: &AddressSpace, binary_data: &[u8]) -> Result<(), &'static str> {
     // Build a mapper from the process's root page table
     let po = phys_offset();
-    let l4_virt = po + root_frame.start_address().as_u64();
-    let l4 = unsafe { &mut *(l4_virt.as_mut_ptr()) };
+    let l4 = unsafe { frame_as_page_table_mut(PhysFrame::containing_address(PhysAddr::new(&addr_space.root_page_table as *const _ as u64))) };
     let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
 
     let mut fa_guard = FRAME_ALLOCATOR.lock();
     let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
 
-    let binary_data = &process.binary_data;
-
-    for vma in &process.vmas {
-        let start_addr = vma.start.as_u64();
-        let end_addr = vma.end.as_u64();
-        let page_flags = region_flags_to_page_flags(&vma.flags);
+    for grant in &addr_space.grants {
+        let start_addr = grant.start.as_u64();
+        let end_addr = start_addr + grant.size as u64;
+        let page_flags = region_flags_to_page_flags(&grant.flags);
 
         for addr in (start_addr..end_addr).step_by(4096) {
             let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(addr));
@@ -562,10 +631,10 @@ pub fn map_process_regions(process: &mut crate::process::Process) -> Result<(), 
                     .flush();
             }
 
-            // Copy data from binary if this VMA has file_offset == vaddr
-            let vma_start = vma.start.as_u64();
-            let page_in_region_offset = addr - vma_start;
-            let binary_offset = vma.file_offset as usize + page_in_region_offset as usize;
+            // Copy data from binary if this grant has file_offset
+            let grant_start = grant.start.as_u64();
+            let page_in_grant_offset = addr - grant_start;
+            let binary_offset = grant.file_offset as usize + page_in_grant_offset as usize;
             let copy_size = 4096usize.min(binary_data.len().saturating_sub(binary_offset));
 
             if copy_size > 0 {

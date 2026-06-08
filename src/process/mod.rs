@@ -33,6 +33,7 @@ pub enum ProcessState {
     Ready,
     Running,
     Blocked,
+    Canceled,
     Exited(i64),
 }
 
@@ -267,6 +268,7 @@ pub struct Process {
     pub signals: SignalState,
     pub parent: u64,
     pub exit_code: i64,
+    pub join_waiters: alloc::vec::Vec<u64>,
     pub fds: FdTable,
     /// Program break (heap top) for sys_brk
     pub brk: u64,
@@ -321,6 +323,7 @@ impl Process {
             signals: SignalState::new(),
             parent: 0,
             exit_code: 0,
+            join_waiters: alloc::vec::Vec::new(),
             fds: FdTable::new(),
             brk: 0x2000_0000,
             cwd: {
@@ -351,6 +354,14 @@ impl Process {
     }
     pub fn set_priority(&mut self, priority: u8) {
         self.priority = priority.min(4);
+    }
+
+    pub fn block(&mut self) {
+        self.state = ProcessState::Blocked;
+    }
+
+    pub fn unblock(&mut self) {
+        self.state = ProcessState::Ready;
     }
 
     pub fn prepare_trap_frame(&self) -> TrapFrame {

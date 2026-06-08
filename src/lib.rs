@@ -6,8 +6,10 @@ pub mod abi;
 pub mod arch;
 pub mod boot_screen;
 pub mod capability;
+pub mod common;
 pub mod drivers;
 pub mod fs;
+pub mod scheme;
 
 #[cfg(feature = "shell")]
 pub mod edit;
@@ -18,10 +20,12 @@ pub mod klog;
 pub mod memory;
 pub mod perf;
 pub mod process;
+pub mod sync;
 pub mod timer;
 pub mod tracepoints;
 pub mod bench_fork;
 pub mod bench_tlb;
+pub mod worker_pool;
 
 #[cfg(feature = "ebpf")]
 pub mod ebpf;

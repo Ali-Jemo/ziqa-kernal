@@ -40,18 +40,18 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     raw_serial_log("init: klogs done, starting memory init\n");
 
     // Memory and heap init.
-    use memory::frame_allocator::BootInfoFrameAllocator;
+    use memory::BootInfoFrameAllocator;
+    use memory::paging::MemoryMapper;
     use x86_64::VirtAddr;
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
     raw_serial_log("init: doing frame allocator init\n");
-    let mut mapper = unsafe { memory::frame_allocator::init(phys_offset) };
-    let frame_alloc = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
 
-    *memory::FRAME_ALLOCATOR.lock() = Some(frame_alloc);
+    *memory::FRAME_ALLOCATOR.lock() = Some(BootInfoFrameAllocator);
     raw_serial_log("init: frame allocator done, starting heap init\n");
 
+    let mut mapper = unsafe { MemoryMapper::new(phys_offset) };
     memory::heap::init_heap(
-        &mut mapper,
+        &mut mapper.mapper,
         &mut *memory::FRAME_ALLOCATOR.lock().as_mut().unwrap(),
     )
     .expect("heap init failed");
@@ -64,8 +64,6 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     drivers::pci::init();
     drivers::device_manager::init();
     
-    #[cfg(feature = "net")]
-    drivers::virtio_net::register();
     drivers::device_manager::DEVICE_MANAGER.lock().register_driver(Box::new(crate::drivers::virtio_block_new::VirtioBlockDriverNew));
     drivers::virtio_block::register();
     drivers::ata::register();
