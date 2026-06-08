@@ -575,6 +575,11 @@ fn ziqa_cap_close(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
         klog_syscall("ziqa_cap_close", fd as u64);
         return Ok((-1_i64) as u64); // -EPERM
     }
+
+    if let Some(handle) = ctx.process.get_vfs_handle(fd) {
+        let _ = crate::fs::vfs::VFS.read().close_handle(&handle);
+    }
+
     let ok = ctx.process.fds.close(fd);
     klog_syscall("ziqa_cap_close", fd as u64);
     if ok {
@@ -1020,14 +1025,32 @@ fn ziqa_cap_request(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErro
         // Allow shell/boot processes to bypass for now
     }
 
-    // Allocate an FD in the process table
-    match ctx.process.fds.alloc_file(path_str.as_bytes(), _flags) {
-        Some(fd) => {
+    // Open path via unified VFS (supports both files and schemes)
+    let handle = match crate::fs::vfs::VFS.read().open(path_str, _flags as usize) {
+        Ok(h) => h,
+        Err(e) => {
+            let errno = crate::abi::syscall::abi_error_to_errno(&e);
+            return Ok((errno as i64).wrapping_neg() as u64);
+        }
+    };
+
+    // Allocate the FD based on the opened VfsHandle type
+    let fd = match handle {
+        crate::fs::vfs::VfsHandle::File(_) => {
+            ctx.process.fds.alloc_file(path_str.as_bytes(), _flags)
+        }
+        crate::fs::vfs::VfsHandle::Scheme { scheme: _, handle_id } => {
+            ctx.process.fds.alloc_scheme(path_str.as_bytes(), _flags, handle_id)
+        }
+    };
+
+    match fd {
+        Some(fd_num) => {
             // Grant a specific capability for this FD
             let cap_id = ctx.process.capabilities.grant(
                 kind,
                 Permissions::read_write(),
-                fd as u64,
+                fd_num as u64,
                 None,
             ).ok_or(crate::abi::AbiError::Other("Cap space full"))?;
             
@@ -1067,14 +1090,18 @@ fn ziqa_cap_read(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> 
             klog_syscall("ziqa_cap_read(stdin)", n as u64);
             Ok(n as u64)
         }
-        crate::process::FdTarget::File(_) => {
-            let path_bytes = ctx.process.fds.path_of(fd).ok_or(crate::abi::AbiError::Other("No path for FD"))?;
-            let path = core::str::from_utf8(path_bytes).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+        crate::process::FdTarget::File(_) | crate::process::FdTarget::Scheme(_, _) => {
+            let handle = match ctx.process.get_vfs_handle(fd) {
+                Some(h) => h,
+                None => return Ok(-(errno::EBADF as i64) as u64),
+            };
 
             let mut buf = alloc::vec![0u8; count];
-            match crate::fs::vfs::VFS.read().read_raw(path, &mut buf, offset) {
+            match crate::fs::vfs::VFS.read().read_handle(&handle, &mut buf, offset) {
                 Ok(n) => {
-                    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
+                    if n > 0 {
+                        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
+                    }
                     if let Some(desc_mut) = ctx.process.fds.get_mut(fd) {
                         desc_mut.offset = offset + n;
                     }
@@ -1120,14 +1147,16 @@ fn ziqa_cap_write(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
                 Ok(count as u64)
             }
         }
-        crate::process::FdTarget::File(_) => {
-            let path_bytes = ctx.process.fds.path_of(fd).ok_or(crate::abi::AbiError::Other("No path for FD"))?;
-            let path = core::str::from_utf8(path_bytes).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+        crate::process::FdTarget::File(_) | crate::process::FdTarget::Scheme(_, _) => {
+            let handle = match ctx.process.get_vfs_handle(fd) {
+                Some(h) => h,
+                None => return Ok(-(errno::EBADF as i64) as u64),
+            };
 
             let mut buf = alloc::vec![0u8; count];
             unsafe { core::ptr::copy_nonoverlapping(buf_ptr, buf.as_mut_ptr(), count); }
 
-            match crate::fs::vfs::VFS.read().write_raw(path, &buf, offset) {
+            match crate::fs::vfs::VFS.read().write_handle(&handle, &buf, offset) {
                 Ok(n) => {
                     if let Some(desc_mut) = ctx.process.fds.get_mut(fd) {
                         desc_mut.offset = offset + n;

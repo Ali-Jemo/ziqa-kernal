@@ -290,60 +290,16 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 Err(_) => Ok((-11_i64) as u64), // -EAGAIN (pipe full)
             }
         }
-        Some(crate::process::FdTarget::Scheme(_idx, handle_id)) => {
-            let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => {
-                    let mut t = [0u8; 64];
-                    let n = p.len().min(63);
-                    t[..n].copy_from_slice(&p[..n]);
-                    (t, n)
-                }
-                None => return Ok((-9_i64) as u64),
-            };
-            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-            let scheme_name = if let Some(pos) = path_str.find(':') {
-                &path_str[..pos]
-            } else {
-                return Ok((-9_i64) as u64);
-            };
-
-            let res = {
-                let registry = crate::scheme::SCHEME_REGISTRY.lock();
-                if let Some(scheme) = registry.get(scheme_name) {
-                    scheme.write(handle_id, &buf)
-                } else {
-                    Err(AbiError::Other("Scheme not found"))
-                }
-            };
-            match res {
-                Ok(n) => return Ok(n as u64),
-                Err(e) => {
-                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
-                    return Ok((errno as i64).wrapping_neg() as u64);
-                }
-            }
-        }
-        Some(crate::process::FdTarget::File(_)) => {
-            // VFS write requires File capability
+        Some(crate::process::FdTarget::File(_)) | Some(crate::process::FdTarget::Scheme(_, _)) => {
             if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) {
                 return Err(AbiError::PermissionDenied);
             }
-            let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
-            let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => {
-                    let mut t = [0u8; 64];
-                    let n = p.len().min(63);
-                    t[..n].copy_from_slice(&p[..n]);
-                    (t, n)
-                }
-                None => return Ok((-9_i64) as u64),
+            let handle = match ctx.process.get_vfs_handle(fd) {
+                Some(h) => h,
+                None => return Ok((-9_i64) as u64), // -EBADF
             };
-            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-            
-            match crate::fs::vfs::VFS
-                .read()
-                .write_raw(path_str, &buf, offset)
-            {
+            let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
+            match crate::fs::vfs::VFS.read().write_handle(&handle, &buf, offset) {
                 Ok(n) => {
                     if let Some(desc) = ctx.process.fds.get_mut(fd) {
                         desc.offset += n;
@@ -351,8 +307,8 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                     Ok(n as u64)
                 }
                 Err(e) => {
-                    crate::println!("[ABI] sys_write failed: {:?}", e);
-                    Ok(0)
+                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
+                    Ok((errno as i64).wrapping_neg() as u64)
                 }
             }
         }
@@ -399,69 +355,18 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 Err(_) => return Ok(0),
             }
         }
-        Some(crate::process::FdTarget::Scheme(_idx, handle_id)) => {
-            let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => {
-                    let mut t = [0u8; 64];
-                    let n = p.len().min(63);
-                    t[..n].copy_from_slice(&p[..n]);
-                    (t, n)
-                }
-                None => return Ok((-9_i64) as u64),
-            };
-            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-            let scheme_name = if let Some(pos) = path_str.find(':') {
-                &path_str[..pos]
-            } else {
-                return Ok((-9_i64) as u64);
-            };
-
-            let mut tmp = alloc::vec![0u8; count];
-            let res = {
-                let registry = crate::scheme::SCHEME_REGISTRY.lock();
-                if let Some(scheme) = registry.get(scheme_name) {
-                    scheme.read(handle_id, &mut tmp)
-                } else {
-                    Err(AbiError::Other("Scheme not found"))
-                }
-            };
-            match res {
-                Ok(n) => {
-                    if n > 0 {
-                        UserSliceWo::wo(ctx.args[1], n)
-                            .map_err(|_| AbiError::Other("EFAULT: bad read buffer"))?
-                            .copy_from_slice(&tmp[..n])
-                            .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
-                    }
-                    return Ok(n as u64);
-                }
-                Err(e) => {
-                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
-                    return Ok((errno as i64).wrapping_neg() as u64);
-                }
-            }
-        }
-        Some(crate::process::FdTarget::File(_)) => {
+        Some(crate::process::FdTarget::File(_)) | Some(crate::process::FdTarget::Scheme(_, _)) => {
             if !ctx.process.capabilities.has_permission(ResourceKind::File, false, false) {
                 return Err(AbiError::PermissionDenied);
             }
-            let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
-            let path_bytes = match ctx.process.fds.path_of(fd) {
-                Some(p) => {
-                    let mut t = [0u8; 64];
-                    let n = p.len().min(63);
-                    t[..n].copy_from_slice(&p[..n]);
-                    (t, n)
-                }
-                None => return Ok((-9_i64) as u64),
+            let handle = match ctx.process.get_vfs_handle(fd) {
+                Some(h) => h,
+                None => return Ok((-9_i64) as u64), // -EBADF
             };
-            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-            let mut tmp = [0u8; 4096];
-            let to_read = count.min(4096);
-            match crate::fs::vfs::VFS
-                .read()
-                .read_raw(path_str, &mut tmp[..to_read], offset)
-            {
+            let offset = ctx.process.fds.get(fd).map(|d| d.offset).unwrap_or(0);
+            
+            let mut tmp = alloc::vec![0u8; count];
+            match crate::fs::vfs::VFS.read().read_handle(&handle, &mut tmp, offset) {
                 Ok(n) => {
                     if let Some(desc) = ctx.process.fds.get_mut(fd) {
                         desc.offset += n;
@@ -472,15 +377,16 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                             .copy_from_slice(&tmp[..n])
                             .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
                     }
-                    return Ok(n as u64);
+                    Ok(n as u64)
                 }
-                Err(_) => return Ok(0),
+                Err(e) => {
+                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
+                    Ok((errno as i64).wrapping_neg() as u64)
+                }
             }
         }
-        _ => return Ok((-9_i64) as u64),
-    };
-    
-    // unreachable
+        _ => Ok((-9_i64) as u64),
+    }
 }
 
 /// sys_exit(status) → never returns
@@ -754,26 +660,9 @@ fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         crate::net::socket::SOCKETS.lock().remove(fd);
     }
 
-    // Call scheme close if applicable
-    let target = ctx.process.fds.get(fd).map(|d| d.target);
-    if let Some(crate::process::FdTarget::Scheme(_idx, handle_id)) = target {
-        let path_bytes = match ctx.process.fds.path_of(fd) {
-            Some(p) => {
-                let mut t = [0u8; 64];
-                let n = p.len().min(63);
-                t[..n].copy_from_slice(&p[..n]);
-                (t, n)
-            }
-            None => ([0u8; 64], 0),
-        };
-        let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-        if let Some(pos) = path_str.find(':') {
-            let scheme_name = &path_str[..pos];
-            let registry = crate::scheme::SCHEME_REGISTRY.lock();
-            if let Some(scheme) = registry.get(scheme_name) {
-                let _ = scheme.close(handle_id);
-            }
-        }
+    // Call scheme/VFS close if applicable
+    if let Some(handle) = ctx.process.get_vfs_handle(fd) {
+        let _ = crate::fs::vfs::VFS.read().close_handle(&handle);
     }
 
     let result = ctx.process.fds.close(fd);

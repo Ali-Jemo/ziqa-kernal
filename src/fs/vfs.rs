@@ -73,7 +73,7 @@ impl Vfs {
     }
 
     /// Resolve a path to a specific node in the tree.
-    fn resolve_node(&self, path: &str) -> Result<Arc<RwLock<VfsNode>>, AbiError> {
+    pub fn resolve_node(&self, path: &str) -> Result<Arc<RwLock<VfsNode>>, AbiError> {
         let path = path.trim_start_matches('/');
         let root = self.get_root();
         if path.is_empty() {
@@ -421,7 +421,84 @@ impl Vfs {
             if let Some(n) = next { current = n; }
         }
     }
+
+    /// Open a path (either file or scheme) and return a unified VfsHandle.
+    pub fn open(&self, path: &str, flags: usize) -> Result<VfsHandle, AbiError> {
+        if let Some(pos) = path.find(':') {
+            let scheme_name = &path[..pos];
+            let registry = crate::scheme::SCHEME_REGISTRY.lock();
+            if let Some(scheme) = registry.get(scheme_name) {
+                let handle_id = scheme.open(path, flags)?;
+                return Ok(VfsHandle::Scheme {
+                    scheme: scheme_name.to_string(),
+                    handle_id,
+                });
+            }
+        }
+
+        let node = self.resolve_node(path)?;
+        let guard = node.read();
+        match &*guard {
+            VfsNode::File { handle } => Ok(VfsHandle::File(handle.clone())),
+            VfsNode::Directory { .. } => Err(AbiError::Other("Is a directory")),
+        }
+    }
+
+    /// Read from a unified VfsHandle.
+    pub fn read_handle(&self, handle: &VfsHandle, buf: &mut [u8], offset: usize) -> Result<usize, AbiError> {
+        match handle {
+            VfsHandle::File(file) => file.lock().read(buf, offset),
+            VfsHandle::Scheme { scheme, handle_id } => {
+                let registry = crate::scheme::SCHEME_REGISTRY.lock();
+                if let Some(s) = registry.get(scheme) {
+                    s.read(*handle_id, buf)
+                } else {
+                    Err(AbiError::Other("Scheme not found"))
+                }
+            }
+        }
+    }
+
+    /// Write to a unified VfsHandle.
+    pub fn write_handle(&self, handle: &VfsHandle, buf: &[u8], offset: usize) -> Result<usize, AbiError> {
+        match handle {
+            VfsHandle::File(file) => file.lock().write(buf, offset),
+            VfsHandle::Scheme { scheme, handle_id } => {
+                let registry = crate::scheme::SCHEME_REGISTRY.lock();
+                if let Some(s) = registry.get(scheme) {
+                    s.write(*handle_id, buf)
+                } else {
+                    Err(AbiError::Other("Scheme not found"))
+                }
+            }
+        }
+    }
+
+    /// Close a unified VfsHandle.
+    pub fn close_handle(&self, handle: &VfsHandle) -> Result<(), AbiError> {
+        match handle {
+            VfsHandle::File(_) => Ok(()),
+            VfsHandle::Scheme { scheme, handle_id } => {
+                let registry = crate::scheme::SCHEME_REGISTRY.lock();
+                if let Some(s) = registry.get(scheme) {
+                    s.close(*handle_id)
+                } else {
+                    Err(AbiError::Other("Scheme not found"))
+                }
+            }
+        }
+    }
 }
+
+#[derive(Clone)]
+pub enum VfsHandle {
+    File(Arc<Mutex<dyn File + Send>>),
+    Scheme {
+        scheme: String,
+        handle_id: usize,
+    },
+}
+
 
 /// Global VFS instance
 pub static VFS: RwLock<Vfs> = RwLock::new(Vfs::new());

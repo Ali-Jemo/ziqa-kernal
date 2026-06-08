@@ -384,6 +384,34 @@ impl Process {
         self.vmas.insert(pos, vma);
     }
 
+    pub fn get_vfs_handle(&self, fd: usize) -> Option<crate::fs::vfs::VfsHandle> {
+        use crate::process::FdTarget;
+        let desc = self.fds.get(fd)?;
+        match desc.target {
+            FdTarget::File(_) => {
+                let path_bytes = self.fds.path_of(fd)?;
+                let path = core::str::from_utf8(path_bytes).ok()?;
+                let node = crate::fs::vfs::VFS.read().resolve_node(path).ok()?;
+                let guard = node.read();
+                match &*guard {
+                    crate::fs::vfs::VfsNode::File { handle } => Some(crate::fs::vfs::VfsHandle::File(handle.clone())),
+                    _ => None,
+                }
+            }
+            FdTarget::Scheme(_, handle_id) => {
+                let path_bytes = self.fds.path_of(fd)?;
+                let path = core::str::from_utf8(path_bytes).ok()?;
+                let pos = path.find(':')?;
+                let scheme_name = &path[..pos];
+                Some(crate::fs::vfs::VfsHandle::Scheme {
+                    scheme: alloc::string::String::from(scheme_name),
+                    handle_id,
+                })
+            }
+            _ => None,
+        }
+    }
+
     pub fn make_ready(&mut self) {
         self.state = ProcessState::Ready;
     }
