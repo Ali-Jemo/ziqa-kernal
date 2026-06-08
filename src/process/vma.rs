@@ -46,23 +46,41 @@ impl From<MemoryRegion> for Vma {
     }
 }
 
+pub fn is_range_free(vmas: &[Vma], start: VirtAddr, size: usize) -> bool {
+    let start = start.as_u64();
+    let end = start + size as u64;
+    !vmas.iter().any(|vma| {
+        let vma_start = vma.start.as_u64();
+        let vma_end = vma.end.as_u64();
+        start < vma_end && end > vma_start
+    })
+}
+
 /// Helper to find a free range of virtual addresses for mmap.
 pub fn find_free_range(vmas: &[Vma], size: usize, start_hint: VirtAddr) -> Option<VirtAddr> {
     let size = size as u64;
-    let mut current = start_hint;
     
-    // Simple bump allocator approach for now, sorted by start address.
-    // In a mature system, this would manage a gap-free list.
-    let mut sorted_vmas = vmas.to_vec();
-    sorted_vmas.sort_by_key(|vma| vma.start);
-    
-    for vma in &sorted_vmas {
+    // If start_hint is non-zero, check if the requested range is already free
+    if start_hint.as_u64() != 0 && start_hint.is_aligned(4096u64) {
+        if is_range_free(vmas, start_hint, size as usize) {
+            return Some(start_hint);
+        }
+    }
+
+    let mut current = if start_hint.as_u64() != 0 {
+        start_hint.align_up(4096u64)
+    } else {
+        VirtAddr::new(0x4000_0000)
+    };
+
+    for vma in vmas {
+        if vma.end <= current {
+            continue;
+        }
         if current + size <= vma.start {
             return Some(current);
         }
-        if current < vma.end {
-            current = vma.end;
-        }
+        current = vma.end;
     }
     Some(current)
 }

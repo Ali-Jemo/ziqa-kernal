@@ -12,5 +12,7 @@ pub const PML4_SIZE: usize = 1 << PML4_SHIFT;
 pub const USER_END_OFFSET: usize = 1 << (RiscV64Sv39Arch::PAGE_ADDRESS_SHIFT - 1);
 
 pub fn kernel_heap_offset() -> usize {
-    crate::KERNEL_OFFSET - PML4_SIZE
+    // TODO: Implement proper kernel heap offset calculation based on kernel load address
+    // For now, return 0 as placeholder
+    0
 }

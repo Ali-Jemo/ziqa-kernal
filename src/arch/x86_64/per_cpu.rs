@@ -163,6 +163,14 @@ pub fn per_cpu_by_id_mut(id: u32) -> Option<&'static mut PerCpu> {
     None
 }
 
+pub fn current_pid() -> Option<crate::process::Pid> {
+    current_cpu().current_pid()
+}
+
+pub fn set_current_pid(pid: Option<crate::process::Pid>) {
+    current_cpu_mut().set_current_pid(pid);
+}
+
 pub fn cpu_count() -> u32 {
     CPU_COUNT.load(core::sync::atomic::Ordering::Acquire)
 }

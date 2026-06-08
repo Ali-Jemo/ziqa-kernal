@@ -1,5 +1,6 @@
 use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use spin::Mutex;
 use crate::scheme::{Scheme, SchemeResult};
 use crate::abi::AbiError;
@@ -8,7 +9,7 @@ use crate::sync::WaitCondition;
 
 pub struct IrqState {
     pub condition: Arc<WaitCondition>,
-    pub count: u64,
+    pub queue: Vec<u8>,
 }
 
 pub struct IrqScheme {
@@ -46,7 +47,7 @@ impl IrqScheme {
         if !irqs.contains_key(&vector_num) {
             irqs.insert(vector_num, IrqState {
                 condition: Arc::new(WaitCondition::new()),
-                count: 0,
+                queue: Vec::new(),
             });
         }
 
@@ -75,16 +76,16 @@ impl IrqScheme {
         // Wait for the interrupt to fire
         cond.wait("irq");
 
-        // After waking up, return the count as 8 bytes of u64
-        let count = {
-            let irqs = self.irqs.lock();
-            irqs.get(&vector_num).map(|state| state.count).unwrap_or(0)
-        };
-
-        let bytes = count.to_ne_bytes();
-        let len = core::cmp::min(buf.len(), bytes.len());
-        buf[..len].copy_from_slice(&bytes[..len]);
-        Ok(len)
+        // After waking up, return data from queue
+        let mut irqs = self.irqs.lock();
+        if let Some(state) = irqs.get_mut(&vector_num) {
+            let len = core::cmp::min(buf.len(), state.queue.len());
+            let data: Vec<u8> = state.queue.drain(..len).collect();
+            buf[..len].copy_from_slice(&data);
+            Ok(len)
+        } else {
+            Err(AbiError::Other("Invalid argument"))
+        }
     }
 
     pub fn write(&self, _id: usize, _buf: &[u8]) -> SchemeResult<usize> {
@@ -102,10 +103,10 @@ lazy_static::lazy_static! {
     };
 }
 
-pub fn irq_trigger(vector: u8) {
+pub fn irq_trigger(vector: u8, data: &[u8]) {
     let mut irqs = IRQ_SCHEME.irqs.lock();
     if let Some(state) = irqs.get_mut(&vector) {
-        state.count += 1;
+        state.queue.extend_from_slice(data);
         state.condition.notify();
     }
 }

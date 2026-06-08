@@ -315,6 +315,12 @@ pub struct Process {
     pub total_ticks: u64,
     /// Virtual runtime for CFS-style scheduling
     pub vruntime: u64,
+    /// FS base for thread-local storage (TLS)
+    pub fs_base: u64,
+    /// GS base for thread-local storage (TLS)
+    pub gs_base: u64,
+    /// Whether the last block operation timed out
+    pub timed_out: bool,
 }
 
 impl Process {
@@ -366,11 +372,16 @@ impl Process {
             kernel_stack_top: kstack_top,
             total_ticks: 0,
             vruntime: 0,
+            fs_base: 0,
+            gs_base: 0,
+            timed_out: false,
         }
     }
 
     pub fn add_region(&mut self, vma: Vma) {
-        self.vmas.push(vma);
+        let pos = self.vmas.binary_search_by_key(&vma.start, |v| v.start)
+            .unwrap_or_else(|e| e);
+        self.vmas.insert(pos, vma);
     }
 
     pub fn make_ready(&mut self) {

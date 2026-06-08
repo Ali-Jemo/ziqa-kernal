@@ -8,6 +8,7 @@ pub mod boot_screen;
 pub mod capability;
 pub mod common;
 pub mod drivers;
+pub mod event;
 pub mod fs;
 pub mod scheme;
 

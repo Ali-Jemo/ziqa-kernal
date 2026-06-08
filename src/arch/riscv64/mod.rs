@@ -177,6 +177,14 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
     }
 }
 
+pub fn current_pid() -> Option<crate::process::Pid> {
+    None // TODO: implement per-cpu data for riscv64
+}
+
+pub fn set_current_pid(_pid: Option<crate::process::Pid>) {
+    // TODO: implement per-cpu data for riscv64
+}
+
 #[unsafe(naked)]
 pub unsafe extern "C" fn kthread_trampoline() -> ! {
     core::arch::naked_asm!(
@@ -188,3 +196,54 @@ pub unsafe extern "C" fn kthread_trampoline() -> ! {
         "
     );
 }
+
+core::arch::global_asm!(
+    "
+    .global jump_to_user_stub
+    jump_to_user_stub:
+        // RSP points to CpuState
+        // Restore all registers from CpuState and then SRET
+        
+        ld ra, (0 * 8)(sp)
+        // sp is at (1 * 8), we'll restore it last
+        ld gp, (2 * 8)(sp)
+        ld tp, (3 * 8)(sp)
+        ld t0, (4 * 8)(sp)
+        ld t1, (5 * 8)(sp)
+        ld t2, (6 * 8)(sp)
+        ld s0, (7 * 8)(sp)
+        ld s1, (8 * 8)(sp)
+        ld a0, (9 * 8)(sp)
+        ld a1, (10 * 8)(sp)
+        ld a2, (11 * 8)(sp)
+        ld a3, (12 * 8)(sp)
+        ld a4, (13 * 8)(sp)
+        ld a5, (14 * 8)(sp)
+        ld a6, (15 * 8)(sp)
+        ld a7, (16 * 8)(sp)
+        ld s2, (17 * 8)(sp)
+        ld s3, (18 * 8)(sp)
+        ld s4, (19 * 8)(sp)
+        ld s5, (20 * 8)(sp)
+        ld s6, (21 * 8)(sp)
+        ld s7, (22 * 8)(sp)
+        ld s8, (23 * 8)(sp)
+        ld s9, (24 * 8)(sp)
+        ld s10, (25 * 8)(sp)
+        ld s11, (26 * 8)(sp)
+        ld t3, (27 * 8)(sp)
+        ld t4, (28 * 8)(sp)
+        ld t5, (29 * 8)(sp)
+        ld t6, (30 * 8)(sp)
+        
+        ld t0, (31 * 8)(sp) // sepc
+        csrw sepc, t0
+        
+        ld t0, (32 * 8)(sp) // sstatus
+        csrw sstatus, t0
+        
+        ld sp, (1 * 8)(sp)  // Restore user SP
+        
+        sret
+    "
+);

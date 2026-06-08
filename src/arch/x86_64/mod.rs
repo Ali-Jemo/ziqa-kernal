@@ -7,6 +7,7 @@ pub mod smp;
 pub mod switch;
 
 pub use switch::TrapFrame;
+pub use per_cpu::{current_pid, set_current_pid};
 
 // Re-export the IDT init from interrupts module for backward compat
 pub mod idt {

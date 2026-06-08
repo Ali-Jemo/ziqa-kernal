@@ -1,6 +1,6 @@
 extern crate alloc;
 use alloc::collections::BTreeMap;
-use crate::arch::x86_64::{init_kthread_stack, kthread_trampoline_wrapper};
+use crate::arch::{init_kthread_stack, kthread_trampoline};
 use crate::memory::VirtAddr;
 use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable as PidAllocator};
 use crate::process::vma::Vma;
@@ -34,7 +34,7 @@ impl GlobalProcessTable {
 use alloc::collections::BTreeSet;
 // ...
 /// Ready queue for DWRR scheduler (CFS-style vruntime).
-struct ReadySet {
+pub struct ReadySet {
     queues: BTreeSet<(u64, Pid)>,
 }
 
@@ -73,11 +73,11 @@ impl Scheduler {
     }
 
     pub fn current_pid(&self) -> Option<Pid> {
-        crate::arch::x86_64::per_cpu::current_cpu().current_pid()
+        crate::arch::current_pid()
     }
 
     pub fn set_current_pid(&self, pid: Option<Pid>) {
-        crate::arch::x86_64::per_cpu::current_cpu_mut().set_current_pid(pid);
+        crate::arch::set_current_pid(pid);
     }
 
     pub fn total_ticks(&self) -> u64 {
@@ -116,18 +116,25 @@ impl Scheduler {
 
     pub fn spawn_kthread(&self, entry: fn(*const ()), arg: *const ()) -> Option<Pid> {
         let pid = self.pid_allocator.lock().alloc_pid();
-        // The kthread's first RIP is the asm trampoline (defined below),
-        // which forwards r12=arg and r13=entry to the user entry and exits
-        // cleanly when the entry returns. `entry_point` is the only field
-        // the kernel uses to find the initial RIP, so we set it to the
-        // trampoline address.
-        let trampoline = kthread_trampoline_wrapper as *const () as u64;
+        // The kthread's first RIP/PC is the asm trampoline.
+        let trampoline = kthread_trampoline as *const () as u64;
         let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(trampoline), VirtAddr::new(0));
-        // Kthreads share the kernel's CS/SS and stay in ring 0; we never
-        // iretq out to user mode.
-        proc.cpu_state.cs = 0x8;
-        proc.cpu_state.ss = 0x10;
-        proc.cpu_state.rflags = 0x202;
+        // Setup architecture-specific kernel state (e.g. privilege levels)
+        #[cfg(target_arch = "x86_64")]
+        {
+            proc.cpu_state.cs = 0x8;
+            proc.cpu_state.ss = 0x10;
+            proc.cpu_state.rflags = 0x202;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            proc.cpu_state.spsr_el1 = 0x05; // EL1h
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            proc.cpu_state.sstatus = 0x100; // SPP=1 (Supervisor)
+        }
+
         proc.page_table_frame = None;
         proc.make_ready();
         init_kthread_stack(&mut proc, entry as u64, arg as u64);
@@ -452,6 +459,19 @@ impl Scheduler {
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
             let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
+
+            // Save FS/GS base of the old process
+            if let Some(old_arc) = old_proc_arc.clone() {
+                use x86_64::registers::model_specific::Msr;
+                let fs_msr = Msr::new(0xC0000100);
+                let kgs_msr = Msr::new(0xC0000102);
+                let fs = unsafe { fs_msr.read() };
+                let gs = unsafe { kgs_msr.read() };
+                let mut old_proc = old_arc.lock();
+                old_proc.fs_base = fs;
+                old_proc.gs_base = gs;
+            }
+
             let new_cr3 = {
                 let mut new_proc = new_proc_arc.lock();
                 new_proc.state = ProcessState::Running;
@@ -459,6 +479,19 @@ impl Scheduler {
             };
             let new_kstack_top = new_proc_arc.lock().kernel_stack_top;
             let new_sp = new_proc_arc.lock().kernel_stack_ptr;
+
+            // Load FS/GS base of the new process
+            {
+                use x86_64::registers::model_specific::Msr;
+                let new_proc = new_proc_arc.lock();
+                let mut fs_msr = Msr::new(0xC0000100);
+                let mut kgs_msr = Msr::new(0xC0000102);
+                unsafe {
+                    fs_msr.write(new_proc.fs_base);
+                    kgs_msr.write(new_proc.gs_base);
+                }
+            }
+
             if let Some(frame) = new_cr3 {
                 unsafe { Cr3::write(frame, Cr3Flags::empty()); }
             }

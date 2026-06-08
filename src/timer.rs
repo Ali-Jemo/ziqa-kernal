@@ -10,7 +10,7 @@ use spin::Mutex;
 pub const TICKS_PER_SEC: u64 = 100;
 pub const MS_PER_TICK: u64 = 1000 / TICKS_PER_SEC;
 
-const MAX_SLEEPERS: usize = 32;
+const MAX_SLEEPERS: usize = 256;
 
 #[derive(Clone, Copy)]
 struct SleepEntry {
@@ -88,6 +88,7 @@ impl Timer {
                     let pid = entry.pid;
                     crate::process::scheduler::with_process_mut(pid, |proc| {
                         if proc.state == crate::process::ProcessState::Blocked {
+                            proc.timed_out = true;
                             proc.make_ready();
                         }
                     });

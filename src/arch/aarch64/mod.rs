@@ -1,6 +1,7 @@
+///
 /// ARM64 (AArch64) specific architecture support for ZiqaKernel
 /// Based on Redox OS implementation.
-
+///
 pub mod consts;
 pub mod device;
 pub mod interrupt;
@@ -9,7 +10,40 @@ pub mod misc;
 pub mod paging;
 pub mod stop;
 pub mod time;
-
+pub mod vectors;
+pub mod start;
+pub use ::rmm::aarch64::AArch64Arch as CurrentRmmArch;
+pub use arch_copy_to_user as arch_copy_from_user;
+#[unsafe(naked)]
+pub unsafe extern "C" fn arch_copy_to_user(dst: usize, src: usize, len: usize) -> u8 {
+    // x0, x1, x2
+    core::arch::naked_asm!(
+        "
+    .global __usercopy_start
+    __usercopy_start:
+        mov x4, x0
+        mov x0, 0
+    2:
+        cmp x2, 0
+        b.eq 3f
+        ldrb w3, [x1]
+        strb w3, [x4]
+        add x4, x4, 1
+        add x1, x1, 1
+        sub x2, x2, 1
+        b 2b
+    3:
+        ret
+    .global __usercopy_end
+    __usercopy_end:
+    "
+    );
+}
+pub const KFX_SIZE: usize = 1024;
+/// This function exists as the KFX size is dynamic on x86_64.
+pub fn kfx_size() -> usize {
+    KFX_SIZE
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CpuState {
@@ -152,6 +186,14 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
     }
 }
 
+pub fn current_pid() -> Option<crate::process::Pid> {
+    None // TODO: implement per-cpu data for aarch64
+}
+
+pub fn set_current_pid(_pid: Option<crate::process::Pid>) {
+    // TODO: implement per-cpu data for aarch64
+}
+
 #[unsafe(naked)]
 pub unsafe extern "C" fn kthread_trampoline() -> ! {
     core::arch::naked_asm!(
@@ -163,3 +205,55 @@ pub unsafe extern "C" fn kthread_trampoline() -> ! {
         "
     );
 }
+
+core::arch::global_asm!(
+    "
+    .global jump_to_user_stub
+    jump_to_user_stub:
+        // RSP points to CpuState
+        // We need to restore registers and then ERET
+        // CpuState: x19-x30, sp, elr_el1, spsr_el1, tpidr_el0
+        
+        ldp x19, x20, [sp], #16
+        ldp x21, x22, [sp], #16
+        ldp x23, x24, [sp], #16
+        ldp x25, x26, [sp], #16
+        ldp x27, x28, [sp], #16
+        ldp x29, x30, [sp], #16
+        
+        ldr x0, [sp], #8  // sp
+        mov sp, x0
+        
+        ldr x0, [sp], #8  // elr_el1
+        msr elr_el1, x0
+        
+        ldr x0, [sp], #8  // spsr_el1
+        msr spsr_el1, x0
+        
+        ldr x0, [sp], #8  // tpidr_el0
+        msr tpidr_el0, x0
+        
+        // Zero out scratch registers to prevent leakage
+        mov x0,  #0
+        mov x1,  #0
+        mov x2,  #0
+        mov x3,  #0
+        mov x4,  #0
+        mov x5,  #0
+        mov x6,  #0
+        mov x7,  #0
+        mov x8,  #0
+        mov x9,  #0
+        mov x10, #0
+        mov x11, #0
+        mov x12, #0
+        mov x13, #0
+        mov x14, #0
+        mov x15, #0
+        mov x16, #0
+        mov x17, #0
+        mov x18, #0
+        
+        eret
+    "
+);

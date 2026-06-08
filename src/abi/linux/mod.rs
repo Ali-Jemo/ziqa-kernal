@@ -561,7 +561,7 @@ fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     
     let is_anonymous = (flags & 0x20) != 0; // MAP_ANONYMOUS
     
-    let start_hint = crate::memory::VirtAddr::new(0x4000_0000);
+    let start_hint = crate::memory::VirtAddr::new(ctx.args[0]);
     let base = crate::process::vma::find_free_range(&ctx.process.vmas, length, start_hint)
         .ok_or(AbiError::Other("mmap: no free address space"))?;
 
@@ -995,9 +995,51 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 }
 
 /// sys_arch_prctl(code, addr) → 0  
-fn sys_arch_prctl(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    // Used to set FS/GS base for TLS — stub for now
-    Ok(0)
+fn sys_arch_prctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let code = ctx.args[0] as u32;
+    let addr = ctx.args[1];
+
+    match code {
+        0x1002 => {
+            // ARCH_SET_FS
+            ctx.process.fs_base = addr;
+            use x86_64::registers::model_specific::Msr;
+            let mut fs_msr = Msr::new(0xC0000100);
+            unsafe {
+                fs_msr.write(addr);
+            }
+            Ok(0)
+        }
+        0x1003 => {
+            // ARCH_GET_FS
+            UserSliceWo::wo(addr, 8)
+                .map_err(|_| AbiError::Other("EFAULT: bad arch_prctl buffer"))?
+                .copy_from_slice(&ctx.process.fs_base.to_ne_bytes())
+                .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
+            Ok(0)
+        }
+        0x1001 => {
+            // ARCH_SET_GS
+            ctx.process.gs_base = addr;
+            use x86_64::registers::model_specific::Msr;
+            let mut kgs_msr = Msr::new(0xC0000102);
+            unsafe {
+                kgs_msr.write(addr);
+            }
+            Ok(0)
+        }
+        0x1004 => {
+            // ARCH_GET_GS
+            UserSliceWo::wo(addr, 8)
+                .map_err(|_| AbiError::Other("EFAULT: bad arch_prctl buffer"))?
+                .copy_from_slice(&ctx.process.gs_base.to_ne_bytes())
+                .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
+            Ok(0)
+        }
+        _ => {
+            Ok((-22_i64) as u64) // -EINVAL
+        }
+    }
 }
 
 /// sys_set_tid_address(tidptr) → tid
@@ -1006,9 +1048,27 @@ fn sys_set_tid_address(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 }
 
 /// sys_stat / sys_lstat(path, statbuf) → 0/-ENOENT
-fn sys_stat(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    // Return success for all paths; binaries can proceed.
-    Ok(0) // pretend all files exist
+fn sys_stat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
+    let exists = crate::fs::vfs::VFS.read().exists(path_str);
+    if !exists {
+        return Ok((-2_i64) as u64); // -ENOENT
+    }
+    let mut stat = [0u8; 144];
+    stat[8..16].copy_from_slice(&1u64.to_ne_bytes()); // st_ino
+    stat[16..24].copy_from_slice(&1u64.to_ne_bytes()); // st_nlink
+    stat[24..28].copy_from_slice(&0o100644u32.to_ne_bytes()); // st_mode
+    if let Some(sz) = crate::fs::vfs::VFS.read().file_size(path_str) {
+        stat[48..56].copy_from_slice(&(sz as u64).to_ne_bytes()); // st_size
+    }
+    stat[56..64].copy_from_slice(&4096u64.to_ne_bytes()); // st_blksize
+    UserSliceWo::wo(ctx.args[1], 144)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&stat)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    Ok(0)
 }
 
 /// sys_lseek(fd, offset, whence) → new_offset
@@ -1210,8 +1270,10 @@ fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// FUTEX operations:
 ///   0 = FUTEX_WAIT - wait if value at uaddr equals val
 ///   1 = FUTEX_WAKE - wake up to 'val' waiters
-///   128 = FUTEX_FD - (ignored)
-///   129 = FUTEX_EXACT_NAME - (ignored)
+///   3 = FUTEX_REQUEUE - wake 'val', requeue up to 'timeout' to uaddr2
+///   4 = FUTEX_CMP_REQUEUE - same as 3 if *uaddr == val3
+///   5 = FUTEX_WAIT_BITSET - wait with bitset match
+///   9 = FUTEX_WAKE_BITSET - wake with bitset match
 fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     use x86_64::VirtAddr;
     
@@ -1234,20 +1296,78 @@ fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let phys_addr = entry.addr().as_u64() + (uaddr & 0xFFF);
 
     match op {
-        0 => {
-            // FUTEX_WAIT
-            let blocked = crate::sync::futex::FUTEX_MANAGER.lock().wait(phys_addr, val as u32);
+        0 | 5 => {
+            // FUTEX_WAIT (0) or FUTEX_WAIT_BITSET (5)
+            let bitset = if op == 5 { ctx.args[5] as u32 } else { 0xFFFFFFFF };
+            let timeout_ptr = ctx.args[3];
+            let mut timeout_ms = None;
+            
+            if timeout_ptr != 0 {
+                let mut ts_buf = [0u8; 16];
+                if UserSliceRo::ro(timeout_ptr, 16).and_then(|s| s.copy_to_slice(&mut ts_buf)).is_ok() {
+                    let tv_sec = i64::from_le_bytes(ts_buf[0..8].try_into().unwrap());
+                    let tv_nsec = i64::from_le_bytes(ts_buf[8..16].try_into().unwrap());
+                    let ms = (tv_sec.max(0) as u64 * 1000) + (tv_nsec.max(0) as u64 / 1_000_000);
+                    timeout_ms = Some(ms);
+                } else {
+                    return Ok((-14_i64) as u64); // -EFAULT
+                }
+            }
+
+            let blocked = crate::sync::futex::FUTEX_MANAGER.lock().wait(phys_addr, val as u32, bitset);
             if blocked {
+                if let Some(ms) = timeout_ms {
+                    crate::timer::TIMER.lock().sleep_ms(ctx.process.pid, ms);
+                }
+                
                 crate::process::scheduler::SCHEDULER.schedule();
+                
+                if ctx.process.timed_out {
+                    crate::sync::futex::FUTEX_MANAGER.lock().cancel_wait(phys_addr, ctx.process.pid);
+                    return Ok((-110_i64) as u64); // -ETIMEDOUT
+                }
             } else {
                 return Ok((-11_i64) as u64); // -EAGAIN
             }
             Ok(0)
         }
-        1 => {
-            // FUTEX_WAKE
-            let woken = crate::sync::futex::FUTEX_MANAGER.lock().wake(phys_addr, val as usize);
+        1 | 9 => {
+            // FUTEX_WAKE (1) or FUTEX_WAKE_BITSET (9)
+            let bitset = if op == 9 { ctx.args[5] as u32 } else { 0xFFFFFFFF };
+            let woken = crate::sync::futex::FUTEX_MANAGER.lock().wake(phys_addr, val as usize, bitset);
             Ok(woken as u64)
+        }
+        3 | 4 => {
+            // FUTEX_REQUEUE (3) or FUTEX_CMP_REQUEUE (4)
+            let val2 = ctx.args[3] as usize; // requeue_count
+            let uaddr2 = ctx.args[4];
+
+            if op == 4 {
+                // FUTEX_CMP_REQUEUE: check val3 at uaddr
+                let val3 = ctx.args[5] as u32;
+                let po = crate::memory::paging::phys_offset().as_u64();
+                let ptr = (po + phys_addr) as *const u32;
+                let current_val = unsafe { *ptr };
+                if current_val != val3 {
+                    return Ok((-11_i64) as u64); // -EAGAIN
+                }
+            }
+
+            // Translate uaddr2 to physical address
+            let vaddr2 = VirtAddr::new(uaddr2);
+            let entry2 = match crate::memory::paging::get_leaf_entry_mut(vaddr2) {
+                Some(e) => e,
+                None => return Ok((-14_i64) as u64), // -EFAULT
+            };
+            if !entry2.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+                return Ok((-14_i64) as u64); // -EFAULT
+            }
+            let phys_addr2 = entry2.addr().as_u64() + (uaddr2 & 0xFFF);
+
+            let total = crate::sync::futex::FUTEX_MANAGER.lock().requeue(
+                phys_addr, phys_addr2, val as usize, val2
+            );
+            Ok(total as u64)
         }
         _ => {
             println!("[FUTEX] unsupported op: {}", op);

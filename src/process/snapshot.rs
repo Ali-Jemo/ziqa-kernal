@@ -470,7 +470,7 @@ impl Process {
                     (end - start) as usize,
                     flags,
                 );
-                self.vmas.push(vma);
+                self.add_region(vma);
                 
                 // Restore page contents: walk the page data and map each present page
                 let page_count = ((end - start) as usize + PAGE_SIZE - 1) / PAGE_SIZE;
