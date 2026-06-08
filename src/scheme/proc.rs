@@ -8,7 +8,7 @@ use spin::Mutex;
 
 #[derive(Clone, Copy)]
 pub enum ProcTarget {
-    Mem(Pid),
+    Mem(Pid, u64),
     Regs(Pid),
 }
 
@@ -21,7 +21,7 @@ impl ProcScheme {
     pub const fn new() -> Self {
         Self {
             handles: Mutex::new(BTreeMap::new()),
-            next_handle: Mutex::new(2), // Start at 2 (1 is reserved)
+            next_handle: Mutex::new(2),
         }
     }
 }
@@ -29,14 +29,22 @@ impl ProcScheme {
 impl Scheme for ProcScheme {
     fn open(&self, path: &str, _flags: usize) -> SchemeResult<usize> {
         let parts: Vec<&str> = path.split('/').collect();
-        if parts.len() != 2 { return Err(AbiError::Other("Invalid path")); }
+        if parts.len() < 2 { return Err(AbiError::Other("Invalid path")); }
         
         let pid_str = parts[0].trim_start_matches("proc:");
-        let target_str = parts[1];
-        
         let pid = Pid(pid_str.parse::<u64>().map_err(|_| AbiError::Other("Invalid PID"))?);
-        let target = match target_str {
-            "mem" => ProcTarget::Mem(pid),
+        let target_type = parts[1];
+        
+        let target = match target_type {
+            "mem" => {
+                let addr_str = parts.get(2).unwrap_or(&"0");
+                let addr = if addr_str.starts_with("0x") {
+                    u64::from_str_radix(&addr_str[2..], 16)
+                } else {
+                    addr_str.parse::<u64>()
+                }.map_err(|_| AbiError::Other("Invalid address"))?;
+                ProcTarget::Mem(pid, addr)
+            }
             "regs" => ProcTarget::Regs(pid),
             _ => return Err(AbiError::Other("Invalid target")),
         };
@@ -75,7 +83,14 @@ impl Scheme for ProcScheme {
                 buf[..len].copy_from_slice(&data[..len]);
                 Ok(len)
             }
-            ProcTarget::Mem(_) => Err(AbiError::Other("Not implemented")),
+            ProcTarget::Mem(pid, addr) => {
+                let len = buf.len();
+                if process::scheduler::SCHEDULER.ptrace_read_mem(*pid, *addr, buf) {
+                    Ok(len)
+                } else {
+                    Err(AbiError::Other("Memory access failed"))
+                }
+            }
         }
     }
 
@@ -94,7 +109,13 @@ impl Scheme for ProcScheme {
                 }
                 Ok(size)
             }
-            ProcTarget::Mem(_) => Err(AbiError::Other("Not implemented")),
+            ProcTarget::Mem(pid, addr) => {
+                if process::scheduler::SCHEDULER.ptrace_write_mem(*pid, *addr, buf) {
+                    Ok(buf.len())
+                } else {
+                    Err(AbiError::Other("Memory write failed"))
+                }
+            }
         }
     }
 

@@ -1,7 +1,14 @@
 /// RISC-V (RV64) specific architecture support for ZiqaKernel
 /// Based on Redox OS implementation.
 
+pub mod consts;
+pub mod device;
 pub mod interrupt;
+pub mod ipi;
+pub mod misc;
+pub mod paging;
+pub mod stop;
+pub mod time;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -164,7 +171,6 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
             slots.add(2).write(0);   // S10
             slots.add(1).write(entry); // S11 -> entry
             // S11 is used by trampoline to call the function
-            // Arg will be in S1 -> a0
             slots.add(11).write(arg); // S1 -> arg
             proc.kernel_stack_ptr = sp;
         }

@@ -182,6 +182,52 @@ impl Scheduler {
         }
     }
 
+    pub fn ptrace_read_mem(&self, pid: Pid, addr: u64, buf: &mut [u8]) -> bool {
+        let proc_arc = match self.get_process(pid) {
+            Some(p) => p,
+            None => return false,
+        };
+        let proc = proc_arc.lock();
+        let target_frame = match proc.page_table_frame {
+            Some(f) => f,
+            None => return false, // Cannot access shared kernel table via ptrace
+        };
+
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let old_cr3 = Cr3::read();
+            unsafe { Cr3::write(target_frame, Cr3Flags::empty()); }
+            
+            let slice = unsafe { core::slice::from_raw_parts(addr as *const u8, buf.len()) };
+            buf.copy_from_slice(slice);
+
+            unsafe { Cr3::write(old_cr3.0, old_cr3.1); }
+        });
+        true
+    }
+
+    pub fn ptrace_write_mem(&self, pid: Pid, addr: u64, buf: &[u8]) -> bool {
+        let proc_arc = match self.get_process(pid) {
+            Some(p) => p,
+            None => return false,
+        };
+        let mut proc = proc_arc.lock();
+        let target_frame = match proc.page_table_frame {
+            Some(f) => f,
+            None => return false, // Cannot access shared kernel table via ptrace
+        };
+
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let old_cr3 = Cr3::read();
+            unsafe { Cr3::write(target_frame, Cr3Flags::empty()); }
+            
+            let slice = unsafe { core::slice::from_raw_parts_mut(addr as *mut u8, buf.len()) };
+            slice.copy_from_slice(buf);
+
+            unsafe { Cr3::write(old_cr3.0, old_cr3.1); }
+        });
+        true
+    }
+
     pub fn exit_process(&self, pid: Pid, code: i64) {
         // The set of PIDs waiting to join the exiting process; we drain it
         // from `join_waiters` so they can all be unblocked atomically.

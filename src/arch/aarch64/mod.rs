@@ -1,7 +1,14 @@
 /// ARM64 (AArch64) specific architecture support for ZiqaKernel
 /// Based on Redox OS implementation.
 
+pub mod consts;
+pub mod device;
 pub mod interrupt;
+pub mod ipi;
+pub mod misc;
+pub mod paging;
+pub mod stop;
+pub mod time;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -127,7 +134,6 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
     if let Some(ref mut _kstack) = proc.kernel_stack {
         let kstack_top = proc.kernel_stack_top;
         unsafe {
-            // Push LR (return address), then X29..X19
             let mut sp = kstack_top;
             sp -= 8; *(sp as *mut u64) = proc.entry_point.as_u64(); // LR (X30)
             sp -= 8; *(sp as *mut u64) = 0;   // X29 (FP)

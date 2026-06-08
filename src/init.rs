@@ -74,7 +74,11 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
 
     // Register Mouse IPC Channel (Channel ID 1)
     crate::ipc::register_channel(1, alloc::sync::Arc::new(crate::ipc::Channel::new()));
-    // IPC Server Spawn: crate::process::scheduler::spawn_kthread(move || crate::drivers::mouse_server::run_mouse_server(1));
+    
+    // Spawn mouse server process
+    crate::process::scheduler::spawn_kthread(|_| {
+        crate::drivers::mouse_server::run_mouse_server(1);
+    }, core::ptr::null());
 
     // ── SMP / APIC Init ──────────────────────────────────────────────────
     if let Some(acpi_info) = &*drivers::acpi::ACPI_INFO.lock() {
@@ -125,9 +129,9 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     crate::klog!(
         crate::klog::Level::Info,
         "CPU features: SMEP={} SMAP={} UMIP={}",
-        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::SMEP),
-        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::SMAP),
-        cpu_features.contains(arch::x86_64::cpu_features::CpuFeatures::UMIP),
+        cpu_features.contains(crate::arch::x86_64::cpu_features::CpuFeatures::SMEP),
+        cpu_features.contains(crate::arch::x86_64::cpu_features::CpuFeatures::SMAP),
+        cpu_features.contains(crate::arch::x86_64::cpu_features::CpuFeatures::UMIP),
     );
 
     raw_serial_log("init: calling scheduler::init\n");
