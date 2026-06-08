@@ -1213,32 +1213,47 @@ fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 ///   128 = FUTEX_FD - (ignored)
 ///   129 = FUTEX_EXACT_NAME - (ignored)
 fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    use x86_64::VirtAddr;
+    
     let op = ctx.args[1] as u32 & 0x7F; // mask off FUTEX_PRIVATE_FLAG
-    let _uaddr = ctx.args[0];
-    let _val = ctx.args[2] as i32;
+    let uaddr = ctx.args[0];
+    let val = ctx.args[2] as i32;
+
+    // Translate user virtual address to physical address.
+    let vaddr = VirtAddr::new(uaddr);
+    let entry = match crate::memory::paging::get_leaf_entry_mut(vaddr) {
+        Some(e) => e,
+        None => return Ok((-14_i64) as u64), // -EFAULT
+    };
+
+    let flags = entry.flags();
+    if !flags.contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return Ok((-14_i64) as u64); // -EFAULT
+    }
+
+    let phys_addr = entry.addr().as_u64() + (uaddr & 0xFFF);
 
     match op {
         0 => {
             // FUTEX_WAIT
-            // Check if value matches, if so block
-            // For now, we just yield the CPU
-            if ctx.process.state == crate::process::ProcessState::Running {
-                ctx.process.state = crate::process::ProcessState::Ready;
+            let blocked = crate::sync::futex::FUTEX_MANAGER.lock().wait(phys_addr, val as u32);
+            if blocked {
+                crate::process::scheduler::SCHEDULER.schedule();
+            } else {
+                return Ok((-11_i64) as u64); // -EAGAIN
             }
-            // A real implementation would check *uaddr == val
-            // and only block if true
+            Ok(0)
         }
-        1 => { // FUTEX_WAKE
-             // Wake up to 'val' waiters
-             // For now, just return success
-             // A real implementation would add processes to ready queue
+        1 => {
+            // FUTEX_WAKE
+            let woken = crate::sync::futex::FUTEX_MANAGER.lock().wake(phys_addr, val as usize);
+            Ok(woken as u64)
         }
         _ => {
-            // Other operations not implemented
             println!("[FUTEX] unsupported op: {}", op);
+            Ok((-38_i64) as u64) // -ENOSYS
         }
     }
-    Ok(0)
 }
 
 /// sys_rt_sigaction(signum, act_ptr, oldact_ptr, sigsetsize) → 0 / -EINVAL

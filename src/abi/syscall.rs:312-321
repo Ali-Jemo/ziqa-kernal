@@ -1,0 +1,22 @@
+        nr::KILL => {
+            let target_pid = ctx.args[0];
+            let signum = ctx.args[1] as u8;
+            let ok = handler.kill(target_pid, signum);
+            klog_syscall("kill", target_pid);
+            if ok {
+                return Ok(0);
+            }
+            return Err(crate::abi::AbiError::Other("ESRCH: no such process"));
+        }
+        nr::STAT => {
+            crate::klog!(crate::klog::Level::Warn, "stat: stubbed");
+            return Ok(0);
+        }
+        nr::ARCH_PRCTL => {
+            crate::klog!(crate::klog::Level::Warn, "arch_prctl: stubbed");
+            return Ok(0);
+        }
+        nr::PRCTL => {
+            crate::klog!(crate::klog::Level::Warn, "prctl: stubbed");
+            return Ok(0);
+        }

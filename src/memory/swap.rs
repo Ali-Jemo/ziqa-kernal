@@ -20,6 +20,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;
+use x86_64::VirtAddr;
 
 /// Number of 4 KiB pages per swap area when using the RAM backend.
 const RAM_SWAP_PAGES: usize = 64; // 256 KiB by default
@@ -183,7 +184,7 @@ impl SwapArea {
                 start_sector,
                 sectors_per_page,
             } => {
-                let sector = start_sector + (index as u64) * (*sectors_per_page as u64);
+                let sector = *start_sector + (index as u64) * (*sectors_per_page as u64);
                 device
                     .write_sectors(sector, *sectors_per_page, page)
                     .map_err(|_| "swap disk write failed")
@@ -206,7 +207,7 @@ impl SwapArea {
                 start_sector,
                 sectors_per_page,
             } => {
-                let sector = start_sector + (index as u64) * (*sectors_per_page as u64);
+                let sector = *start_sector + (index as u64) * (*sectors_per_page as u64);
                 device
                     .read_sectors(sector, *sectors_per_page, page)
                     .map_err(|_| "swap disk read failed")
@@ -269,7 +270,7 @@ impl SwapBackendInner {
     fn write_page(&mut self, slot: SwapSlot, page: &[u8; 4096]) -> Result<(), &'static str> {
         let area = self
             .areas
-            .get(slot.area as usize)
+            .get_mut(slot.area as usize)
             .ok_or("invalid swap area")?;
         area.write_page(slot.index, page)?;
         self.total_writes += 1;
@@ -341,7 +342,7 @@ pub fn init(use_disk: bool) {
 /// — the page contents now live in the swap area.
 pub fn swap_out(frame_paddr: u64) -> Option<SwapSlot> {
     let po = crate::memory::paging::phys_offset();
-    let src = VirtAddr::new(po + frame_paddr).as_ptr::<u8>();
+    let src = VirtAddr::new(po.as_u64() + frame_paddr).as_ptr::<u8>();
     let mut page = [0u8; 4096];
     unsafe {
         core::ptr::copy_nonoverlapping(src, page.as_mut_ptr(), 4096);
@@ -355,15 +356,16 @@ pub fn swap_out(frame_paddr: u64) -> Option<SwapSlot> {
             return None;
         }
     };
-pub fn alloc_slot() -> Option<SwapSlot> {
-    SWAP_BACKEND.lock().alloc_slot()
-}
     if backend.write_page(slot, &page).is_err() {
         backend.free_slot(slot);
         backend.failed_evictions += 1;
         return None;
     }
     Some(slot)
+}
+
+pub fn alloc_slot() -> Option<SwapSlot> {
+    SWAP_BACKEND.lock().alloc_slot()
 }
 
 /// Read a 4 KiB page from swap back into a fresh frame. The destination
@@ -373,7 +375,7 @@ pub fn alloc_slot() -> Option<SwapSlot> {
 /// path) into the target address space.
 pub fn swap_in(slot: SwapSlot, dst_frame_paddr: u64) -> Result<(), &'static str> {
     let po = crate::memory::paging::phys_offset();
-    let dst = (po + dst_frame_paddr) as *mut u8;
+    let dst = (po.as_u64() + dst_frame_paddr) as *mut u8;
 
     let mut backend = SWAP_BACKEND.lock();
     let mut page = [0u8; 4096];

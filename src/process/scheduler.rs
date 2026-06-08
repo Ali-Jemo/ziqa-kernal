@@ -31,39 +31,33 @@ impl GlobalProcessTable {
     }
 }
 
-/// Ready queues for Multi-Level Feedback Queue (MLFQ) scheduling.
-struct ReadyQueues {
-    queues: [Vec<Pid>; PRIORITY_LEVELS as usize],
+use alloc::collections::BTreeSet;
+// ...
+/// Ready queue for DWRR scheduler (CFS-style vruntime).
+struct ReadySet {
+    queues: BTreeSet<(u64, Pid)>,
 }
 
-impl ReadyQueues {
+impl ReadySet {
     pub const fn new() -> Self {
         Self {
-            queues: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            queues: BTreeSet::new(),
         }
     }
 
-    pub fn push(&mut self, pid: Pid, priority: u8) {
-        let p = priority.min(PRIORITY_LEVELS - 1) as usize;
-        if !self.queues[p].contains(&pid) {
-            self.queues[p].push(pid);
-        }
+    pub fn push(&mut self, pid: Pid, vruntime: u64) {
+        self.queues.insert((vruntime, pid));
     }
 
-    pub fn pop_highest(&mut self) -> Option<Pid> {
-        for q in self.queues.iter_mut() {
-            if !q.is_empty() {
-                return Some(q.remove(0));
-            }
-        }
-        None
+    pub fn pop_lowest(&mut self) -> Option<Pid> {
+        self.queues.pop_first().map(|(_, pid)| pid)
     }
 }
 
 /// The Scalable Scheduler for ZiqaKernel.
 pub struct Scheduler {
     pub process_table: RwLock<GlobalProcessTable>,
-    ready_queues: Mutex<ReadyQueues>,
+    pub ready_queues: Mutex<ReadySet>,
     ticks: AtomicU64,
     pid_allocator: Mutex<PidAllocator>,
 }
@@ -72,7 +66,7 @@ impl Scheduler {
     pub const fn new() -> Self {
         Scheduler {
             process_table: RwLock::new(GlobalProcessTable::new()),
-            ready_queues: Mutex::new(ReadyQueues::new()),
+            ready_queues: Mutex::new(ReadySet::new()),
             ticks: AtomicU64::new(0),
             pid_allocator: Mutex::new(PidAllocator::new()),
         }
@@ -250,7 +244,7 @@ impl Scheduler {
             if let Some(proc_mutex) = self.get_process(Pid(waiter_pid)) {
                 let mut proc = proc_mutex.lock();
                 proc.make_ready();
-                self.ready_queues.lock().push(proc.pid, proc.priority);
+                self.ready_queues.lock().push(proc.pid, proc.vruntime);
             }
         }
         
@@ -410,7 +404,7 @@ impl Scheduler {
             } else if signum == crate::process::signal::sig::SIGCONT {
                 if proc.state == ProcessState::Blocked {
                     proc.state = ProcessState::Ready;
-                    self.ready_queues.lock().push(target, proc.priority);
+                    self.ready_queues.lock().push(target, proc.vruntime);
                 }
             }
             return true;
@@ -430,23 +424,7 @@ impl Scheduler {
         if let Some(pid) = self.current_pid() {
             if let Some(proc_arc) = self.get_process(pid) {
                 if let Some(mut proc) = proc_arc.try_lock() {
-                    if t % 10 == 0 {
-                        if proc.priority < PRIORITY_LEVELS - 1 {
-                            proc.priority += 1;
-                        }
-                    }
-                }
-                // else: another CPU/context holds the lock; drop the tick's
-                // MLFQ promotion and let the next tick handle it. Process
-                // state is otherwise consistent because we never mutated it.
-            }
-        }
-
-        if t % BOOST_INTERVAL == 0 {
-            let table = self.process_table.read();
-            for p in table.tasks.values() {
-                if let Some(mut proc) = p.try_lock() {
-                    proc.priority = 0;
+                    proc.vruntime += 1;
                 }
             }
         }
@@ -458,7 +436,7 @@ impl Scheduler {
             x86_64::instructions::interrupts::disable();
         }
 
-        let next_pid = self.ready_queues.lock().pop_highest();
+        let next_pid = self.ready_queues.lock().pop_lowest();
         
         if let Some(new_pid) = next_pid {
             let old_pid = self.current_pid();
@@ -491,7 +469,7 @@ impl Scheduler {
                     unsafe { crate::arch::x86_64::save_fpu(&mut old_proc.fpu_state); }
                     if old_proc.state == ProcessState::Running {
                         old_proc.state = ProcessState::Ready;
-                        self.ready_queues.lock().push(old_proc.pid, old_proc.priority);
+                        self.ready_queues.lock().push(old_proc.pid, old_proc.vruntime);
                     }
                     &mut old_proc.kernel_stack_ptr as *mut u64
                 };
@@ -537,7 +515,7 @@ impl Scheduler {
                 let bit = proc.pid.0;
                 if bit < 64 && (woken_mask & (1 << bit)) != 0 {
                     proc.state = ProcessState::Ready;
-                    self.ready_queues.lock().push(proc.pid, proc.priority);
+                    self.ready_queues.lock().push(proc.pid, proc.vruntime);
                 }
             }
         }

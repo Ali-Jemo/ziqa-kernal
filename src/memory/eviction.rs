@@ -4,7 +4,7 @@
 //! When memory pressure is high, it scans for unreferenced frames to evict
 //! (swap out).
 
-// use crate::memory::{paging, swap};
+use crate::memory::swap;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use spin::Mutex;

@@ -46,7 +46,8 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
     raw_serial_log("init: doing frame allocator init\n");
 
-    *memory::FRAME_ALLOCATOR.lock() = Some(BootInfoFrameAllocator);
+    unsafe { memory::frame_allocator::rmm_init_from_bootinfo(boot_info); }
+    *memory::FRAME_ALLOCATOR.lock() = Some(memory::BootInfoFrameAllocator);
     raw_serial_log("init: frame allocator done, starting heap init\n");
 
     let mut mapper = unsafe { MemoryMapper::new(phys_offset) };

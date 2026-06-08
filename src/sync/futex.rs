@@ -4,12 +4,14 @@
 //! This is critical for synchronizing shared memory (MAP_SHARED) across address spaces.
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use spin::Mutex;
-use crate::ipc::wait_queue::WaitQueue; // Assuming WaitQueue exists based on module tree
+use crate::process::Pid;
+use crate::process::scheduler::SCHEDULER;
 
 pub struct FutexManager {
-    // Map physical address to a WaitQueue of blocked processes
-    queues: BTreeMap<u64, WaitQueue>,
+    // Map physical address to a list of waiting Pids
+    queues: BTreeMap<u64, Vec<Pid>>,
 }
 
 impl FutexManager {
@@ -20,17 +22,50 @@ impl FutexManager {
     }
 
     /// Wait on a futex at the given physical address.
-    pub fn wait(&mut self, phys_addr: u64, expected_val: u32) {
-        // Implementation logic:
-        // 1. Check current value at phys_addr.
-        // 2. If it equals expected_val, add calling process to the queue.
-        // 3. Block and trigger scheduler.
+    /// Returns true if it actually blocked, false otherwise.
+    pub fn wait(&mut self, phys_addr: u64, expected_val: u32) -> bool {
+        let po = crate::memory::paging::phys_offset().as_u64();
+        let ptr = (po + phys_addr) as *const u32;
+        
+        // Safety: We got the physical address from the page table entry, which is valid and mapped.
+        let val = unsafe { *ptr };
+        if val != expected_val {
+            return false; // Value mismatch, do not block
+        }
+
+        let pid = match SCHEDULER.current_pid() {
+            Some(p) => p,
+            None => return false,
+        };
+
+        self.queues.entry(phys_addr).or_insert_with(Vec::new).push(pid);
+
+        // Block the current process
+        crate::process::scheduler::with_current_task_mut(|proc| {
+            proc.block();
+        });
+        
+        true
     }
 
     /// Wake processes waiting on a futex at the given physical address.
-    pub fn wake(&mut self, phys_addr: u64, count: usize) {
-        // Implementation logic:
-        // 1. Wake up to 'count' processes from the queue.
+    /// Returns number of woken processes.
+    pub fn wake(&mut self, phys_addr: u64, count: usize) -> usize {
+        let mut woken = 0;
+        if let Some(waiters) = self.queues.get_mut(&phys_addr) {
+            let wake_count = count.min(waiters.len());
+            for pid in waiters.drain(..wake_count) {
+                if let Some(proc_arc) = SCHEDULER.get_process(pid) {
+                    let mut proc = proc_arc.lock();
+                    proc.unblock();
+                    woken += 1;
+                }
+            }
+            if waiters.is_empty() {
+                self.queues.remove(&phys_addr);
+            }
+        }
+        woken
     }
 }
 

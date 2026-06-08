@@ -313,6 +313,8 @@ pub struct Process {
     pub kernel_stack_top: u64,
     /// Total CPU ticks consumed by this process
     pub total_ticks: u64,
+    /// Virtual runtime for CFS-style scheduling
+    pub vruntime: u64,
 }
 
 impl Process {
@@ -363,6 +365,7 @@ impl Process {
             kernel_stack: kstack,
             kernel_stack_top: kstack_top,
             total_ticks: 0,
+            vruntime: 0,
         }
     }
 

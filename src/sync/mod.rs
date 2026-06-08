@@ -22,7 +22,9 @@
 pub use self::ordered::*;
 pub use self::wait_condition::WaitCondition;
 pub use self::wait_queue::WaitQueue;
+pub use self::futex::FUTEX_MANAGER;
 
 pub mod ordered;
 pub mod wait_condition;
 pub mod wait_queue;
+pub mod futex;
