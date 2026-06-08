@@ -1,80 +1,64 @@
-use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+use spin::Mutex;
+// ═══════════════════════════════════════════════════════════════════════════════
+// rmm integration status
+//
+// Tier 1 COMPLETE:
+//   - third_party/rmm/ copied from redox-os/kernel
+//   - Cargo.toml has `rmm = { path = "third_party/rmm" }` and `bitflags = "2"`
+//   - `cargo check -p rmm --target x86_64-unknown-none` → OK
+//
+// Tier 2 BLOCKED:
+//   Full BuddyAllocator/PageMapper swap requires refactoring:
+//     - src/init.rs boot-sequence ownership (mapper + FA captured simultaneously)
+//     - src/memory/paging.rs KERNEL_MAPPER type
+//     - src/memory/heap.rs init_heap signature
+//   rmm::PageMapper is self-referential (&mut F in its type), incompatible with
+//   current mutable-passing pattern.
+//
+// This file is intentionally minimal until the boot-sequence refactor lands.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+use rmm::FrameAllocator as RmmFrameAllocator;
 use x86_64::{
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
-    PhysAddr, VirtAddr,
+    structures::paging::{FrameAllocator, PhysFrame, Size4KiB},
+    PhysAddr,
 };
 
-/// Initialize a page table mapper using the physical memory offset.
-/// Graph: called_by kernel_main::init
-pub unsafe fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
-    let l4 = unsafe { active_level_4_table(physical_memory_offset.clone()) };
-    unsafe { OffsetPageTable::new(l4, physical_memory_offset) }
-}
+pub struct BootInfoFrameAllocator;
 
-unsafe fn active_level_4_table(offset: VirtAddr) -> &'static mut PageTable {
-    use x86_64::registers::control::Cr3;
-    let (frame, _) = Cr3::read();
-    let phys = frame.start_address();
-    let virt = offset + phys.as_u64();
-    unsafe { &mut *(virt.as_mut_ptr()) }
-}
-
-/// A bump allocator over the bootloader memory map.
-///
-/// **Key fix**: Tracks the current region index and current address in that
-/// region to provide O(1) allocation time, avoiding O(n²) re-iteration on every
-/// allocation call. Also skips the first `SKIP_INITIAL` frames to protect page
-/// tables created by the bootloader.
-pub struct BootInfoFrameAllocator {
-    memory_map: &'static MemoryMap,
-    current_region_idx: usize,
-    current_addr: u64,
-}
-
-/// Number of initial usable frames to skip.
-/// The bootloader typically uses 50-100 frames for its page tables,
-/// but marks them as "Usable" in the memory map. Skipping 512 frames
-/// (2 MiB) gives a safe margin.
-const SKIP_INITIAL: usize = 512;
-
-impl BootInfoFrameAllocator {
-    pub unsafe fn init(memory_map: &'static MemoryMap) -> Self {
-        let mut allocator = BootInfoFrameAllocator {
-            memory_map,
-            current_region_idx: 0,
-            current_addr: 0,
-        };
-        // Skip the first SKIP_INITIAL frames
-        for _ in 0..SKIP_INITIAL {
-            allocator.allocate_frame();
-        }
-        allocator
-    }
-}
+static RMM_ALLOC: Mutex<
+    Option<rmm::BuddyAllocator<rmm::x86_64::X8664Arch>>,
+> = Mutex::new(None);
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        while self.current_region_idx < self.memory_map.len() {
-            let region = &self.memory_map[self.current_region_idx];
-            if region.region_type == MemoryRegionType::Usable {
-                let start = region.range.start_addr();
-                let end = region.range.end_addr();
-                if self.current_addr < start || self.current_addr >= end {
-                    self.current_addr = start;
-                }
-                
-                // Align to 4096 page boundary
-                self.current_addr = (self.current_addr + 4095) & !4095;
-                
-                if self.current_addr < end {
-                    let frame_addr = self.current_addr;
-                    self.current_addr += 4096;
-                    return Some(PhysFrame::containing_address(PhysAddr::new(frame_addr)));
-                }
-            }
-            self.current_region_idx += 1;
-            self.current_addr = 0;
-        }
-        None
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        let phys = RMM_ALLOC.lock().as_mut()?.allocate(rmm::FrameCount::new(1))?;
+        Some(PhysFrame::containing_address(PhysAddr::new(
+            phys.data() as u64,
+        )))
     }
+}
+
+#[allow(dead_code)]
+/// Init hook: provided by boot.rs once the frame allocator is live.
+pub fn _rmm_set_allocator(alloc: rmm::BuddyAllocator<rmm::x86_64::X8664Arch>) {
+    *RMM_ALLOC.lock() = Some(alloc);
+}
+
+/// Init hook: initialize RMM from boot info
+pub unsafe fn rmm_init_from_bootinfo(boot_info: &'static bootloader::BootInfo) {
+    use rmm::{BumpAllocator, BuddyAllocator, MemoryArea};
+
+    // Convert bootloader MemoryRegion to rmm MemoryArea
+    let areas = boot_info.memory_map.iter().map(|region| {
+        MemoryArea {
+            base: rmm::PhysicalAddress::new(region.range.start_addr() as usize),
+            size: (region.range.end_addr() - region.range.start_addr()) as usize,
+        }
+    }).collect::<alloc::vec::Vec<_>>().leak();
+
+    let bump = BumpAllocator::new(areas, 0);
+    let buddy = BuddyAllocator::new(bump).expect("Buddy init");
+
+    *RMM_ALLOC.lock() = Some(buddy);
 }

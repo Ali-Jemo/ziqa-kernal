@@ -36,7 +36,7 @@ pub const PAGE_SIZE: usize = 4096;
 // ── User-memory access ────────────────────────────────────────────────────────
 
 /// Canonical user-space address ceiling on x86_64 (256 TiB).
-const USER_ADDR_MAX: u64 = 0x0000_8000_0000_0000;
+pub const USER_ADDR_MAX: u64 = 0x0000_8000_0000_0000;
 
 /// Return `true` if the entire byte range `[addr, addr+len)` lies within
 /// user-space and every page in the range is present and user-accessible.

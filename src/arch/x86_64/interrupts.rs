@@ -21,6 +21,7 @@ lazy_static! {
 use alloc::collections::BTreeMap;
 
 fn notify_irq(vector: u8) {
+    crate::scheme::irq::irq_trigger(vector);
     let mut waiters = IRQ_WAITERS.lock();
     if let Some(pid) = waiters.remove(&vector) {
         crate::process::scheduler::wake_sleeping(1 << pid.0);
@@ -236,13 +237,6 @@ extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     notify_irq(InterruptIndex::Keyboard as u8);
-    use x86_64::instructions::port::Port;
-
-    let mut port: Port<u8> = Port::new(0x60);
-    let scancode: u8 = unsafe { port.read() };
-
-    crate::drivers::keyboard::push_scancode(scancode);
-
     send_eoi(InterruptIndex::Keyboard as u8);
 }
 

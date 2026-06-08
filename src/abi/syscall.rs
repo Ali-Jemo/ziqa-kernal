@@ -9,6 +9,8 @@
 ///   60 = exit(code)
 ///   62 = kill(pid, sig)
 ///  230 = clock_nanosleep / nanosleep (simplified: ms in arg1)
+use crate::abi::usercopy::{UserSliceRo, UserSliceWo};
+use crate::abi::AbiError;
 use crate::process::{Process, ProcessState};
 use crate::process::vma::Vma;
 use crate::capability::{ResourceKind, Permissions};
@@ -169,6 +171,9 @@ pub mod nr {
     /// Read PCI interrupt line for a packed BDF.
     /// args: [bdf] → irq line / -errno
     pub const ZIQA_DEV_PCI_IRQ: u64 = 1037;
+    /// Translate virtual address to physical address for DMA
+    /// args: [virt_addr] → phys_addr / -errno
+    pub const ZIQA_DEV_VIRT_TO_PHYS: u64 = 1038;
 
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
     /// Request a capability for a resource (e.g., File, Network).
@@ -366,19 +371,14 @@ pub fn dispatch_syscall(
                 return Err(crate::abi::AbiError::Other("EPERM: no process creation capability"));
             }
 
-            let path_addr = ctx.args[0] as *const u8;
-            if path_addr.is_null() {
-                return Ok(-(errno::EFAULT as i64) as u64);
-            }
-
-            // Read path from userspace
+            // Read path from userspace via UserSlice
             let mut tmp = [0u8; 128];
-            let n = (0..127)
-                .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-                .count();
-            unsafe {
-                core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-            }
+            let _ = UserSliceRo::ro(ctx.args[0], 127)
+                .map_err(|_| AbiError::Other("EFAULT"))?
+                .copy_to_slice(&mut tmp)
+                .map_err(|_| AbiError::Other("EFAULT"))?;
+            // Find null terminator
+            let n = tmp.iter().position(|&b| b == 0).unwrap_or(127);
             let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
 
             klog_syscall("execve", ctx.args[0]);
@@ -427,10 +427,13 @@ pub fn dispatch_syscall(
             if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
                 return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
             }
-            let queue_index = ctx.args[0] as u16;
-            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
-                use x86_64::instructions::port::Port;
-                unsafe { Port::<u16>::new(net.io_base + 0x10).write(queue_index); }
+            #[cfg(feature = "net")]
+            {
+                let queue_index = ctx.args[0] as u16;
+                if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                    use x86_64::instructions::port::Port;
+                    unsafe { Port::<u16>::new(net.io_base + 0x10).write(queue_index); }
+                }
             }
             return Ok(0);
         }
@@ -438,9 +441,12 @@ pub fn dispatch_syscall(
             if !check_capability(ctx.process, ResourceKind::DeviceIo, true, false) {
                 return Err(crate::abi::AbiError::Other("EPERM: no DeviceIo capability"));
             }
-            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
-                use x86_64::instructions::port::Port;
-                unsafe { Port::<u8>::new(net.io_base + 0x14).read(); }
+            #[cfg(feature = "net")]
+            {
+                if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                    use x86_64::instructions::port::Port;
+                    unsafe { Port::<u8>::new(net.io_base + 0x14).read(); }
+                }
             }
             return Ok(0);
         }
@@ -465,6 +471,7 @@ pub fn dispatch_syscall(
 
         // ── Hardware access handlers ──
         nr::ZIQA_DEV_PORT_IN => return ziqa_dev_port_in(ctx),
+        nr::ZIQA_DEV_VIRT_TO_PHYS => return ziqa_dev_virt_to_phys(ctx),
         nr::ZIQA_DEV_PORT_OUT => return ziqa_dev_port_out(ctx),
         nr::ZIQA_DEV_MAP => return ziqa_dev_map(ctx),
         nr::ZIQA_DEV_IRQ_WAIT => return ziqa_dev_irq_wait(ctx),
@@ -506,16 +513,18 @@ pub fn dispatch_syscall(
         }
         nr::ZIQA_IPC_SEND => {
             let chan_id = ctx.args[0] as u32;
-            let ptr = ctx.args[1] as *const u8;
             let len = ctx.args[2] as usize;
             let sender = ctx.process.pid;
 
-            if ptr.is_null() || len > crate::ipc::MSG_MAX {
-                return Ok(-(errno::EFAULT as i64) as u64);
+            if len > crate::ipc::MSG_MAX {
+                return Ok(-(errno::EINVAL as i64) as u64);
             }
 
             let mut tmp = [0u8; crate::ipc::MSG_MAX];
-            unsafe { core::ptr::copy_nonoverlapping(ptr, tmp.as_mut_ptr(), len); }
+            UserSliceRo::ro(ctx.args[1], len)
+                .map_err(|_| AbiError::Other("EFAULT"))?
+                .copy_to_slice(&mut tmp[..len])
+                .map_err(|_| AbiError::Other("EFAULT"))?;
 
             match crate::ipc::send(chan_id, sender, &tmp[..len]) {
                 Ok(_) => return Ok(0),
@@ -524,17 +533,17 @@ pub fn dispatch_syscall(
         }
         nr::ZIQA_IPC_RECV => {
             let chan_id = ctx.args[0] as u32;
-            let ptr = ctx.args[1] as *mut u8;
             let max_len = ctx.args[2] as usize;
-
-            if ptr.is_null() {
-                return Ok(-(errno::EFAULT as i64) as u64);
-            }
 
             match crate::ipc::recv(chan_id) {
                 Ok(msg) => {
                     let copy_len = msg.len.min(max_len);
-                    unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), ptr, copy_len); }
+                    if copy_len > 0 {
+                        UserSliceWo::wo(ctx.args[1], copy_len)
+                            .map_err(|_| AbiError::Other("EFAULT"))?
+                            .copy_from_slice(&msg.data[..copy_len])
+                            .map_err(|_| AbiError::Other("EFAULT"))?;
+                    }
                     return Ok(copy_len as u64);
                 }
                 Err(_) => return Ok(-(errno::EINVAL as i64) as u64),
@@ -823,7 +832,9 @@ fn ziqa_dev_map(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
         size: aligned_size,
         flags: crate::memory::paging::MemoryRegionFlags::read_write(),
         is_file_backed: false,
+        file_path: None,
         file_offset: 0,
+        bco_hook: None,
     }));
     
     klog_syscall("ziqa_dev_map", virt_start);
@@ -899,6 +910,21 @@ fn find_pci_by_bdf(bdf: u64) -> Option<crate::drivers::pci::PciDevice> {
         .cloned()
 }
 
+/// ZIQA_DEV_VIRT_TO_PHYS (1038) — Return the physical address for a virtual address.
+fn ziqa_dev_virt_to_phys(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
+    if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    let virt = ctx.args[0];
+    let mapper = crate::memory::paging::KERNEL_MAPPER.lock();
+    if let Some(m) = mapper.as_ref() {
+        use x86_64::VirtAddr;
+        if let Some(phys) = m.translate_addr(VirtAddr::new(virt)) {
+            return Ok(phys.as_u64());
+        }
+    }
+    Ok(-(errno::EFAULT as i64) as u64)
+}
 /// ZIQA_DEV_PCI_BAR (1036) — Return BAR address and type for a userspace driver.
 fn ziqa_dev_pci_bar(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
     if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {

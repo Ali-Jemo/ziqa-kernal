@@ -28,6 +28,8 @@ pub enum ResourceKind {
     ProcessCreate,
     /// Permission to load/register ABI plugins
     AbiPlugin,
+    /// Permission to debug/inspect another process
+    ProcessDebug,
     /// Inter-process communication channel
     IpcChannel,
 }
@@ -114,21 +116,16 @@ impl CapabilityToken {
     }
 }
 
-/// Maximum capabilities a single process can hold
-const MAX_CAPS_PER_PROCESS: usize = 32;
-
 /// A process's capability space — the set of all capabilities it holds
+#[derive(Clone)]
 pub struct CapabilitySpace {
-    caps: [Option<CapabilityToken>; MAX_CAPS_PER_PROCESS],
-    count: usize,
+    caps: Vec<CapabilityToken>,
 }
 
 impl CapabilitySpace {
     pub const fn new() -> Self {
-        const NONE: Option<CapabilityToken> = None;
         Self {
-            caps: [NONE; MAX_CAPS_PER_PROCESS],
-            count: 0,
+            caps: Vec::new(),
         }
     }
 
@@ -140,9 +137,6 @@ impl CapabilitySpace {
         target: u64,
         parent_id: Option<CapabilityId>,
     ) -> Option<CapabilityId> {
-        if self.count >= MAX_CAPS_PER_PROCESS {
-            return None;
-        }
         let id = alloc_id();
         let token = CapabilityToken::new(id, parent_id, resource, permissions, target);
         
@@ -151,43 +145,22 @@ impl CapabilitySpace {
             REVOCATION_TREE.lock().add_child(pid, id);
         }
 
-        // Find first empty slot
-        for slot in self.caps.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(token);
-                self.count += 1;
-                return Some(id);
-            }
-        }
-        None
+        self.caps.push(token);
+        Some(id)
     }
 
     /// Revoke a capability by its ID (Local operation)
     pub fn revoke_local(&mut self, id: CapabilityId) -> bool {
-        for slot in self.caps.iter_mut() {
-            let matches = match slot {
-                Some(cap) => cap.id == id,
-                None => false,
-            };
-            if matches {
-                *slot = None;
-                self.count -= 1;
-                return true;
-            }
+        if let Some(pos) = self.caps.iter().position(|cap| cap.id == id) {
+            self.caps.remove(pos);
+            return true;
         }
         false
     }
 
     /// Look up a capability by ID
     pub fn lookup(&self, id: CapabilityId) -> Option<&CapabilityToken> {
-        for slot in self.caps.iter() {
-            if let Some(cap) = slot {
-                if cap.id == id {
-                    return Some(cap);
-                }
-            }
-        }
-        None
+        self.caps.iter().find(|cap| cap.id == id)
     }
 
     /// Check if this space grants a specific permission on a resource kind
@@ -197,11 +170,7 @@ impl CapabilitySpace {
         needs_write: bool,
         needs_exec: bool,
     ) -> bool {
-        self.caps.iter().any(|slot| {
-            slot.as_ref()
-                .map(|cap| cap.allows(resource, needs_write, needs_exec))
-                .unwrap_or(false)
-        })
+        self.caps.iter().any(|cap| cap.allows(resource, needs_write, needs_exec))
     }
 
     /// System-wide instant revocation

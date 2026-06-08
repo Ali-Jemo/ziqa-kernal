@@ -354,6 +354,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmm"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.1",
+]
+
+[[package]]
 name = "rsdp"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -598,6 +605,7 @@ name = "ziqa-kernel"
 version = "0.1.0"
 dependencies = [
  "acpi",
+ "bitflags 2.11.1",
  "bootloader",
  "embedded-cli",
  "fatfs",
@@ -608,6 +616,7 @@ dependencies = [
  "pc-keyboard",
  "pci_types",
  "pic8259",
+ "rmm",
  "smoltcp",
  "spin",
  "uart_16550",

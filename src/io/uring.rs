@@ -90,13 +90,16 @@ impl IoUring {
                 op::NOP => 0,
                 op::READ => {
                     // Check for network fast-path (fd 4 = eth0)
-                    if sqe.fd == 4 && shm_phys_opt.is_some() {
-                        let phys = shm_phys_opt.unwrap();
-                        if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
-                            if let Some(len) = net.receive_to_phys(phys, sqe.len as usize) {
-                                return len as i32;
-                            } else {
-                                return -11; // -EAGAIN
+                    #[cfg(feature = "net")]
+                    {
+                        if sqe.fd == 4 && shm_phys_opt.is_some() {
+                            let phys = shm_phys_opt.unwrap();
+                            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                                if let Some(len) = net.receive_to_phys(phys, sqe.len as usize) {
+                                    return len as i32;
+                                } else {
+                                    return -11; // -EAGAIN
+                                }
                             }
                         }
                     }
@@ -130,13 +133,16 @@ impl IoUring {
                 }
                 op::WRITE => {
                     // Check for network fast-path
-                    if sqe.fd == 4 && shm_phys_opt.is_some() {
-                        let phys = shm_phys_opt.unwrap();
-                        if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
-                            if net.transmit_from_phys(phys, sqe.len as usize).is_ok() {
-                                return sqe.len as i32;
-                            } else {
-                                return -5; // -EIO
+                    #[cfg(feature = "net")]
+                    {
+                        if sqe.fd == 4 && shm_phys_opt.is_some() {
+                            let phys = shm_phys_opt.unwrap();
+                            if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
+                                if net.transmit_from_phys(phys, sqe.len as usize).is_ok() {
+                                    return sqe.len as i32;
+                                } else {
+                                    return -5; // -EIO
+                                }
                             }
                         }
                     }

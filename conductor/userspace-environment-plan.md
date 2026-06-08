@@ -14,17 +14,16 @@ To avoid polluting the native kernel ABI with legacy POSIX requirements, we will
 Busybox is the essential foundation for a shell environment (ls, cat, cd, etc.).
 * **Target:** Port the `busybox` C codebase (statically compiled with `musl` or `zig cc`) against the `libposix` emulation layer.
 * **Requirements:**
-    * Implement basic `vfs` capability tokens for directory traversal.
-    * Map POSIX `open()` to a combination of Capability request + VFS handle.
-    * Map POSIX `read()`/`write()` to VFS handle operations.
-
+    * [x] Implement basic `vfs` capability tokens for directory traversal.
+    * [x] Map POSIX `open()` to a combination of Capability request + VFS handle.
+    * [x] Map POSIX `read()`/`write()` to VFS handle operations.
 ## 3. Phase 2: Porting Bash
 Bash is significantly more complex than Busybox, requiring advanced process and signal management.
 * **Target:** Port `bash` against the updated `libposix` emulation layer.
 * **Requirements:**
-    * **Process Fork/Exec:** Implement `fork` and `exec` by creating new tasks with cloned Capability sets from the parent task.
-    * **Signals:** Map POSIX signals to our native IPC signal mechanisms.
-    * **Job Control:** Implement TTY handling (via Capability access to Keyboard/Console).
+    * [x] **Process Fork/Exec:** Implement `fork` and `exec` by creating new tasks with cloned Capability sets from the parent task.
+    * [x] **Signals:** Map POSIX signals to our native IPC signal mechanisms.
+    * [x] **Job Control:** Implement TTY handling (via Capability access to Keyboard/Console).
 
 ## 4. Integration with Native ABI
 We will not change the kernel's fundamental design. If Bash requires a feature not available via the native ABI, we must extend the native ABI with a new `Capability` type, not a specific "POSIX syscall".
@@ -33,3 +32,8 @@ We will not change the kernel's fundamental design. If Bash requires a feature n
 * **Busybox:** Run `busybox ls /` and `busybox cat /kernel_log.txt` within the shell.
 * **Bash:** Start a shell session, run basic commands, and verify process isolation.
 * **Isolation:** Ensure Bash processes cannot access the framebuffer without the appropriate framebuffer Capability token.
+- **IRQ-driven packet processing**: replace any busy-wait loops with `ZIQA_DEV_IRQ_WAIT` and MMIO kick paths.
+- **DMA & memory barriers**: ensure `ZIQA_DEV_VIRT_TO_PHYS` results are valid when written to device registers and that writes are flushed via memory barriers before kicking the queue.
+- **TX paths**: implement transmit path recycling so the driver can send packets back to the network (currently RX-only).
+- **Error handling & watchdog**: add timeout/retry paths and graceful teardown on device removal or IRQ storms.
+- **Idle / power efficiency**: gate `syscall_yield` / `park` paths so the driver yields the CPU while waiting for the next packet.

@@ -22,8 +22,8 @@ ZiqaKernel uses a subset of the x86_64 System V ABI for syscalls via `int 0x80`.
 *   **Constraint**: The `syscall_handler` implementation **must not** overwrite `RAX` with any value *other than* the intended return value before executing `iretq`.
 
 ## 3. Implementation Status
-*   **Functional**: `read`, `write`, `getpid`, `exit`, `fork`, `waitpid`, `nanosleep`.
-*   **Stubbed/Broken**: `mmap`, `stat`, `mprotect`, `arch_prctl`, `prctl`. 
+*   **Functional**: `read`, `write`, `getpid`, `exit`, `fork`, `waitpid`, `nanosleep`, `mmap`, `munmap`, `mprotect`.
+*   **Stubbed/Broken**: `stat`, `arch_prctl`, `prctl`. 
     *   *Note*: All `(stub)` implementations must eventually return `-ENOSYS` until fully implemented.
 
 ---

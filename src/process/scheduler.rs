@@ -1,4 +1,6 @@
 extern crate alloc;
+use alloc::collections::BTreeMap;
+use crate::arch::x86_64::{init_kthread_stack, kthread_trampoline_wrapper};
 use crate::memory::VirtAddr;
 use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable as PidAllocator};
 use crate::process::vma::Vma;
@@ -9,29 +11,23 @@ use spin::{Mutex, RwLock};
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::FrameAllocator;
 
-const MAX_TASKS: usize = 64;
 const PRIORITY_LEVELS: u8 = 4;
 const BOOST_INTERVAL: u64 = 1000;
 
 /// The global process table, allowing concurrent access to different processes.
 pub struct GlobalProcessTable {
-    pub tasks: [Option<Arc<Mutex<Process>>>; MAX_TASKS],
+    pub tasks: BTreeMap<Pid, Arc<Mutex<Process>>>,
 }
 
 impl GlobalProcessTable {
     pub const fn new() -> Self {
-        const NONE_PROC: Option<Arc<Mutex<Process>>> = None;
         Self {
-            tasks: [NONE_PROC; MAX_TASKS],
+            tasks: BTreeMap::new(),
         }
     }
 
     pub fn get(&self, pid: Pid) -> Option<Arc<Mutex<Process>>> {
-        self.tasks.iter().filter_map(|t| t.as_ref().cloned()).find(|p| p.lock().pid == pid)
-    }
-
-    fn find_free_slot(&self) -> Option<usize> {
-        self.tasks.iter().position(|s| s.is_none())
+        self.tasks.get(&pid).cloned()
     }
 }
 
@@ -110,38 +106,42 @@ impl Scheduler {
             size: stack_size as usize,
             flags: crate::memory::paging::MemoryRegionFlags::read_write(),
             is_file_backed: false,
+            file_path: None,
             file_offset: 0,
+            bco_hook: None,
         }));
 
         init_process_stack(&mut proc);
         proc.make_ready();
 
         let mut table = self.process_table.write();
-        if let Some(slot) = table.find_free_slot() {
-            table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
-            self.ready_queues.lock().push(pid, 0);
-            return Some(pid);
-        }
-        None
+        table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
+        self.ready_queues.lock().push(pid, 0);
+        Some(pid)
     }
 
-    pub fn spawn_kthread(&self, entry: fn()) -> Option<Pid> {
+    pub fn spawn_kthread(&self, entry: fn(*const ()), arg: *const ()) -> Option<Pid> {
         let pid = self.pid_allocator.lock().alloc_pid();
-        let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(entry as u64), VirtAddr::new(1));
+        // The kthread's first RIP is the asm trampoline (defined below),
+        // which forwards r12=arg and r13=entry to the user entry and exits
+        // cleanly when the entry returns. `entry_point` is the only field
+        // the kernel uses to find the initial RIP, so we set it to the
+        // trampoline address.
+        let trampoline = kthread_trampoline_wrapper as *const () as u64;
+        let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(trampoline), VirtAddr::new(0));
+        // Kthreads share the kernel's CS/SS and stay in ring 0; we never
+        // iretq out to user mode.
         proc.cpu_state.cs = 0x8;
         proc.cpu_state.ss = 0x10;
         proc.cpu_state.rflags = 0x202;
         proc.page_table_frame = None;
         proc.make_ready();
-        init_kthread_stack(&mut proc);
+        init_kthread_stack(&mut proc, entry as u64, arg as u64);
 
         let mut table = self.process_table.write();
-        if let Some(slot) = table.find_free_slot() {
-            table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
-            self.ready_queues.lock().push(pid, 0);
-            return Some(pid);
-        }
-        None
+        table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
+        self.ready_queues.lock().push(pid, 0);
+        Some(pid)
     }
 
     pub fn spawn_elf(&self, binary: &[u8]) -> Option<Pid> {
@@ -164,7 +164,9 @@ impl Scheduler {
             size: stack_size as usize,
             flags: crate::memory::paging::MemoryRegionFlags::read_write(),
             is_file_backed: false,
+            file_path: None,
             file_offset: 0,
+            bco_hook: None,
         }));
 
         match plugin.load(binary, &mut proc) {
@@ -172,19 +174,22 @@ impl Scheduler {
                 init_process_stack(&mut proc);
                 proc.make_ready();
                 let mut table = self.process_table.write();
-                if let Some(slot) = table.find_free_slot() {
-                    table.tasks[slot] = Some(Arc::new(Mutex::new(proc)));
-                    self.ready_queues.lock().push(pid, 0);
-                    return Some(pid);
-                }
-                None
+                table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
+                self.ready_queues.lock().push(pid, 0);
+                Some(pid)
             }
             Err(_) => None,
         }
     }
 
     pub fn exit_process(&self, pid: Pid, code: i64) {
-        if let Some(proc_arc) = self.get_process(pid) {
+        // The set of PIDs waiting to join the exiting process; we drain it
+        // from `join_waiters` so they can all be unblocked atomically.
+        let waiters = {
+            let proc_arc = match self.get_process(pid) {
+                Some(p) => p,
+                None => return,
+            };
             let mut proc = proc_arc.lock();
             proc.exit_code = code;
             proc.state = ProcessState::Exited(code);
@@ -192,8 +197,99 @@ impl Scheduler {
             if parent_pid != 0 {
                 self.send_signal(Pid(parent_pid), crate::process::signal::sig::SIGCHLD);
             }
+            core::mem::replace(&mut proc.join_waiters, alloc::vec::Vec::new())
+        };
+
+        for waiter_pid in waiters {
+            if let Some(proc_mutex) = self.get_process(Pid(waiter_pid)) {
+                let mut proc = proc_mutex.lock();
+                proc.make_ready();
+                self.ready_queues.lock().push(proc.pid, proc.priority);
+            }
+        }
+        
+        if with_current_task(|p| p.pid) == Some(pid) {
+            self.schedule();
         }
     }
+
+    pub fn join_kthread(&self, pid: Pid) -> i64 {
+        let current_pid = with_current_task(|p| p.pid).unwrap();
+        
+        {
+            let proc_arc = self.get_process(pid).expect("Process not found");
+            let mut proc = proc_arc.lock();
+            if let ProcessState::Exited(code) = proc.state {
+                return code;
+            }
+            proc.join_waiters.push(current_pid.0);
+        }
+
+        // Block current task
+        self.block_current_task();
+        0
+    }
+
+    pub fn cancel_kthread(&self, pid: Pid) -> bool {
+        let proc_arc = match self.get_process(pid) {
+            Some(p) => p,
+            None => return false,
+        };
+        
+        let mut proc = proc_arc.lock();
+        if let ProcessState::Exited(_) = proc.state {
+            return false; // Already exited
+        }
+        proc.state = ProcessState::Canceled;
+        
+        drop(proc);
+        self.exit_process(pid, -1);
+        true
+    }
+
+    /// Mark the currently running task as Blocked and yield the CPU.
+    ///
+    /// The caller is expected to have already registered itself on whatever
+    /// wait-list it is blocking on (e.g. `proc.join_waiters` for `join_kthread`).
+    /// We transition to Blocked, then call `schedule()` so the next ready
+    /// task can take over. The caller will be re-marked Ready by whoever
+    /// wakes it (e.g. `exit_process` pops waiters and pushes them back).
+    pub fn block_current_task(&self) {
+        // We MUST disable interrupts while flipping our state to Blocked;
+        // otherwise a timer tick could observe the inconsistent state.
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let current_pid = match self.current_pid() {
+                Some(p) => p,
+                None => return,
+            };
+            if let Some(proc_arc) = self.get_process(current_pid) {
+                let mut proc = proc_arc.lock();
+                if matches!(proc.state, ProcessState::Running) {
+                    proc.state = ProcessState::Blocked;
+                }
+            }
+            self.schedule();
+        });
+    }
+
+    /// Exit the currently running kthread with the given exit code.
+    ///
+    /// Kthreads call this when their entry function returns. Unlike user
+    /// processes, kthreads share the kernel's address space, so we don't
+    /// need a iretq back to ring 3 — the call to `exit_process` invokes
+    /// `schedule()` which never returns to us.
+    pub fn exit_current_kthread(&self, code: i64) -> ! {
+        let current_pid = with_current_task(|p| p.pid);
+        if let Some(pid) = current_pid {
+            self.exit_process(pid, code);
+        }
+        // If we somehow got here without a current pid (defensive),
+        // spin — the scheduler will pick us up on the next tick.
+        loop {
+            unsafe { core::arch::asm!("hlt"); }
+        }
+    }
+
 
     pub fn fork(&self, parent_pid: Pid) -> Option<Pid> {
         x86_64::instructions::interrupts::without_interrupts(|| {
@@ -223,42 +319,32 @@ impl Scheduler {
             }
 
             let mut table = self.process_table.write();
-            if let Some(slot) = table.find_free_slot() {
-                table.tasks[slot] = Some(Arc::new(Mutex::new(child)));
-                self.ready_queues.lock().push(child_pid, 0);
-                return Some(child_pid);
-            }
-            None
+            table.tasks.insert(child_pid, Arc::new(Mutex::new(child)));
+            self.ready_queues.lock().push(child_pid, 0);
+            Some(child_pid)
         })
     }
 
     pub fn waitpid(&self, parent: Pid, child_pid: i64, _options: i32) -> Option<(Pid, i64)> {
         x86_64::instructions::interrupts::without_interrupts(|| {
             let table = self.process_table.read();
-            for slot in table.tasks.iter() {
-                if let Some(proc_arc) = slot {
-                    let proc = proc_arc.lock();
-                    let matches = if child_pid == -1 {
-                        proc.parent == parent.0
-                    } else {
-                        proc.pid.0 == child_pid as u64 && proc.parent == parent.0
-                    };
+            for (&pid, proc_arc) in table.tasks.iter() {
+                let proc = proc_arc.lock();
+                let matches = if child_pid == -1 {
+                    proc.parent == parent.0
+                } else {
+                    proc.pid.0 == child_pid as u64 && proc.parent == parent.0
+                };
 
-                    if matches {
-                        if let ProcessState::Exited(code) = proc.state {
-                            let pid = proc.pid;
-                            drop(proc);
-                            drop(table);
-                            
-                            let mut write_table = self.process_table.write();
-                            if let Some(idx) = write_table.tasks.iter().position(|t| {
-                                t.as_ref().map(|p| p.lock().pid == pid).unwrap_or(false)
-                            }) {
-                                write_table.tasks[idx] = None;
-                                return Some((pid, code));
-                            }
-                            return Some((pid, code));
-                        }
+                if matches {
+                    if let ProcessState::Exited(code) = proc.state {
+                        let pid = proc.pid;
+                        drop(proc);
+                        drop(table);
+                        
+                        let mut write_table = self.process_table.write();
+                        write_table.tasks.remove(&pid);
+                        return Some((pid, code));
                     }
                 }
             }
@@ -312,11 +398,9 @@ impl Scheduler {
 
         if t % BOOST_INTERVAL == 0 {
             let table = self.process_table.read();
-            for slot in table.tasks.iter() {
-                if let Some(p) = slot {
-                    if let Some(mut proc) = p.try_lock() {
-                        proc.priority = 0;
-                    }
+            for p in table.tasks.values() {
+                if let Some(mut proc) = p.try_lock() {
+                    proc.priority = 0;
                 }
             }
         }
@@ -358,6 +442,7 @@ impl Scheduler {
             if let Some(old_arc) = old_proc_arc {
                 let old_sp_ptr = {
                     let mut old_proc = old_arc.lock();
+                    unsafe { crate::arch::x86_64::save_fpu(&mut old_proc.fpu_state); }
                     if old_proc.state == ProcessState::Running {
                         old_proc.state = ProcessState::Ready;
                         self.ready_queues.lock().push(old_proc.pid, old_proc.priority);
@@ -379,6 +464,14 @@ impl Scheduler {
                     );
                 }
             }
+            
+            // Restore FPU state for the newly scheduled process
+            if let Some(current_pid) = self.current_pid() {
+                if let Some(proc_arc) = self.get_process(current_pid) {
+                    let proc = proc_arc.lock();
+                    unsafe { crate::arch::x86_64::restore_fpu(&proc.fpu_state); }
+                }
+            }
         }
 
         if interrupts_enabled {
@@ -392,15 +485,13 @@ impl Scheduler {
 
     pub fn wake_sleeping_mask(&self, woken_mask: u64) {
         let table = self.process_table.read();
-        for slot in table.tasks.iter() {
-            if let Some(p) = slot {
-                let mut proc = p.lock();
-                if proc.state == ProcessState::Blocked {
-                    let bit = proc.pid.0;
-                    if bit < 64 && (woken_mask & (1 << bit)) != 0 {
-                        proc.state = ProcessState::Ready;
-                        self.ready_queues.lock().push(proc.pid, proc.priority);
-                    }
+        for p in table.tasks.values() {
+            let mut proc = p.lock();
+            if proc.state == ProcessState::Blocked {
+                let bit = proc.pid.0;
+                if bit < 64 && (woken_mask & (1 << bit)) != 0 {
+                    proc.state = ProcessState::Ready;
+                    self.ready_queues.lock().push(proc.pid, proc.priority);
                 }
             }
         }
@@ -417,7 +508,7 @@ impl Scheduler {
 
     pub fn list_pids(&self) -> Vec<Pid> {
         let table = self.process_table.read();
-        table.tasks.iter().filter_map(|t| t.as_ref().map(|p| p.lock().pid)).collect()
+        table.tasks.keys().cloned().collect()
     }
 
     pub fn init_boot_process(&self) {
@@ -431,7 +522,7 @@ impl Scheduler {
             proc.state = ProcessState::Running;
             
             let mut table = self.process_table.write();
-            table.tasks[0] = Some(Arc::new(Mutex::new(proc)));
+            table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
             self.set_current_pid(Some(pid));
         });
     }
@@ -441,12 +532,43 @@ pub static SCHEDULER: Scheduler = Scheduler::new();
 
 pub fn tick() { SCHEDULER.tick(); }
 pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
-pub fn spawn_kthread(entry: fn()) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_kthread(entry)) }
+pub fn spawn_kthread(entry: fn(*const ()), arg: *const ()) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_kthread(entry, arg)) }
 pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
 pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
 pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
 pub fn wake_sleeping(woken_mask: u64) { x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }
+// ── Kernel-thread public API ──────────────────────────────────────────────────
+//
+// Free-function shims around the scheduler's kthread methods. These exist
+// so the rest of the kernel (drivers, IP stack, worker pool) can spawn,
+// join, and cancel kthreads without having to lock `SCHEDULER` directly.
+// All of them wrap the underlying call in `without_interrupts` so the
+// process state and ready queues are updated atomically.
+
+/// Block the current task until `pid` exits (or is canceled) and return
+/// its exit code. Returns `-1` if the pid is unknown.
+pub fn join_kthread(pid: Pid) -> i64 {
+    x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.join_kthread(pid))
+}
+
+/// Force a kthread (or any task) into `Canceled` state and unblock its
+/// joiners. Returns `false` if the pid is unknown or already exited.
+pub fn cancel_kthread(pid: Pid) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| SCHEDULER.cancel_kthread(pid))
+}
+
+/// Voluntarily terminate the current kthread. Never returns.
+pub fn exit_current_kthread(code: i64) -> ! {
+    // No IRQ-off wrapper needed — `exit_current_kthread` itself disables
+    // interrupts before flipping state and calling `schedule`.
+    SCHEDULER.exit_current_kthread(code)
+}
+
+/// One-shot scheduler bootstrap. Initializes the PID allocator and installs
+/// PID 0 (the boot/idle process) into the process table.
 pub fn init() { SCHEDULER.init_boot_process(); }
+
+
 
 // ── Safe current-task accessors ───────────────────────────────────────────────
 //
@@ -581,17 +703,21 @@ pub fn exec_process(
     })
 }
 
-fn init_kthread_stack(proc: &mut Process) {
-    if let Some(ref mut _kstack) = proc.kernel_stack {
-        let kstack_top = proc.kernel_stack_top;
-        unsafe {
-            let ret_ptr = (kstack_top - 8) as *mut u64;
-            ret_ptr.write(proc.entry_point.as_u64());
-            let context_ptr = (kstack_top - 8 - 48) as *mut u64;
-            for i in 0..6 { context_ptr.add(i).write(0); }
-            proc.kernel_stack_ptr = kstack_top - 8 - 48;
-        }
-    }
+/// asm-friendly alias used by the trampoline to terminate the kthread.
+/// Implemented in Rust so it can call into the scheduler without needing a
+/// Rust→asm→Rust shim.
+#[no_mangle]
+pub extern "C" fn kthread_exit_trampoline() -> ! {
+    SCHEDULER.exit_current_kthread(0)
+}
+
+/// `kthread_exit` — voluntarily terminate the current kthread.
+///
+/// Equivalent to `exit(0)` for a user process, but skips the user-stack
+/// unwinding (kthreads don't have one). Use this from a kthread entry
+/// function as an alternative to returning.
+pub fn kthread_exit(code: i64) -> ! {
+    SCHEDULER.exit_current_kthread(code)
 }
 
 fn init_process_stack(proc: &mut Process) {

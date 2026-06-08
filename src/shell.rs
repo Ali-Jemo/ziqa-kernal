@@ -47,7 +47,9 @@ const C_RED: &str = "\x1b[31m";
 const C_GREEN: &str = "\x1b[32m";
 const C_YELLOW: &str = "\x1b[33m";
 const C_BLUE: &str = "\x1b[34m";
+const C_MAGENTA: &str = "\x1b[35m";
 const C_CYAN: &str = "\x1b[36m";
+const C_WHITE: &str = "\x1b[37m";
 
 /// A parsed command with redirection and background info
 #[derive(Clone)]
@@ -1060,7 +1062,8 @@ impl Shell {
                 crate::process::ProcessState::Ready    => (C_CYAN,   "Ready       "),
                 crate::process::ProcessState::Blocked  => (C_YELLOW, "Blocked     "),
                 crate::process::ProcessState::Created  => (C_DIM,    "Created     "),
-                crate::process::ProcessState::Exited(_)=> (C_RED,    "Exited      "),
+                crate::process::ProcessState::Exited(_)  => (C_RED,    "Exited      "),
+                crate::process::ProcessState::Canceled  => (C_MAGENTA,"Canceled    "),
             };
             let abi_s = match abi {
                 crate::process::AbiKind::LinuxElf   => "Linux/ELF ",

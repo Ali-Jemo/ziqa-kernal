@@ -55,6 +55,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     ziqa_kernel::klog!(Level::Info, "ZiqaKernel v1.0 booting");
 
     // 2. Subsystem Init
+    ziqa_kernel::scheme::init();
     init_subsystems();
 
     // 3. Service/FS Setup
@@ -127,6 +128,17 @@ fn init_services() {
         vfs.mount("/bin/test", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../assets/test_elf.bin")))));
         #[cfg(feature = "wasm")]
         vfs.mount("/bin/hello.wasm", Arc::new(Mutex::new(RamFile::from_bytes(ziqa_kernel::abi::wasm::TEST_WASM))));
+        
+        // Busybox binary
+        vfs.mount("/bin/busybox", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/busybox-1.36.1/busybox")))));
+        // Keyboard driver
+        vfs.mount("/bin/keyboard_driver", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/keyboard_driver.elf")))));
+        // Verification script
+        vfs.mount("/bin/test.sh", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/hush_test.sh")))));
+
+        // Doom ELF binary (compiled by build.zig from src/zig/doom_port.zig)
+        #[cfg(feature = "games")]
+        vfs.mount("/bin/doom", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../zig-out/bin/doom")))));
     }
 
     // Disk filesystems
@@ -221,6 +233,33 @@ fn run_startup() {
         println!(" ✓ Spawned user process pid={} ............ from test_elf.bin", pid.0);
     } else {
         println!(" ! Failed to spawn user process");
+    }
+
+    // Spawn the userspace keyboard driver
+    let kb_driver_bin = include_bytes!("../userspace/keyboard_driver.elf");
+    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(kb_driver_bin) {
+        ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+            proc.capabilities.grant(
+                ziqa_kernel::capability::ResourceKind::DeviceIo,
+                ziqa_kernel::capability::Permissions::full(),
+                0,
+                None,
+            );
+        });
+        println!(" ✓ Spawned Userspace Keyboard Driver pid={} .... from userspace/keyboard_driver.elf", pid.0);
+    } else {
+        println!(" ! Failed to spawn Userspace Keyboard Driver");
+    }
+
+    // Spawn Doom as a user-space process
+    #[cfg(feature = "games")]
+    {
+        let doom_binary = include_bytes!("../zig-out/bin/doom");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(doom_binary) {
+            println!(" ✓ Spawned Doom pid={} ..................... from zig-out/bin/doom", pid.0);
+        } else {
+            println!(" ! Failed to spawn Doom process (games feature enabled but doom.elf may need rebuilding)");
+        }
     }
 
     // Restore any saved snapshots for instant-on resume

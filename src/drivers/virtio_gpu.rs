@@ -65,6 +65,11 @@ impl Driver for VirtioGpuDriver {
                                         w, h
                                     );
                                     
+                                    // Register IPC channel for GPU service
+                                    let chan_id = crate::ipc::create_channel().ok_or(())?;
+                                    *GPU_IPC_CHANNEL.lock() = Some(chan_id);
+                                    crate::println!("[VirtIO-GPU] GPU IPC channel registered: {}", chan_id);
+
                                     // We don't allocate the framebuffer here. That's done in init_display.
                                     let wrapped = Arc::new(VirtioGpuDevice {
                                         inner: Mutex::new(gpu),
@@ -174,7 +179,7 @@ pub fn draw_test_pattern() {
                     1 => 0xFFFF00, // Yellow
                     2 => 0x00FFFF, // Cyan
                     3 => 0x00FF00, // Green
-                    4 => 0xFF00FF, // Magenta
+                    4 => 0xFFFF00FF, // Magenta
                     5 => 0xFF0000, // Red
                     6 => 0x0000FF, // Blue
                     7 => 0x000000, // Black
@@ -189,5 +194,23 @@ pub fn draw_test_pattern() {
         }
         
         flush();
+    }
+}
+
+pub static GPU_IPC_CHANNEL: Mutex<Option<u32>> = Mutex::new(None);
+
+fn gpu_ipc_listener(_arg: *const ()) {
+    let chan_id = *GPU_IPC_CHANNEL.lock().as_ref().unwrap();
+    loop {
+        if let Ok(msg) = crate::ipc::recv(chan_id) {
+            if msg.len > 0 {
+                match msg.data[0] {
+                    1 => flush(), // 1 = Flush
+                    2 => draw_test_pattern(), // 2 = Draw
+                    _ => {}
+                }
+            }
+        }
+        crate::process::scheduler::SCHEDULER.schedule();
     }
 }

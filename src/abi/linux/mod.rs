@@ -28,11 +28,14 @@ mod net;
 mod ebpf;
 mod process;
 mod time;
+mod signal;
 
 use crate::abi::syscall::SyscallContext;
+use crate::abi::usercopy::{UserSliceRo, UserSliceWo};
 use crate::abi::{AbiError, AbiPlugin};
 use crate::capability::ResourceKind;
 use crate::println;
+use crate::process::vma::Vma;
 use crate::process::{AbiKind, Process};
 
 /// Linux x86_64 syscall numbers
@@ -52,6 +55,7 @@ mod nr {
     pub const SYS_BRK: u64 = 12;
     pub const SYS_RT_SIGACTION: u64 = 13;
     pub const SYS_RT_SIGPROCMASK: u64 = 14;
+    pub const SYS_RT_SIGRETURN: u64 = 15;
     pub const SYS_IOCTL: u64 = 16;
     pub const SYS_PREAD64: u64 = 17;
     pub const SYS_READV: u64 = 19;
@@ -219,6 +223,9 @@ impl AbiPlugin for LinuxAbiPlugin {
         if let Some(result) = net::handle(ctx) {
             return result;
         }
+        if let Some(result) = signal::handle(ctx) {
+            return result;
+        }
         if let Some(result) = misc::handle(ctx) {
             return result;
         }
@@ -239,12 +246,18 @@ impl AbiPlugin for LinuxAbiPlugin {
 /// sys_write(fd, buf, count) → bytes_written
 fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    let buf_addr = ctx.args[1] as *const u8;
     let count = ctx.args[2] as usize;
 
-    if buf_addr.is_null() && count > 0 {
-        return Err(AbiError::Other("Bad address"));
+    if count == 0 {
+        return Ok(0);
     }
+
+    // Validate and copy user buffer into a kernel buffer
+    let mut buf = alloc::vec![0u8; count];
+    UserSliceRo::ro(ctx.args[1], count)
+        .map_err(|_| AbiError::Other("EFAULT: bad write buffer"))?
+        .copy_to_slice(&mut buf)
+        .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
 
     let target = ctx.process.fds.get(fd).map(|d| d.target);
 
@@ -254,15 +267,13 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         {
             // Stdout/Stderr allowed without capability (basic console output)
             use x86_64::instructions::interrupts;
-            let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
-            // Print to VGA via println!
-            if let Ok(s) = core::str::from_utf8(bytes) {
+            if let Ok(s) = core::str::from_utf8(&buf) {
                 crate::print!("{}", s);
             }
             // Also send to serial
             interrupts::without_interrupts(|| {
                 let mut serial = crate::drivers::uart::SERIAL1.lock();
-                for &b in bytes {
+                for &b in &buf {
                     serial.send(b);
                 }
             });
@@ -273,11 +284,43 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             if !ctx.process.capabilities.has_permission(ResourceKind::IpcChannel, true, false) {
                 return Err(AbiError::PermissionDenied);
             }
-            let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
             let pid = ctx.process.pid;
-            match crate::ipc::send(chan_id, pid, bytes) {
+            match crate::ipc::send(chan_id, pid, &buf) {
                 Ok(()) => Ok(count as u64),
                 Err(_) => Ok((-11_i64) as u64), // -EAGAIN (pipe full)
+            }
+        }
+        Some(crate::process::FdTarget::Scheme(_idx, handle_id)) => {
+            let path_bytes = match ctx.process.fds.path_of(fd) {
+                Some(p) => {
+                    let mut t = [0u8; 64];
+                    let n = p.len().min(63);
+                    t[..n].copy_from_slice(&p[..n]);
+                    (t, n)
+                }
+                None => return Ok((-9_i64) as u64),
+            };
+            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
+            let scheme_name = if let Some(pos) = path_str.find(':') {
+                &path_str[..pos]
+            } else {
+                return Ok((-9_i64) as u64);
+            };
+
+            let res = {
+                let registry = crate::scheme::SCHEME_REGISTRY.lock();
+                if let Some(scheme) = registry.get(scheme_name) {
+                    scheme.write(handle_id, &buf)
+                } else {
+                    Err(AbiError::Other("Scheme not found"))
+                }
+            };
+            match res {
+                Ok(n) => return Ok(n as u64),
+                Err(e) => {
+                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
+                    return Ok((errno as i64).wrapping_neg() as u64);
+                }
             }
         }
         Some(crate::process::FdTarget::File(_)) => {
@@ -296,11 +339,10 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 None => return Ok((-9_i64) as u64),
             };
             let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
-            let bytes = unsafe { core::slice::from_raw_parts(buf_addr, count) };
             
             match crate::fs::vfs::VFS
                 .read()
-                .write_raw(path_str, bytes, offset)
+                .write_raw(path_str, &buf, offset)
             {
                 Ok(n) => {
                     if let Some(desc) = ctx.process.fds.get_mut(fd) {
@@ -321,38 +363,85 @@ fn sys_write(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_read(fd, buf, count) → bytes_read
 fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    let buf_addr = ctx.args[1] as *mut u8;
     let count = ctx.args[2] as usize;
+
+    if count == 0 {
+        return Ok(0);
+    }
 
     // Determine fd target first (avoid borrow conflict)
     let target = ctx.process.fds.get(fd).map(|d| d.target);
 
     match target {
         Some(crate::process::FdTarget::Stdin) | None if fd == 0 => {
-            // Stdin doesn't require File capability (basic I/O)
             let mut tmp = [0u8; 256];
             let n = crate::drivers::keyboard::read_stdin(&mut tmp[..count.min(256)]);
             if n > 0 {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n);
-                }
+                UserSliceWo::wo(ctx.args[1], n)
+                    .map_err(|_| AbiError::Other("EFAULT: bad read buffer"))?
+                    .copy_from_slice(&tmp[..n])
+                    .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
             }
-            Ok(n as u64)
+            return Ok(n as u64);
         }
         Some(crate::process::FdTarget::PipeRead(chan_id)) => {
             match crate::ipc::recv(chan_id) {
                 Ok(msg) => {
                     let n = msg.len.min(count);
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_addr, n);
+                    if n > 0 {
+                        UserSliceWo::wo(ctx.args[1], n)
+                            .map_err(|_| AbiError::Other("EFAULT: bad read buffer"))?
+                            .copy_from_slice(&msg.data[..n])
+                            .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
                     }
-                    Ok(n as u64)
+                    return Ok(n as u64);
                 }
-                Err(_) => Ok(0), // empty pipe — would block in real kernel
+                Err(_) => return Ok(0),
+            }
+        }
+        Some(crate::process::FdTarget::Scheme(_idx, handle_id)) => {
+            let path_bytes = match ctx.process.fds.path_of(fd) {
+                Some(p) => {
+                    let mut t = [0u8; 64];
+                    let n = p.len().min(63);
+                    t[..n].copy_from_slice(&p[..n]);
+                    (t, n)
+                }
+                None => return Ok((-9_i64) as u64),
+            };
+            let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
+            let scheme_name = if let Some(pos) = path_str.find(':') {
+                &path_str[..pos]
+            } else {
+                return Ok((-9_i64) as u64);
+            };
+
+            let mut tmp = alloc::vec![0u8; count];
+            let res = {
+                let registry = crate::scheme::SCHEME_REGISTRY.lock();
+                if let Some(scheme) = registry.get(scheme_name) {
+                    scheme.read(handle_id, &mut tmp)
+                } else {
+                    Err(AbiError::Other("Scheme not found"))
+                }
+            };
+            match res {
+                Ok(n) => {
+                    if n > 0 {
+                        UserSliceWo::wo(ctx.args[1], n)
+                            .map_err(|_| AbiError::Other("EFAULT: bad read buffer"))?
+                            .copy_from_slice(&tmp[..n])
+                            .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
+                    }
+                    return Ok(n as u64);
+                }
+                Err(e) => {
+                    let errno = crate::abi::syscall::abi_error_to_errno(&e);
+                    return Ok((errno as i64).wrapping_neg() as u64);
+                }
             }
         }
         Some(crate::process::FdTarget::File(_)) => {
-            // Check File capability before reading files
             if !ctx.process.capabilities.has_permission(ResourceKind::File, false, false) {
                 return Err(AbiError::PermissionDenied);
             }
@@ -374,21 +463,24 @@ fn sys_read(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 .read_raw(path_str, &mut tmp[..to_read], offset)
             {
                 Ok(n) => {
-                    if n > 0 {
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf_addr, n);
-                        }
-                    }
                     if let Some(desc) = ctx.process.fds.get_mut(fd) {
                         desc.offset += n;
                     }
-                    Ok(n as u64)
+                    if n > 0 {
+                        UserSliceWo::wo(ctx.args[1], n)
+                            .map_err(|_| AbiError::Other("EFAULT: bad read buffer"))?
+                            .copy_from_slice(&tmp[..n])
+                            .map_err(|_| AbiError::Other("EFAULT: copy failed"))?;
+                    }
+                    return Ok(n as u64);
                 }
-                Err(_) => Ok(0),
+                Err(_) => return Ok(0),
             }
         }
-        _ => Ok((-9_i64) as u64), // -EBADF
-    }
+        _ => return Ok((-9_i64) as u64),
+    };
+    
+    // unreachable
 }
 
 /// sys_exit(status) → never returns
@@ -439,26 +531,16 @@ fn sys_getpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// Writes a Linux utsname struct (6 × 65-byte null-terminated fields):
 ///   sysname, nodename, release, version, machine, domainname
 fn sys_uname(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let buf = ctx.args[0] as *mut u8;
-    if buf.is_null() {
-        return Ok((-14_i64) as u64);
-    } // -EFAULT
-
-    // Each field is 65 bytes, null-padded
-    let write_field = |dst: *mut u8, s: &[u8]| {
+    let fields: &[&[u8]] = &[b"Linux", b"ziqa", b"6.1.0-ziqa", b"#1 SMP ZiqaKernel", b"x86_64", b"(none)"];
+    let mut buf = [0u8; 390]; // 6 × 65
+    for (i, s) in fields.iter().enumerate() {
         let n = s.len().min(64);
-        unsafe {
-            core::ptr::copy_nonoverlapping(s.as_ptr(), dst, n);
-            *dst.add(n) = 0;
-        }
-    };
-
-    write_field(buf, b"Linux");
-    write_field(unsafe { buf.add(65) }, b"ziqa");
-    write_field(unsafe { buf.add(130) }, b"6.1.0-ziqa");
-    write_field(unsafe { buf.add(195) }, b"#1 SMP ZiqaKernel");
-    write_field(unsafe { buf.add(260) }, b"x86_64");
-    write_field(unsafe { buf.add(325) }, b"(none)");
+        buf[i * 65..i * 65 + n].copy_from_slice(s);
+    }
+    UserSliceWo::wo(ctx.args[0], 390)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
@@ -470,48 +552,192 @@ fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
 
     let length = ctx.args[1] as usize;
+    let prot = ctx.args[2];
+    let flags = ctx.args[3];
+    
     if length == 0 {
-        return Ok((-22_i64) as u64);
-    } // -EINVAL
+        return Ok((-22_i64) as u64); // -EINVAL
+    }
+    
+    let is_anonymous = (flags & 0x20) != 0; // MAP_ANONYMOUS
     
     let start_hint = crate::memory::VirtAddr::new(0x4000_0000);
     let base = crate::process::vma::find_free_range(&ctx.process.vmas, length, start_hint)
         .ok_or(AbiError::Other("mmap: no free address space"))?;
 
-    use crate::memory::paging::MemoryRegionFlags;
-    use crate::process::vma::Vma;
+    let region_flags = prot_to_region_flags(prot);
     
     ctx.process.add_region(Vma {
         start: base,
         end: base + length as u64,
-        flags: MemoryRegionFlags::read_write(),
-        is_file_backed: false,
+        flags: region_flags,
+        is_file_backed: !is_anonymous,
         file_path: None,
         file_offset: 0,
+        bco_hook: None,
     });
     
     Ok(base.as_u64())
 }
 
-/// sys_mprotect(addr, len, prot) → 0/-EINVAL
+
+
+/// Convert Linux PROT flags to MemoryRegionFlags
+/// PROT_NONE=0, PROT_READ=1, PROT_WRITE=2, PROT_EXEC=4
+fn prot_to_region_flags(prot: u64) -> crate::memory::paging::MemoryRegionFlags {
+    use crate::memory::paging::MemoryRegionFlags;
+    MemoryRegionFlags {
+        readable: (prot & 1) != 0,
+        writable: (prot & 2) != 0,
+        executable: (prot & 4) != 0,
+        user_accessible: true,
+        copy_on_write: false,
+    }
+}
+
+/// Create an OffsetPageTable for the given root frame (or current CR3 if None).
+unsafe fn mapper_for_root(
+    root_frame: Option<x86_64::structures::paging::PhysFrame>,
+) -> x86_64::structures::paging::mapper::OffsetPageTable<'static> {
+    use crate::memory::paging::phys_offset;
+    use x86_64::structures::paging::mapper::OffsetPageTable;
+
+    let po = phys_offset();
+    match root_frame {
+        Some(frame) => {
+            let l4_virt = po + frame.start_address().as_u64();
+            let l4 = &mut *(l4_virt.as_mut_ptr());
+            OffsetPageTable::new(l4, po)
+        }
+        None => crate::memory::paging::current_mapper(),
+    }
+}
+
+/// Apply new page-table flags to every mapped page in [start, end).
+/// Skips unmapped pages (demand paging will use the VMA flags).
+fn update_range_page_flags(
+    root_frame: Option<x86_64::structures::paging::PhysFrame>,
+    start: u64,
+    end: u64,
+    pte_flags: x86_64::structures::paging::PageTableFlags,
+) {
+    use x86_64::structures::paging::{Mapper, Page, Size4KiB, Translate};
+    use x86_64::VirtAddr;
+
+    let mut mapper = unsafe { mapper_for_root(root_frame) };
+
+    for addr in (start..end).step_by(4096) {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+        if mapper.translate_addr(page.start_address()).is_some() {
+            let _ = unsafe { mapper.update_flags(page, pte_flags) };
+        }
+    }
+}
+
+/// Unmap every mapped page in [start, end).
+/// Physical frames are NOT freed (no FrameDeallocator impl in kernel yet).
+fn unmap_range_pages(
+    root_frame: Option<x86_64::structures::paging::PhysFrame>,
+    start: u64,
+    end: u64,
+) {
+    use x86_64::structures::paging::{Mapper, Page, Size4KiB, Translate};
+    use x86_64::VirtAddr;
+
+    let mut mapper = unsafe { mapper_for_root(root_frame) };
+
+    for addr in (start..end).step_by(4096) {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+        if mapper.translate_addr(page.start_address()).is_some() {
+            if let Ok((_frame, flusher)) = mapper.unmap(page) {
+                flusher.flush();
+            }
+        }
+    }
+}
+
+/// sys_mprotect(addr, len, prot) → 0/-EINVAL/-ENOMEM/-EFAULT
 /// Changes protection of memory region.
 /// prot: PROT_NONE=0, PROT_READ=1, PROT_WRITE=2, PROT_EXEC=4
 fn sys_mprotect(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    use crate::memory::paging::region_flags_to_page_flags;
+    use x86_64::instructions::tlb;
+
     let addr = ctx.args[0];
     let len = ctx.args[1];
     let prot = ctx.args[2];
-    println!(
-        "[Linux ABI] mprotect(addr=0x{:x}, len={}, prot={}) → OK",
-        addr, len, prot
-    );
+
+    // Align to page boundaries
+    let start_addr = addr & !0xFFF;
+    let range_end = addr + len;
+    let end_addr = if range_end == 0 { 0xFFFF_FFFF_FFFF_F000 } else { (range_end + 0xFFF) & !0xFFF };
+    if start_addr >= end_addr || len == 0 {
+        return Ok((-22i64) as u64); // -EINVAL
+    }
+
+    // Find the first VMA overlapping [start_addr, end_addr)
+    let vma_idx = match ctx.process.vmas.iter().position(|vma| {
+        let vs = vma.start.as_u64();
+        let ve = vma.end.as_u64();
+        start_addr < ve && end_addr > vs
+    }) {
+        Some(i) => i,
+        None => return Ok((-14i64) as u64), // -EFAULT
+    };
+
+    let new_flags = prot_to_region_flags(prot);
+    let pte_flags = region_flags_to_page_flags(&new_flags);
+
+    // Update VMA flags
+    ctx.process.vmas[vma_idx].flags = new_flags;
+
+    // Update page-table entries for already-mapped pages
+    let root_frame = ctx.process.page_table_frame;
+    let vma_start = ctx.process.vmas[vma_idx].start.as_u64();
+    let vma_end = ctx.process.vmas[vma_idx].end.as_u64();
+    let update_start = start_addr.max(vma_start);
+    let update_end = end_addr.min(vma_end);
+
+    if prot == 0 {
+        // PROT_NONE — unmap pages so accesses generate page faults
+        unmap_range_pages(root_frame, update_start, update_end);
+    } else {
+        update_range_page_flags(root_frame, update_start, update_end, pte_flags);
+    }
+
+    tlb::flush_all();
     Ok(0)
 }
 
-/// sys_munmap(addr, length) → 0
+/// sys_munmap(addr, length) → 0/-EINVAL
 fn sys_munmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    use x86_64::instructions::tlb;
+
     let addr = ctx.args[0];
-    println!("[Linux ABI] munmap(addr=0x{:x})", addr);
-    Ok(0) // stub
+    let len = ctx.args[1];
+
+    let start_addr = addr & !0xFFF;
+    let end_addr = ((addr + len + 0xFFF) & !0xFFF).max(start_addr + 0x1000);
+    if start_addr >= end_addr || len == 0 {
+        return Ok((-22i64) as u64); // -EINVAL
+    }
+
+    // Find and remove VMAs fully covered by the range
+    let root_frame = ctx.process.page_table_frame;
+    ctx.process.vmas.retain(|vma| {
+        let vs = vma.start.as_u64();
+        let ve = vma.end.as_u64();
+        // If this VMA is completely inside the munmap range, unmap it
+        if vs >= start_addr && ve <= end_addr {
+            unmap_range_pages(root_frame, vs, ve);
+            false // remove
+        } else {
+            true // keep
+        }
+    });
+
+    tlb::flush_all();
+    Ok(0)
 }
 
 /// sys_close(fd) → 0/-EBADF
@@ -528,6 +754,28 @@ fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         crate::net::socket::SOCKETS.lock().remove(fd);
     }
 
+    // Call scheme close if applicable
+    let target = ctx.process.fds.get(fd).map(|d| d.target);
+    if let Some(crate::process::FdTarget::Scheme(_idx, handle_id)) = target {
+        let path_bytes = match ctx.process.fds.path_of(fd) {
+            Some(p) => {
+                let mut t = [0u8; 64];
+                let n = p.len().min(63);
+                t[..n].copy_from_slice(&p[..n]);
+                (t, n)
+            }
+            None => ([0u8; 64], 0),
+        };
+        let path_str = core::str::from_utf8(&path_bytes.0[..path_bytes.1]).unwrap_or("");
+        if let Some(pos) = path_str.find(':') {
+            let scheme_name = &path_str[..pos];
+            let registry = crate::scheme::SCHEME_REGISTRY.lock();
+            if let Some(scheme) = registry.get(scheme_name) {
+                let _ = scheme.close(handle_id);
+            }
+        }
+    }
+
     let result = ctx.process.fds.close(fd);
     if result {
         Ok(0)
@@ -539,10 +787,6 @@ fn sys_close(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_fstat(fd, statbuf) → 0
 fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    let statbuf = ctx.args[1] as *mut u64;
-    if statbuf.is_null() {
-        return Ok((-14_i64) as u64);
-    } // -EFAULT
 
     // Linux stat64 layout (simplified — only fields programs actually check):
     // offset 0:  st_dev    (u64)
@@ -577,16 +821,19 @@ fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             (0x81A4, sz as u64) // S_IFREG | 0644
         }
     };
-    unsafe {
-        *statbuf.add(0) = 1u64; // st_dev
-        *statbuf.add(1) = fd as u64; // st_ino
-        *statbuf.add(2) = 1u64; // st_nlink
-                                // st_mode (u32) in lower 32 bits of word at offset 24
-        *(statbuf.add(3) as *mut u32) = mode;
-        *statbuf.add(6) = size; // st_size at offset 48
-        *statbuf.add(7) = 4096u64; // st_blksize
-        *statbuf.add(8) = ((size + 511) / 512) as u64; // st_blocks
-    }
+
+    let mut stat = [0u8; 72];
+    stat[0..8].copy_from_slice(&1u64.to_ne_bytes());       // st_dev
+    stat[8..16].copy_from_slice(&(fd as u64).to_ne_bytes()); // st_ino
+    stat[16..24].copy_from_slice(&1u64.to_ne_bytes());     // st_nlink
+    stat[24..28].copy_from_slice(&mode.to_ne_bytes());     // st_mode
+    stat[48..56].copy_from_slice(&size.to_ne_bytes());     // st_size
+    stat[56..64].copy_from_slice(&4096u64.to_ne_bytes());   // st_blksize
+    stat[64..72].copy_from_slice(&((size + 511) / 512).to_ne_bytes()); // st_blocks
+    UserSliceWo::wo(ctx.args[1], 72)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&stat)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
@@ -621,7 +868,6 @@ fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// iovec struct: { iov_base: *mut u8 (8 bytes), iov_len: usize (8 bytes) }
 fn sys_writev(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0];
-    let iov_ptr = ctx.args[1] as *const u64;
     let iovcnt = ctx.args[2] as usize;
 
     if fd != 1 && fd != 2 {
@@ -633,14 +879,35 @@ fn sys_writev(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     interrupts::without_interrupts(|| {
         let mut serial = crate::drivers::uart::SERIAL1.lock();
         for i in 0..iovcnt.min(16) {
-            // Each iovec is 16 bytes: [base: u64, len: u64]
-            let base = unsafe { *iov_ptr.add(i * 2) } as *const u8;
-            let len = unsafe { *iov_ptr.add(i * 2 + 1) } as usize;
-            if len == 0 || base.is_null() {
+            // Read each iovec (16 bytes: [base: u64, len: u64]) from user memory
+            let iov_offset = i * 16;
+            let mut iov_buf = [0u8; 16];
+            if UserSliceRo::ro(ctx.args[1] + iov_offset as u64, 16)
+                .and_then(|s| s.copy_to_slice(&mut iov_buf))
+                .is_err()
+            {
+                break;
+            }
+            let base = u64::from_ne_bytes([
+                iov_buf[0], iov_buf[1], iov_buf[2], iov_buf[3],
+                iov_buf[4], iov_buf[5], iov_buf[6], iov_buf[7],
+            ]);
+            let len = u64::from_ne_bytes([
+                iov_buf[8], iov_buf[9], iov_buf[10], iov_buf[11],
+                iov_buf[12], iov_buf[13], iov_buf[14], iov_buf[15],
+            ]) as usize;
+            if len == 0 || base == 0 {
                 continue;
             }
-            let bytes = unsafe { core::slice::from_raw_parts(base, len) };
-            for &b in bytes {
+            // Read user buffer
+            let mut buf = alloc::vec![0u8; len];
+            if UserSliceRo::ro(base, len)
+                .and_then(|s| s.copy_to_slice(&mut buf))
+                .is_err()
+            {
+                continue;
+            }
+            for &b in &buf {
                 serial.send(b);
             }
             total += len;
@@ -668,16 +935,21 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Err(AbiError::PermissionDenied);
     }
 
-    let path_addr = ctx.args[0] as *const u8;
     let flags = ctx.args[1] as u32;
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
+
+    // NEW: Check for Redox-style Scheme prefix first (e.g. "debug:", "pipe:")
+    if let Some(res) = crate::fs::vfs::VFS.read().handle_scheme(path_str, flags as usize) {
+        match res {
+            Ok(id) => {
+                let fd = ctx.process.fds.alloc_scheme(path_str.as_bytes(), flags, id).unwrap_or(3);
+                return Ok(fd as u64);
+            }
+            Err(e) => return Err(e),
+        }
     }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
 
     // Device/pseudo paths always succeed
     let is_known = known_path(path_str)
@@ -789,10 +1061,6 @@ fn sys_dup2(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// pipefd is a *mut [i32; 2] in user memory: [read_fd, write_fd]
 fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::IpcChannel, true, false) { return Err(AbiError::PermissionDenied); }
-    let pipefd_ptr = ctx.args[0] as *mut u32;
-    if pipefd_ptr.is_null() {
-        return Ok((-14_i64) as u64);
-    } // -EFAULT
 
     let chan_id = match crate::ipc::create_channel() {
         Some(id) => id,
@@ -812,10 +1080,13 @@ fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     match (read_fd, write_fd) {
         (Some(rfd), Some(wfd)) => {
-            unsafe {
-                *pipefd_ptr = rfd as u32;
-                *pipefd_ptr.add(1) = wfd as u32;
-            }
+            let mut pipe_buf = [0u8; 8];
+            pipe_buf[..4].copy_from_slice(&(rfd as u32).to_ne_bytes());
+            pipe_buf[4..8].copy_from_slice(&(wfd as u32).to_ne_bytes());
+            crate::abi::usercopy::UserSliceWo::wo(ctx.args[0], 8)
+                .map_err(|_| AbiError::Other("EFAULT"))?
+                .copy_from_slice(&pipe_buf)
+                .map_err(|_| AbiError::Other("EFAULT"))?;
             Ok(0)
         }
         _ => Ok((-24_i64) as u64), // -EMFILE
@@ -824,35 +1095,31 @@ fn sys_pipe(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_getcwd(buf, size) → buf_addr on success, -ERANGE if too small
 fn sys_getcwd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let buf_addr = ctx.args[0] as *mut u8;
     let size = ctx.args[1] as usize;
     let cwd_len = ctx.process.cwd_len;
     // Need space for path + null terminator
     if size < cwd_len + 1 {
         return Ok((-34_i64) as u64); // -ERANGE
     }
-    unsafe {
-        core::ptr::copy_nonoverlapping(ctx.process.cwd.as_ptr(), buf_addr, cwd_len);
-        *buf_addr.add(cwd_len) = 0;
-    }
-    Ok(buf_addr as u64)
+    let mut cwd_buf = alloc::vec![0u8; cwd_len + 1];
+    cwd_buf[..cwd_len].copy_from_slice(&ctx.process.cwd[..cwd_len]);
+    cwd_buf[cwd_len] = 0;
+    crate::abi::usercopy::UserSliceWo::wo(ctx.args[0], cwd_len + 1)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&cwd_buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    Ok(ctx.args[0])
 }
 
 /// sys_chdir(path) → 0 / -ENOENT
 fn sys_chdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let path_addr = ctx.args[0] as *const u8;
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    // Accept any path that looks valid (starts with '/')
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let n = path_buf.len();
     if n == 0 {
         return Ok((-2_i64) as u64);
     }
-    ctx.process.cwd[..n].copy_from_slice(&tmp[..n]);
+    ctx.process.cwd[..n].copy_from_slice(&path_buf);
     ctx.process.cwd_len = n;
     Ok(0)
 }
@@ -875,15 +1142,16 @@ fn sys_kill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// We map sys_waitpid (114) here; args[0]=pid, args[1]=wstatus_ptr.
 fn sys_waitpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let child_pid = ctx.args[0] as i64;
-    let status_ptr = ctx.args[1] as *mut i32;
     let options = ctx.args[2] as i32;
     let parent = ctx.process.pid;
     match crate::process::scheduler::SCHEDULER.waitpid(parent, child_pid, options) {
         Some((pid, code)) => {
-            if !status_ptr.is_null() {
-                unsafe {
-                    *status_ptr = (code as i32 & 0xFF) << 8;
-                }
+            if ctx.args[1] != 0 {
+                let status = (code as i32 & 0xFF) << 8;
+                UserSliceWo::wo(ctx.args[1], 4)
+                    .map_err(|_| AbiError::Other("EFAULT"))?
+                    .copy_from_slice(&status.to_ne_bytes())
+                    .map_err(|_| AbiError::Other("EFAULT"))?;
             }
             println!("[Linux ABI] waitpid → child {} exited with {}", pid.0, code);
             Ok(pid.0)
@@ -895,13 +1163,17 @@ fn sys_waitpid(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_nanosleep(req: *timespec, rem: *timespec) → 0
 /// timespec layout: { tv_sec: u64, tv_nsec: u64 } (16 bytes)
 fn sys_nanosleep(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let req_ptr = ctx.args[0] as *const u64;
-    let ms = if req_ptr.is_null() {
-        1
-    } else {
-        let tv_sec = unsafe { *req_ptr };
-        let tv_nsec = unsafe { *req_ptr.add(1) };
+    let ms = if ctx.args[0] != 0 {
+        let mut ts = [0u8; 16];
+        UserSliceRo::ro(ctx.args[0], 16)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_to_slice(&mut ts)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
+        let tv_sec = u64::from_ne_bytes(ts[..8].try_into().unwrap());
+        let tv_nsec = u64::from_ne_bytes(ts[8..16].try_into().unwrap());
         tv_sec * 1000 + tv_nsec / 1_000_000
+    } else {
+        1
     };
     crate::timer::sleep_ms(ctx.process.pid, ms.max(1));
     Ok(0)
@@ -981,8 +1253,7 @@ fn sys_futex(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// anything else → SignalAction::Handler(ptr).
 fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     use crate::process::signal::{SignalAction, sig};
-    let signum   = ctx.args[0] as u8;
-    let act_ptr  = ctx.args[1] as *const u64;
+    let signum = ctx.args[0] as u8;
 
     if signum == 0 || signum > sig::MAX {
         return Ok((-22_i64) as u64); // -EINVAL
@@ -992,18 +1263,14 @@ fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
 
     // If act_ptr is null this is a query-only call (just returns oldact).
-    if !act_ptr.is_null() {
-        // Read two u64 words (sa_handler, sa_flags) from user space via
-        // validated copy_from_user (page-table check + STAC/CLAC bracket).
-        let mut words = [0u64; 2];
-        let src = act_ptr as u64;
-        if crate::memory::copy_from_user(
-            unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, 16) },
-            src,
-        ).is_err() {
-            return Ok((-14_i64) as u64); // -EFAULT
-        }
-        let (sa_handler, _sa_flags) = (words[0], words[1]);
+    if ctx.args[1] != 0 {
+        let mut words = [0u8; 16];
+        UserSliceRo::ro(ctx.args[1], 16)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_to_slice(&mut words)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
+        let sa_handler = u64::from_ne_bytes(words[..8].try_into().unwrap());
+        let _sa_flags  = u64::from_ne_bytes(words[8..16].try_into().unwrap());
 
         let action = match sa_handler {
             0 => SignalAction::Default,
@@ -1016,7 +1283,6 @@ fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             "rt_sigaction: sig={} handler=0x{:x}", signum, sa_handler);
     }
 
-    // oldact_ptr output is not filled (would need copy_to_user).
     Ok(0)
 }
 
@@ -1076,18 +1342,25 @@ fn sys_pread64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// iov is array of { iov_base: *mut u8, iov_len: usize } (16 bytes each)
 fn sys_readv(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    let iov_ptr = ctx.args[1] as *mut u64;
     let iovcnt = ctx.args[2] as usize;
 
     if fd != 0 {
         return Ok((-9_i64) as u64); // -EBADF
     }
 
+    // Read iovec array from user memory
+    let mut iov_buf = alloc::vec![0u8; 16 * iovcnt.min(16)];
+    UserSliceRo::ro(ctx.args[1], iov_buf.len())
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_to_slice(&mut iov_buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+
     let mut total: usize = 0;
     for i in 0..iovcnt.min(16) {
-        let base = unsafe { *iov_ptr.add(i * 2) } as *mut u8;
-        let len = unsafe { *iov_ptr.add(i * 2 + 1) } as usize;
-        if base.is_null() || len == 0 {
+        let off = i * 16;
+        let base = u64::from_ne_bytes(iov_buf[off..off + 8].try_into().unwrap());
+        let len = usize::from_ne_bytes(iov_buf[off + 8..off + 16].try_into().unwrap());
+        if base == 0 || len == 0 {
             continue;
         }
         let mut tmp = [0u8; 256];
@@ -1095,9 +1368,10 @@ fn sys_readv(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         if n == 0 {
             break;
         }
-        unsafe {
-            core::ptr::copy_nonoverlapping(tmp.as_ptr(), base, n);
-        }
+        UserSliceWo::wo(base, n)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&tmp[..n])
+            .map_err(|_| AbiError::Other("EFAULT"))?;
         total += n;
         if n < len {
             break;
@@ -1110,16 +1384,10 @@ fn sys_readv(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// dirfd=AT_FDCWD(-100) means relative to cwd — treat same as open.
 fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     // Shift args: dirfd=args[0], path=args[1], flags=args[2]
-    let path_addr = ctx.args[1] as *const u8;
     let flags = ctx.args[2] as u32;
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[1], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
 
     let is_known = known_path(path_str)
         || matches!(
@@ -1181,25 +1449,27 @@ fn sys_tgkill(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_gettimeofday(tv, tz) → 0
 /// timeval: { tv_sec: i64, tv_usec: i64 } (16 bytes)
 fn sys_gettimeofday(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let tv = ctx.args[0] as *mut i64;
-    if !tv.is_null() {
+    if ctx.args[0] != 0 {
         let ms = crate::timer::uptime_ms();
-        unsafe {
-            *tv = (ms / 1000) as i64;
-            *tv.add(1) = ((ms % 1000) * 1000) as i64; // tv_usec
-        }
+        let mut tv_buf = [0u8; 16];
+        tv_buf[..8].copy_from_slice(&((ms / 1000) as i64).to_ne_bytes());
+        tv_buf[8..16].copy_from_slice(&(((ms % 1000) * 1000) as i64).to_ne_bytes());
+        UserSliceWo::wo(ctx.args[0], 16)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&tv_buf)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(0)
 }
 
 /// sys_time(tloc) → seconds
 fn sys_time(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let tloc = ctx.args[0] as *mut i64;
     let secs = (crate::timer::uptime_ms() / 1000) as i64;
-    if !tloc.is_null() {
-        unsafe {
-            *tloc = secs;
-        }
+    if ctx.args[0] != 0 {
+        UserSliceWo::wo(ctx.args[0], 8)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&secs.to_ne_bytes())
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(secs as u64)
 }
@@ -1207,15 +1477,16 @@ fn sys_time(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_getrlimit(resource, rlim) → 0
 /// rlimit: { rlim_cur: u64, rlim_max: u64 } (16 bytes)
 fn sys_getrlimit(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let _resource = ctx.args[0];
-    let rlim = ctx.args[1] as *mut u64;
-    if rlim.is_null() {
+    if ctx.args[1] == 0 {
         return Ok((-14_i64) as u64);
     }
-    unsafe {
-        *rlim = 0x1_0000_0000; // rlim_cur = 4GB
-        *rlim.add(1) = 0x1_0000_0000; // rlim_max = 4GB
-    }
+    let mut rlim_buf = [0u8; 16];
+    rlim_buf[..8].copy_from_slice(&0x1_0000_0000u64.to_ne_bytes());
+    rlim_buf[8..16].copy_from_slice(&0x1_0000_0000u64.to_ne_bytes());
+    UserSliceWo::wo(ctx.args[1], 16)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&rlim_buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
@@ -1227,24 +1498,19 @@ fn sys_setrlimit(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_sysinfo(info) → 0
 /// x86_64 sysinfo (64 bytes, simplified)
 fn sys_sysinfo(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let info = ctx.args[0] as *mut u64;
-    if info.is_null() {
+    if ctx.args[0] == 0 {
         return Ok((-14_i64) as u64);
     }
     let ms = crate::timer::uptime_ms();
-    unsafe {
-        *info = (ms / 1000) as u64; // uptime (seconds)
-        *info.add(1) = 0; // loads[0]
-        *info.add(2) = 0; // loads[1]
-        *info.add(3) = 0; // loads[2]
-        *info.add(4) = 512 * 1024 * 1024 / 4096; // totalram (in pages? no, bytes)
-        *info.add(5) = 256 * 1024 * 1024; // freeram
-        *info.add(6) = 0; // sharedram
-        *info.add(7) = 0; // bufferram
-        *info.add(8) = 0; // totalswap
-        *info.add(9) = 0; // freeswap
-        *(info.add(10) as *mut u16) = 16; // procs
-    }
+    let mut buf = [0u8; 88];
+    buf[0..8].copy_from_slice(&((ms / 1000) as u64).to_ne_bytes()); // uptime
+    buf[32..40].copy_from_slice(&((512 * 1024 * 1024 / 4096) as u64).to_ne_bytes()); // totalram
+    buf[40..48].copy_from_slice(&((256 * 1024 * 1024) as u64).to_ne_bytes()); // freeram
+    buf[80..82].copy_from_slice(&(16u16).to_ne_bytes()); // procs at byte offset 80
+    UserSliceWo::wo(ctx.args[0], 88)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
@@ -1252,17 +1518,18 @@ fn sys_sysinfo(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_prlimit64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _pid = ctx.args[0] as i64;
     let _resource = ctx.args[1];
-    let new_rlim = ctx.args[2] as *mut u64;
-    let old_rlim = ctx.args[3] as *mut u64;
     // If old_rlim is not null, fill it with default values
-    if !old_rlim.is_null() {
-        unsafe {
-            *old_rlim = 0x1_0000_0000; // rlim_cur
-            *old_rlim.add(1) = 0x1_0000_0000; // rlim_max
-        }
+    if ctx.args[3] != 0 {
+        let mut rlim_buf = [0u8; 16];
+        rlim_buf[..8].copy_from_slice(&0x1_0000_0000u64.to_ne_bytes());
+        rlim_buf[8..16].copy_from_slice(&0x1_0000_0000u64.to_ne_bytes());
+        UserSliceWo::wo(ctx.args[3], 16)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&rlim_buf)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     // If new_rlim is not null, accept (stub)
-    let _ = new_rlim;
+    let _ = ctx.args[2];
     Ok(0)
 }
 
@@ -1287,27 +1554,27 @@ fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
     let fd = ctx.args[0] as usize;
-    let buf_addr = ctx.args[1] as *const u8;
     let len = ctx.args[2] as usize;
     let mut socks = crate::net::socket::SOCKETS.lock();
     let entry = match socks.get_mut(fd) {
         Some(e) if e.state != crate::net::socket::SocketState::Closed => e,
         _ => return Ok((-9_i64) as u64), // -EBADF
     };
-    if buf_addr.is_null() || len == 0 {
+    if ctx.args[1] == 0 || len == 0 {
         return Ok(0);
     }
-    // Read data from userspace
-    let mut tmp = alloc::vec![0u8; len.min(4096)];
+    // Read data from userspace via UserSlice
     let copy_len = len.min(4096);
-    unsafe {
-        core::ptr::copy_nonoverlapping(buf_addr, tmp.as_mut_ptr(), copy_len);
-    }
-    entry.tx_buf.extend_from_slice(&tmp[..copy_len]);
+    let mut tmp = alloc::vec![0u8; copy_len];
+    UserSliceRo::ro(ctx.args[1], copy_len)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_to_slice(&mut tmp)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    entry.tx_buf.extend_from_slice(&tmp);
     // Forward to paired socket's rx buffer
     if let Some(paired) = entry.paired {
         if let Some(peer) = socks.get_mut(paired) {
-            peer.rx_buf.extend_from_slice(&tmp[..copy_len]);
+            peer.rx_buf.extend_from_slice(&tmp);
         }
     }
     Ok(copy_len as u64)
@@ -1318,9 +1585,8 @@ fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 fn sys_recvfrom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::Network, true, false) { return Err(AbiError::PermissionDenied); }
     let fd = ctx.args[0] as usize;
-    let buf_addr = ctx.args[1] as *mut u8;
     let len = ctx.args[2] as usize;
-    if buf_addr.is_null() || len == 0 {
+    if ctx.args[1] == 0 || len == 0 {
         return Ok(0);
     }
     let mut socks = crate::net::socket::SOCKETS.lock();
@@ -1333,9 +1599,10 @@ fn sys_recvfrom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Ok((-11_i64) as u64); // -EAGAIN
     }
     let to_read = len.min(avail);
-    unsafe {
-        core::ptr::copy_nonoverlapping(entry.rx_buf.as_ptr().add(entry.rx_pos), buf_addr, to_read);
-    }
+    UserSliceWo::wo(ctx.args[1], to_read)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&entry.rx_buf[entry.rx_pos..entry.rx_pos + to_read])
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     entry.rx_pos += to_read;
     // Compact buffer when fully consumed
     if entry.rx_pos >= entry.rx_buf.len() {
@@ -1347,18 +1614,11 @@ fn sys_recvfrom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_readlink(path, buf, bufsiz) → bytes_written
 fn sys_readlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let path_addr = ctx.args[0] as *const u8;
-    let buf_addr = ctx.args[1] as *mut u8;
     let bufsiz = ctx.args[2] as usize;
 
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
 
     // /proc/self/exe → return a fake binary path
     let target: &[u8] = match path_str {
@@ -1370,9 +1630,10 @@ fn sys_readlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     };
 
     let n = target.len().min(bufsiz);
-    unsafe {
-        core::ptr::copy_nonoverlapping(target.as_ptr(), buf_addr, n);
-    }
+    crate::abi::usercopy::UserSliceWo::wo(ctx.args[1], n)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&target[..n])
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(n as u64)
 }
 
@@ -1409,7 +1670,6 @@ fn sys_fcntl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_getdents64(fd, dirp, count) → bytes_written / -ENOTDIR
 fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
-    let dirp = ctx.args[1] as *mut u8;
     let count = ctx.args[2] as usize;
 
     let path_bytes = ctx.process.fds.path_of(fd);
@@ -1424,28 +1684,29 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
     let vfs = crate::fs::vfs::VFS.read();
     let entries = vfs.list_dir(path);
-    let mut written: usize = 0;
     
     const DT_REG: u8 = 8;
     const DT_DIR: u8 = 4;
     
+    // Build all directory entries into a Vec<u8>
+    let mut out = alloc::vec::Vec::new();
+    
     // Always emit "." and ".." first (both are directories)
     for name_bytes in [b".".as_slice(), b"..".as_slice()].iter().copied() {
         let name_len = name_bytes.len();
-        let reclen = (19 + name_len + 7) & !7; // align to 8
-        if written + reclen > count {
+        let reclen = (19 + name_len + 7) & !7;
+        if out.len() + reclen > count {
             break;
         }
-        unsafe {
-            let base = dirp.add(written);
-            *(base as *mut u64) = 1; // d_ino
-            *(base.add(8) as *mut i64) = reclen as i64; // d_off
-            *(base.add(16) as *mut u16) = reclen as u16; // d_reclen
-            *base.add(18) = DT_DIR; // "." and ".." are directories
-            core::ptr::copy_nonoverlapping(name_bytes.as_ptr(), base.add(19), name_len);
-            *base.add(19 + name_len) = 0;
-        }
-        written += reclen;
+        let pos = out.len();
+        out.resize(out.len() + reclen, 0);
+        let slot = &mut out[pos..pos + reclen];
+        slot[..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
+        slot[8..16].copy_from_slice(&(reclen as i64).to_ne_bytes()); // d_off
+        slot[16..18].copy_from_slice(&(reclen as u16).to_ne_bytes()); // d_reclen
+        slot[18] = DT_DIR;
+        slot[19..19 + name_len].copy_from_slice(name_bytes);
+        slot[19 + name_len] = 0;
     }
     
     // Emit regular entries with correct d_type
@@ -1453,22 +1714,29 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         let name = entry_path.rsplit('/').next().unwrap_or(entry_path);
         let name_bytes = name.as_bytes();
         let name_len = name_bytes.len();
-        let reclen = (19 + name_len + 7) & !7; // align to 8
-        if written + reclen > count {
+        let reclen = (19 + name_len + 7) & !7;
+        if out.len() + reclen > count {
             break;
         }
-        
         let d_type = if vfs.is_dir(entry_path) { DT_DIR } else { DT_REG };
-        unsafe {
-            let base = dirp.add(written);
-            *(base as *mut u64) = 1; // d_ino
-            *(base.add(8) as *mut i64) = reclen as i64; // d_off
-            *(base.add(16) as *mut u16) = reclen as u16; // d_reclen
-            *base.add(18) = d_type;
-            core::ptr::copy_nonoverlapping(name_bytes.as_ptr(), base.add(19), name_len);
-            *base.add(19 + name_len) = 0;
-        }
-        written += reclen;
+        let pos = out.len();
+        out.resize(out.len() + reclen, 0);
+        let slot = &mut out[pos..pos + reclen];
+        slot[..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
+        slot[8..16].copy_from_slice(&(reclen as i64).to_ne_bytes()); // d_off
+        slot[16..18].copy_from_slice(&(reclen as u16).to_ne_bytes()); // d_reclen
+        slot[18] = d_type;
+        slot[19..19 + name_len].copy_from_slice(name_bytes);
+        slot[19 + name_len] = 0;
+    }
+    
+    // Write to user memory
+    let written = out.len();
+    if written > 0 {
+        UserSliceWo::wo(ctx.args[1], written)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&out)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(written as u64)
 }
@@ -1480,36 +1748,24 @@ fn sys_mkdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Err(AbiError::PermissionDenied);
     }
     
-    let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
     if path_str.is_empty() {
         return Ok((-22_i64) as u64); // -EINVAL
     }
     crate::fs::vfs::VFS.write().mkdir(path_str);
     Ok(0)
-    }
+}
 
 
 /// sys_rmdir(pathname) → 0 / -ENOENT
 fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
-    let path_addr = ctx.args[0] as *const u8;
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
     match crate::fs::vfs::VFS.write().remove(path_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
@@ -1519,15 +1775,9 @@ fn sys_rmdir(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_unlink(pathname) → 0 / -ENOENT
 fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
-    let path_addr = ctx.args[0] as *const u8;
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
     match crate::fs::vfs::VFS.write().remove(path_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
@@ -1537,22 +1787,12 @@ fn sys_unlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_rename(oldpath, newpath) → 0 / -ENOENT
 fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
-    let old_addr = ctx.args[0] as *const u8;
-    let new_addr = ctx.args[1] as *const u8;
-    let mut old_tmp = [0u8; 128];
-    let mut new_tmp = [0u8; 128];
-    let on = (0..127)
-        .take_while(|&i| unsafe { *old_addr.add(i) != 0 })
-        .count();
-    let nn = (0..127)
-        .take_while(|&i| unsafe { *new_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
-        core::ptr::copy_nonoverlapping(new_addr, new_tmp.as_mut_ptr(), nn);
-    }
-    let old_str = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
-    let new_str = core::str::from_utf8(&new_tmp[..nn]).unwrap_or("");
+    let old_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let new_buf = crate::abi::usercopy::read_user_string(ctx.args[1], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let old_str = core::str::from_utf8(&old_buf).unwrap_or("");
+    let new_str = core::str::from_utf8(&new_buf).unwrap_or("");
     match crate::fs::vfs::VFS.write().rename(old_str, new_str) {
         Ok(()) => Ok(0),
         Err(_) => Ok((-2_i64) as u64), // -ENOENT
@@ -1563,16 +1803,12 @@ fn sys_rename(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// Equivalent to open(path, O_CREAT|O_WRONLY|O_TRUNC, mode)
 fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if !ctx.process.capabilities.has_permission(ResourceKind::File, true, false) { return Err(AbiError::PermissionDenied); }
-    let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
+    let tmp = &path_buf;
+    let n = tmp.len();
     {
         let mut vfs = crate::fs::vfs::VFS.write();
         let exists = vfs.exists(path_str);
@@ -1593,89 +1829,68 @@ fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// 104: st_ctim (16B), 120: reserved (24B)
 fn sys_newfstatat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _dirfd = ctx.args[0] as i64;
-    let path_addr = ctx.args[1] as *const u8;
-    let statbuf = ctx.args[2] as *mut u64;
     let _flags = ctx.args[3];
-    if statbuf.is_null() {
-        return Ok((-14_i64) as u64); // -EFAULT
-    }
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[1], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
     let exists = crate::fs::vfs::VFS.read().exists(path_str);
     if !exists {
         return Ok((-2_i64) as u64);
     } // -ENOENT
-    unsafe {
-        // Zero out the whole 144-byte buffer first
-        core::ptr::write_bytes(statbuf as *mut u8, 0, 144);
-        *statbuf.add(0) = 0; // st_dev
-        *statbuf.add(1) = 1; // st_ino
-        *statbuf.add(2) = 1; // st_nlink
-        *(statbuf.add(3) as *mut u32) = 0o100644; // st_mode (S_IFREG|0644)
-        *(statbuf.add(3) as *mut u32).add(1) = 0; // st_uid
-        *(statbuf.add(3) as *mut u32).add(2) = 0; // st_gid
-        *statbuf.add(5) = 0; // st_rdev
-                             // st_size at offset 48 = u64 index 6
-        if let Some(sz) = crate::fs::vfs::VFS.read().file_size(path_str) {
-            *statbuf.add(6) = sz as u64; // st_size
-        }
-        *statbuf.add(7) = 4096; // st_blksize
-        *statbuf.add(8) = 0; // st_blocks
+    let mut stat = [0u8; 144];
+    stat[8..16].copy_from_slice(&1u64.to_ne_bytes()); // st_ino
+    stat[16..24].copy_from_slice(&1u64.to_ne_bytes()); // st_nlink
+    stat[24..28].copy_from_slice(&0o100644u32.to_ne_bytes()); // st_mode
+    if let Some(sz) = crate::fs::vfs::VFS.read().file_size(path_str) {
+        stat[48..56].copy_from_slice(&(sz as u64).to_ne_bytes()); // st_size
     }
+    stat[56..64].copy_from_slice(&4096u64.to_ne_bytes()); // st_blksize
+    crate::abi::usercopy::UserSliceWo::wo(ctx.args[2], 144)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&stat)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
 /// sys_clock_gettime(clockid, tp) → 0 / -EFAULT
 fn sys_clock_gettime(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let _clk_id = ctx.args[0];
-    let tp = ctx.args[1] as *mut i64;
-    if tp.is_null() {
+    if ctx.args[1] == 0 {
         return Ok((-14_i64) as u64);
     }
     let ms = crate::timer::uptime_ms();
-    let tv_sec = (ms / 1000) as i64;
-    let tv_nsec = ((ms % 1000) * 1_000_000) as i64;
-    unsafe {
-        *tp = tv_sec;
-        *tp.add(1) = tv_nsec;
-    }
+    let mut ts_buf = [0u8; 16];
+    ts_buf[..8].copy_from_slice(&((ms / 1000) as i64).to_ne_bytes());
+    ts_buf[8..16].copy_from_slice(&(((ms % 1000) * 1_000_000) as i64).to_ne_bytes());
+    UserSliceWo::wo(ctx.args[1], 16)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&ts_buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
 /// sys_getrandom(buf, buflen, flags) → bytes_written
 fn sys_getrandom(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let buf = ctx.args[0] as *mut u8;
     let buflen = ctx.args[1] as usize;
     let _flags = ctx.args[2];
     let ms = crate::timer::uptime_ms();
+    let mut buf = alloc::vec![0u8; buflen];
     for i in 0..buflen {
-        let val = ((ms.wrapping_mul(1103515245).wrapping_add(12345) >> 16)
+        buf[i] = ((ms.wrapping_mul(1103515245).wrapping_add(12345) >> 16)
             ^ (i as u64).wrapping_mul(6364136223846793005)) as u8;
-        unsafe {
-            *buf.add(i) = val;
-        }
     }
+    UserSliceWo::wo(ctx.args[0], buflen)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&buf)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(buflen as u64)
 }
 
 /// sys_chmod(pathname, mode) → 0 / -ENOENT
 fn sys_chmod(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let path_addr = ctx.args[0] as *const u8;
     let _mode = ctx.args[1];
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let raw = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let raw = core::str::from_utf8(&path_buf).unwrap_or("");
     let path_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
     if crate::fs::vfs::VFS.read().exists(&path_str) {
         Ok(0)
@@ -1692,16 +1907,10 @@ fn sys_umask(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_link(oldpath, newpath) → 0 / -ENOENT (stub)
 fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let old_addr = ctx.args[0] as *const u8;
-    let _new_addr = ctx.args[1] as *const u8;
-    let mut old_tmp = [0u8; 128];
-    let on = (0..127)
-        .take_while(|&i| unsafe { *old_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(old_addr, old_tmp.as_mut_ptr(), on);
-    }
-    let raw = core::str::from_utf8(&old_tmp[..on]).unwrap_or("");
+    let _new_addr = ctx.args[1];
+    let old_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let raw = core::str::from_utf8(&old_buf).unwrap_or("");
     let old_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
     if crate::fs::vfs::VFS.read().exists(&old_str) {
         Ok(0)
@@ -1712,46 +1921,23 @@ fn sys_link(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_symlink(target, linkpath) → 0 (stub)
 fn sys_symlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let target_addr = ctx.args[0] as *const u8;
-    let link_addr = ctx.args[1] as *const u8;
-    let mut link_tmp = [0u8; 128];
-    let ln = (0..127)
-        .take_while(|&i| unsafe { *link_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(link_addr, link_tmp.as_mut_ptr(), ln);
-    }
-    let raw = core::str::from_utf8(&link_tmp[..ln]).unwrap_or("");
+    let link_buf = crate::abi::usercopy::read_user_string(ctx.args[1], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let raw = core::str::from_utf8(&link_buf).unwrap_or("");
     if raw.is_empty() {
         return Ok((-22_i64) as u64);
     }
     let _link_path = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
-    let mut target_tmp = [0u8; 128];
-    let tn = (0..127)
-        .take_while(|&i| unsafe { *target_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(target_addr, target_tmp.as_mut_ptr(), tn);
-    }
-    let _target_str = core::str::from_utf8(&target_tmp[..tn]).unwrap_or("");
+    let _target_str = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0) // stub: no symlink support in VFS yet
 }
 
 /// sys_statfs(path, buf) → 0 / -ENOENT
 fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let path_addr = ctx.args[0] as *const u8;
-    let buf = ctx.args[1] as *mut u64;
-    if buf.is_null() {
-        return Ok((-14_i64) as u64);
-    }
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let raw = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    let raw = core::str::from_utf8(&path_buf).unwrap_or("");
     let path_str = crate::fs::resolve_path(&ctx.process.cwd, ctx.process.cwd_len, raw);
     let exists = crate::fs::vfs::VFS.read().exists(&path_str);
     if !exists {
@@ -1759,15 +1945,21 @@ fn sys_statfs(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             return Ok((-2_i64) as u64); // -ENOENT
         }
     }
-    unsafe {
-        *buf = 0x01021994; // f_type (RAMFS_MAGIC)
-        *buf.add(1) = 4096; // f_bsize
-        *buf.add(2) = 1024; // f_blocks
-        *buf.add(3) = 512; // f_bfree
-        *buf.add(4) = 512; // f_bavail
-        *buf.add(5) = 1024; // f_files
-        *buf.add(6) = 512; // f_ffree
-    }
+    let statfs: [u8; 56] = {
+        let mut b = [0u8; 56];
+        b[0..8].copy_from_slice(&0x01021994u64.to_ne_bytes()); // f_type (RAMFS_MAGIC)
+        b[8..16].copy_from_slice(&4096u64.to_ne_bytes()); // f_bsize
+        b[16..24].copy_from_slice(&1024u64.to_ne_bytes()); // f_blocks
+        b[24..32].copy_from_slice(&512u64.to_ne_bytes()); // f_bfree
+        b[32..40].copy_from_slice(&512u64.to_ne_bytes()); // f_bavail
+        b[40..48].copy_from_slice(&1024u64.to_ne_bytes()); // f_files
+        b[48..56].copy_from_slice(&512u64.to_ne_bytes()); // f_ffree
+        b
+    };
+    crate::abi::usercopy::UserSliceWo::wo(ctx.args[1], 56)
+        .map_err(|_| AbiError::Other("EFAULT"))?
+        .copy_from_slice(&statfs)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
 
@@ -1786,11 +1978,11 @@ fn sys_setpriority(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_sched_getparam(pid, param) → 0 / -ESRCH
 /// sched_param: { sched_priority: i32 }
 fn sys_sched_getparam(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let param = ctx.args[1] as *mut i32;
-    if !param.is_null() {
-        unsafe {
-            *param = 0;
-        }
+    if ctx.args[1] != 0 {
+        UserSliceWo::wo(ctx.args[1], 4)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&0i32.to_ne_bytes())
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(0)
 }
@@ -1803,12 +1995,13 @@ fn sys_prctl(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_clock_getres(clockid, tp) → 0
 /// Fill timespec { tv_sec: 0, tv_nsec: 1 } (1 nanosecond resolution)
 fn sys_clock_getres(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let tp = ctx.args[1] as *mut i64;
-    if !tp.is_null() {
-        unsafe {
-            *tp = 0; // tv_sec
-            *tp.add(1) = 1; // tv_nsec (1 nsec resolution)
-        }
+    if ctx.args[1] != 0 {
+        let mut ts_buf = [0u8; 16];
+        ts_buf[8..16].copy_from_slice(&1i64.to_ne_bytes());
+        UserSliceWo::wo(ctx.args[1], 16)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&ts_buf)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(0)
 }
@@ -1841,17 +2034,17 @@ fn sys_timerfd_create(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_getcpu(cpu, node, tcache) → 0
 fn sys_getcpu(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let cpu_ptr = ctx.args[0] as *mut u32;
-    let node_ptr = ctx.args[1] as *mut u32;
-    if !cpu_ptr.is_null() {
-        unsafe {
-            *cpu_ptr = 0;
-        }
+    if ctx.args[0] != 0 {
+        UserSliceWo::wo(ctx.args[0], 4)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&0u32.to_ne_bytes())
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
-    if !node_ptr.is_null() {
-        unsafe {
-            *node_ptr = 0;
-        }
+    if ctx.args[1] != 0 {
+        UserSliceWo::wo(ctx.args[1], 4)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&0u32.to_ne_bytes())
+            .map_err(|_| AbiError::Other("EFAULT"))?;
     }
     Ok(0)
 }
@@ -1875,19 +2068,12 @@ fn sys_execve(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Ok(-(1_i64) as u64); // -EPERM
     }
 
-    let path_addr = ctx.args[0] as *const u8;
-    if path_addr.is_null() {
+    let path_buf = crate::abi::usercopy::read_user_string(ctx.args[0], 4096)
+        .map_err(|_| AbiError::Other("EFAULT"))?;
+    if path_buf.is_empty() {
         return Ok(-(14_i64) as u64); // -EFAULT
     }
-
-    let mut tmp = [0u8; 128];
-    let n = (0..127)
-        .take_while(|&i| unsafe { *path_addr.add(i) != 0 })
-        .count();
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_addr, tmp.as_mut_ptr(), n);
-    }
-    let path_str = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
 
     // Read binary from VFS
     let mut buf = alloc::vec![0u8; 65536];

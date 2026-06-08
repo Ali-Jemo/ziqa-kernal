@@ -1,0 +1,90 @@
+image: "redoxos/redoxer:latest"
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+workflow:
+  rules:
+    - if: '$CI_PROJECT_NAMESPACE == "redox-os"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"'
+
+stages:
+  - build
+  - cross-build
+  - test
+  - other-features
+  # TODO: benchmarks and profiling (maybe manually enabled for relevant MRs)?
+
+x86_64:
+  stage: build
+  script:
+    - mkdir -p target/${ARCH}
+    - redoxer env make BUILD=target/${ARCH}
+  variables:
+    ARCH: "x86_64"
+
+aarch64:
+  stage: cross-build
+  image: "redoxos/redoxer:aarch64"
+  script:
+    - mkdir -p target/${ARCH}
+    - redoxer env make BUILD=target/${ARCH}
+  variables:
+    ARCH: "aarch64"
+
+i586:
+  stage: cross-build
+  script:
+    - mkdir -p target/${ARCH}
+    - TARGET=${ARCH}-unknown-redox redoxer env make BUILD=target/${ARCH}
+  variables:
+    ARCH: "i586"
+
+riscv64gc:
+  stage: cross-build
+  script:
+    - mkdir -p target/${ARCH}
+    - TARGET=${ARCH}-unknown-redox redoxer env make BUILD=target/${ARCH}
+  variables:
+    ARCH: "riscv64gc"
+
+fmt:
+  stage: build
+  script:
+      - rustup component add rustfmt
+      - rustfmt --check
+
+x86_64:boot:
+  stage: test
+  needs: [x86_64]
+  script:
+    - mkdir -p target/${ARCH}
+    - export COOKBOOK_SOURCE_IDENT=$CI_COMMIT_SHA
+    - redoxer env make BUILD=target/${ARCH}
+    - timeout -s KILL 9m redoxer exec --folder target/${ARCH}/:/usr/lib/boot uname -a
+  variables:
+    ARCH: "x86_64"
+
+x86_64:relibc:
+  stage: test
+  needs: [x86_64]
+  script:
+    - redoxer pkg relibc-tests-bins
+    - export COOKBOOK_SOURCE_IDENT=$CI_COMMIT_SHA
+    - mkdir -p target/${TARGET}/sysroot/{usr/lib/boot,root} target/${TARGET}/root
+    - redoxer env make BUILD=target/${TARGET}/sysroot/usr/lib/boot
+    - (cd target/${TARGET}/sysroot && mv home/user/relibc-tests/* root/)
+    - timeout -s KILL 9m redoxer exec --folder target/${TARGET}/sysroot/:/ make run
+  # It is fine if failing sometimes
+  allow_failure: true
+  variables:
+    TARGET: "x86_64-unknown-redox"
+
+profiling-compile:
+  stage: other-features
+  allow_failure: true
+  script:
+    make check
+  variables:
+    ARCH: "x86_64"
+    KERNEL_CHECK_FEATURES: profiling

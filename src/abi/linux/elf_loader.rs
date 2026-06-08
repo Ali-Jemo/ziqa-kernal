@@ -149,7 +149,9 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                     size: phdr.p_memsz as usize,
                     flags,
                     is_file_backed: false,
+                    file_path: None,
                     file_offset: phdr.p_offset,
+                    bco_hook: None,
                 };
                 process.add_region(Vma::from(region));
 

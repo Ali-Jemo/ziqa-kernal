@@ -1,73 +1,252 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 350" width="800" height="350">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#1a1b26"/>
       <stop offset="100%" stop-color="#16161e"/>
     </linearGradient>
+
     <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7aa2f7"/>
-      <stop offset="100%" stop-color="#5d8fe8"/>
-    </linearGradient>
-    <linearGradient id="coreg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#bb9af7"/>
-      <stop offset="100%" stop-color="#a57de6"/>
-    </linearGradient>
-    <linearGradient id="pluging" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#e0af68"/>
-      <stop offset="100%" stop-color="#d49a4a"/>
-    </linearGradient>
-    <linearGradient id="hwg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#9ece6a"/>
       <stop offset="100%" stop-color="#7db84d"/>
     </linearGradient>
+    <linearGradient id="kernelg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="hwg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#565f89"/>
+      <stop offset="100%" stop-color="#3b4261"/>
+    </linearGradient>
+    <linearGradient id="accg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="ebg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+
     <filter id="shadow">
       <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
     </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+    <filter id="shadow-lg">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
     </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f7768e"/>
+    </marker>
   </defs>
-  <rect width="800" height="350" fill="url(#bg)" rx="12"/>
-  <text x="400" y="35" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">System Architecture</text>
 
-  <!-- Layer 1: Userspace -->
-  <rect x="50" y="65" width="700" height="40" rx="6" fill="url(#userg)" filter="url(#shadow)"/>
-  <text x="400" y="90" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Userspace</text>
+  <rect width="1000" height="620" fill="url(#bg)" rx="12"/>
+  <text x="500" y="30" text-anchor="middle" fill="#c0caf5" font-size="20" font-weight="bold">ZiqaKernel — System Architecture</text>
+  <text x="500" y="50" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">hybrid Rust + Zig · x86_64 long mode · higher-half kernel · capability-gated microkernel</text>
 
-  <line x1="400" y1="105" x2="400" y2="125" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Hardware (bottom) -->
+  <g transform="translate(40, 480)">
+    <rect x="0" y="0" width="920" height="100" rx="10" fill="url(#hwg)" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="920" height="26" rx="10" fill="#3b4261"/>
+    <text x="14" y="18" fill="#c0caf5" font-size="12" font-weight="bold" font-family="monospace">Hardware (x86_64 bare metal / QEMU)</text>
 
-  <!-- Layer 2: Syscall Interface -->
-  <rect x="200" y="125" width="400" height="28" rx="4" fill="#24283b" stroke="#565f89" stroke-width="1"/>
-  <text x="400" y="144" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">int 0x80 — Syscall Gate</text>
-
-  <line x1="400" y1="153" x2="400" y2="173" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
-
-  <!-- Layer 3: Kernel Core -->
-  <rect x="50" y="173" width="700" height="45" rx="6" fill="url(#coreg)" filter="url(#shadow)"/>
-  <text x="400" y="195" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Core</text>
-  <text x="400" y="210" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">MLFQ Scheduler · Memory Manager · VFS · eBPF Engine · IPC · DRM/KMS · io_uring</text>
-
-  <line x1="400" y1="218" x2="400" y2="238" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
-
-  <!-- Layer 4: ABI Plugins -->
-  <rect x="50" y="238" width="700" height="40" rx="6" fill="url(#pluging)" filter="url(#shadow)"/>
-  <text x="400" y="258" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">ABI Plugin Layer</text>
-  <g transform="translate(280, 264)">
-    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
-    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">Linux ELF</text>
+    <g transform="translate(14, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#7aa2f7" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#7aa2f7" font-size="10" font-weight="bold" font-family="monospace">CPU cores</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">BSP + N APs</text>
+    </g>
+    <g transform="translate(144, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#2ac3de" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#2ac3de" font-size="10" font-weight="bold" font-family="monospace">LAPIC + I/O APIC</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">MADT, IPI vectors</text>
+    </g>
+    <g transform="translate(274, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#9ece6a" font-size="10" font-weight="bold" font-family="monospace">DRAM</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">physical frames</text>
+    </g>
+    <g transform="translate(404, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#e0af68" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="monospace">PCI / VirtIO</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">block, net, gpu</text>
+    </g>
+    <g transform="translate(534, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">Framebuffer</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">VGA LFB / DRM</text>
+    </g>
+    <g transform="translate(664, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#f7768e" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#f7768e" font-size="10" font-weight="bold" font-family="monospace">PS/2 + UART</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">keyboard, mouse, serial</text>
+    </g>
+    <g transform="translate(794, 36)">
+      <rect x="0" y="0" width="120" height="50" rx="6" fill="#1f2335" stroke="#73daca" stroke-width="1"/>
+      <text x="60" y="20" text-anchor="middle" fill="#73daca" font-size="10" font-weight="bold" font-family="monospace">ACPI tables</text>
+      <text x="60" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">MADT, FADT, …</text>
+    </g>
   </g>
-  <g transform="translate(360, 264)">
-    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
-    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">WASM</text>
-  </g>
-  <g transform="translate(440, 264)">
-    <rect x="0" y="0" width="70" height="18" rx="3" fill="#1a1b26" opacity="0.3"/>
-    <text x="35" y="13" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">ZiqaNative</text>
+
+  <!-- Kernel (middle) -->
+  <g transform="translate(40, 200)">
+    <rect x="0" y="0" width="920" height="270" rx="10" fill="url(#kernelg)" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="920" height="28" rx="10" fill="#5d8fe8"/>
+    <text x="14" y="20" fill="#1a1b26" font-size="13" font-weight="bold" font-family="monospace">ZiqaKernel Core (Ring 0, Rust + Zig hot-paths)</text>
+
+    <!-- Subsystems row -->
+    <g transform="translate(14, 38)">
+      <rect x="0" y="0" width="135" height="60" rx="6" fill="#1f2335" stroke="#f7768e" stroke-width="1"/>
+      <text x="68" y="20" text-anchor="middle" fill="#f7768e" font-size="10" font-weight="bold" font-family="monospace">Memory mgmt</text>
+      <text x="68" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">frame_alloc + paging</text>
+      <text x="68" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">VMA · COW fork</text>
+    </g>
+    <g transform="translate(159, 38)">
+      <rect x="0" y="0" width="135" height="60" rx="6" fill="#1f2335" stroke="#e0af68" stroke-width="1"/>
+      <text x="68" y="20" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="monospace">Process + SMP</text>
+      <text x="68" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">MLFQ scheduler</text>
+      <text x="68" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">per-CPU · IPI</text>
+    </g>
+    <g transform="translate(304, 38)">
+      <rect x="0" y="0" width="135" height="60" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1"/>
+      <text x="68" y="20" text-anchor="middle" fill="#9ece6a" font-size="10" font-weight="bold" font-family="monospace">VFS / FS</text>
+      <text x="68" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">ZiqaFS · FAT32</text>
+      <text x="68" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">RamFS · pagecache</text>
+    </g>
+    <g transform="translate(449, 38)">
+      <rect x="0" y="0" width="135" height="60" rx="6" fill="#1f2335" stroke="#2ac3de" stroke-width="1"/>
+      <text x="68" y="20" text-anchor="middle" fill="#2ac3de" font-size="10" font-weight="bold" font-family="monospace">Network</text>
+      <text x="68" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">smoltcp stack</text>
+      <text x="68" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">TCP · UDP · DNS</text>
+    </g>
+    <g transform="translate(594, 38)">
+      <rect x="0" y="0" width="135" height="60" rx="6" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+      <text x="68" y="20" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">IPC</text>
+      <text x="68" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">SHM · signals</text>
+      <text x="68" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">io_uring</text>
+    </g>
+    <g transform="translate(739, 38)">
+      <rect x="0" y="0" width="166" height="60" rx="6" fill="#1f2335" stroke="#73daca" stroke-width="1"/>
+      <text x="83" y="20" text-anchor="middle" fill="#73daca" font-size="10" font-weight="bold" font-family="monospace">ABI plugins</text>
+      <text x="83" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">Linux (112 syscalls)</text>
+      <text x="83" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">WASM (experimental)</text>
+    </g>
+
+    <!-- Capability bus -->
+    <g transform="translate(14, 108)">
+      <rect x="0" y="0" width="891" height="44" rx="6" fill="#1f2335" stroke="#f7768e" stroke-width="1.5"/>
+      <rect x="0" y="0" width="891" height="20" rx="6" fill="#f7768e" opacity="0.85"/>
+      <text x="14" y="14" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Capability bus — every cross-boundary call carries an unforgeable token</text>
+      <text x="14" y="34" fill="#c0caf5" font-size="9" font-family="monospace">ResourceKind ∈ {Memory, File, Network, DeviceIo, ProcessCreate, AbiPlugin, IpcChannel}  ·  revoke(parent) recurses to descendants</text>
+    </g>
+
+    <!-- eBPF row -->
+    <g transform="translate(14, 162)">
+      <rect x="0" y="0" width="891" height="92" rx="6" fill="url(#ebg)" opacity="0.25" stroke="#bb9af7" stroke-width="1.5"/>
+      <rect x="0" y="0" width="891" height="22" rx="6" fill="url(#ebg)"/>
+      <text x="14" y="16" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">eBPF "Obsidian-Tier" VM  ·  in-kernel tracing, maps, tail calls, bounded loops</text>
+
+      <g transform="translate(14, 28)">
+        <rect x="0" y="0" width="200" height="56" rx="5" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+        <text x="100" y="18" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">Verifier</text>
+        <text x="100" y="34" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">static reachability +</text>
+        <text x="100" y="48" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">bounded-loop check</text>
+      </g>
+      <g transform="translate(224, 28)">
+        <rect x="0" y="0" width="200" height="56" rx="5" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+        <text x="100" y="18" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">Interpreter + JIT</text>
+        <text x="100" y="34" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">registers · helpers</text>
+        <text x="100" y="48" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">bpf_map_* / bpf_probe_*</text>
+      </g>
+      <g transform="translate(434, 28)">
+        <rect x="0" y="0" width="200" height="56" rx="5" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+        <text x="100" y="18" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">Maps</text>
+        <text x="100" y="34" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">Hash / Array / RingBuf</text>
+        <text x="100" y="48" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">tracepoints + tail calls</text>
+      </g>
+      <g transform="translate(644, 28)">
+        <rect x="0" y="0" width="240" height="56" rx="5" fill="#1f2335" stroke="#bb9af7" stroke-width="1"/>
+        <text x="120" y="18" text-anchor="middle" fill="#bb9af7" font-size="10" font-weight="bold" font-family="monospace">Attach points</text>
+        <text x="120" y="34" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">syscall · schedule · pagefault · net_rx</text>
+        <text x="120" y="48" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">sandboxed at load time</text>
+      </g>
+    </g>
   </g>
 
-  <line x1="400" y1="278" x2="400" y2="298" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Userspace (top) -->
+  <g transform="translate(40, 60)">
+    <rect x="0" y="0" width="920" height="130" rx="10" fill="url(#userg)" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="920" height="26" rx="10" fill="#7db84d"/>
+    <text x="14" y="18" fill="#1a1b26" font-size="13" font-weight="bold" font-family="monospace">Userspace (Ring 3, microkernel + Linux ELF + WASM)</text>
 
-  <!-- Layer 5: Hardware -->
-  <rect x="50" y="298" width="700" height="35" rx="6" fill="url(#hwg)" filter="url(#shadow)"/>
-  <text x="400" y="320" text-anchor="middle" fill="#1a1b26" font-size="14" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">x86_64 Hardware — QEMU / Bare Metal</text>
+    <g transform="translate(14, 36)">
+      <rect x="0" y="0" width="170" height="80" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1.2"/>
+      <text x="85" y="18" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="bold" font-family="monospace">Linux ELFs</text>
+      <text x="85" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">busybox · static x86_64</text>
+      <text x="85" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">test_elf.bin</text>
+      <text x="85" y="66" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">run via Linux ABI plugin</text>
+    </g>
+    <g transform="translate(194, 36)">
+      <rect x="0" y="0" width="170" height="80" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1.2"/>
+      <text x="85" y="18" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="bold" font-family="monospace">WASM</text>
+      <text x="85" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">hello.wasm</text>
+      <text x="85" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">sandboxed runtime</text>
+      <text x="85" y="66" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">host fns via AbiPlugin</text>
+    </g>
+    <g transform="translate(374, 36)">
+      <rect x="0" y="0" width="170" height="80" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1.2"/>
+      <text x="85" y="18" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="bold" font-family="monospace">NWCC (compositor)</text>
+      <text x="85" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">window manager · D&amp;D</text>
+      <text x="85" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">mouse-driven</text>
+      <text x="85" y="66" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">demos: doom, tetris, edit</text>
+    </g>
+    <g transform="translate(554, 36)">
+      <rect x="0" y="0" width="170" height="80" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1.2"/>
+      <text x="85" y="18" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="bold" font-family="monospace">Userspace drivers</text>
+      <text x="85" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">DRM · net (skeleton)</text>
+      <text x="85" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">holds DeviceIo caps</text>
+      <text x="85" y="66" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">P1 of microkernel</text>
+    </g>
+    <g transform="translate(734, 36)">
+      <rect x="0" y="0" width="170" height="80" rx="6" fill="#1f2335" stroke="#9ece6a" stroke-width="1.2"/>
+      <text x="85" y="18" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="bold" font-family="monospace">Shell</text>
+      <text x="85" y="36" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">12+ commands</text>
+      <text x="85" y="50" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">edit / mount / ps</text>
+      <text x="85" y="66" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">type 'help' at boot</text>
+    </g>
+  </g>
+
+  <!-- Syscall ABI arrows (down) -->
+  <g>
+    <line x1="200" y1="190" x2="200" y2="200" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-accent)"/>
+    <line x1="380" y1="190" x2="380" y2="200" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-accent)"/>
+    <line x1="560" y1="190" x2="560" y2="200" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-accent)"/>
+    <line x1="740" y1="190" x2="740" y2="200" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-accent)"/>
+    <line x1="900" y1="190" x2="900" y2="200" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow-accent)"/>
+    <text x="970" y="195" text-anchor="end" fill="#f7768e" font-size="10" font-family="monospace">syscall 0x80</text>
+  </g>
+
+  <!-- HAL arrows (down) -->
+  <g>
+    <line x1="200" y1="470" x2="200" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="380" y1="470" x2="380" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="560" y1="470" x2="560" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="740" y1="470" x2="740" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="900" y1="470" x2="900" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="970" y="475" text-anchor="end" fill="#565f89" font-size="10" font-family="monospace">HAL / port I/O</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(40, 600)">
+    <rect x="0" y="0" width="12" height="12" rx="2" fill="#9ece6a"/>
+    <text x="18" y="10" fill="#565f89" font-size="10" font-family="monospace">userspace (Ring 3)</text>
+    <rect x="180" y="0" width="12" height="12" rx="2" fill="#7aa2f7"/>
+    <text x="198" y="10" fill="#565f89" font-size="10" font-family="monospace">kernel (Ring 0)</text>
+    <rect x="340" y="0" width="12" height="12" rx="2" fill="#bb9af7"/>
+    <text x="358" y="10" fill="#565f89" font-size="10" font-family="monospace">eBPF VM</text>
+    <rect x="460" y="0" width="12" height="12" rx="2" fill="#f7768e"/>
+    <text x="478" y="10" fill="#565f89" font-size="10" font-family="monospace">capability bus / syscall</text>
+    <rect x="640" y="0" width="12" height="12" rx="2" fill="#3b4261"/>
+    <text x="658" y="10" fill="#565f89" font-size="10" font-family="monospace">hardware</text>
+  </g>
 </svg>

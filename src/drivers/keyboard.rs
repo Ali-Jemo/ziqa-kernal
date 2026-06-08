@@ -174,3 +174,14 @@ pub fn clear_editor_buf() {
 pub fn set_echo(enabled: bool) {
     *ECHO_ENABLED.lock() = enabled;
 }
+
+/// Push a raw byte into the input buffers (used by userspace keyboard driver)
+pub fn push_raw_byte(b: u8) {
+    if *ECHO_ENABLED.lock() {
+        if (b >= b' ' && b <= 126) || b == b'\n' || b == b'\r' {
+            crate::print!("{}", b as char);
+        }
+    }
+    INPUT_BUF.lock().push(b);
+    EDITOR_BUF.lock().push(b);
+}

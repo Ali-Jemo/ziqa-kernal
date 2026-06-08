@@ -10,6 +10,8 @@ pub struct Vma {
     pub is_file_backed: bool,
     pub file_path: Option<alloc::string::String>,
     pub file_offset: u64,
+    /// Optional eBPF program ID for behavioral monitoring
+    pub bco_hook: Option<u32>,
 }
 
 impl Vma {
@@ -21,6 +23,7 @@ impl Vma {
             is_file_backed: false,
             file_path: None,
             file_offset: 0,
+            bco_hook: None,
         }
     }
 
@@ -38,6 +41,7 @@ impl From<MemoryRegion> for Vma {
             is_file_backed: region.is_file_backed,
             file_path: None,
             file_offset: region.file_offset,
+            bco_hook: region.bco_hook,
         }
     }
 }

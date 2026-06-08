@@ -105,7 +105,10 @@ impl Framebuffer {
         crate::zig_ffi::clear(self.ptr, total_bytes, color);
         #[cfg(not(feature = "zig-hotpaths"))]
         {
-            let p = core::slice::from_raw_parts_mut(self.ptr, total_bytes / 4);
+            // The slice is in bytes; cast to u32 elements so we can write the
+            // color directly. The framebuffer's mapped region is page-aligned
+            // and at least 4-byte aligned, so this cast is well-defined.
+            let p = core::slice::from_raw_parts_mut(self.ptr as *mut u32, total_bytes / 4);
             for px in p.iter_mut() {
                 *px = color;
             }

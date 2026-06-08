@@ -1,5 +1,5 @@
 # ZiqaKernel / Axiq-IQ: Status & Engineering Roadmap
-*Updated: Wednesday, June 3, 2026*
+*Updated: Sunday, June 7, 2026*
 
 This document provides a comprehensive overview of the current state of the ZiqaKernel, its features from the low-level base to the high-level services, and the roadmap of what has been implemented and what remains for the future.
 
@@ -10,12 +10,12 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 
 ### What can we do with it now?
 *   **Run Graphical Apps**: Boot into a graphical desktop (NWCC) with a mouse-driven window manager.
-*   **Execute Linux Binaries**: Run static x86_64 Linux ELF binaries via the Linux ABI Plugin.
+*   **Execute Linux Binaries**: Run static x86_64 Linux ELF binaries via the Linux ABI Plugin — including a custom Doom ELF port compiled from Zig.
 *   **Dynamic Tracing**: Instrument the kernel in real-time using the **Obsidian-Tier eBPF VM** with tracepoints and shared maps.
 *   **Scalable Multi-Processing**: Utilize multiple CPU cores with fine-grained locking (no Big Kernel Lock).
 *   **Full TCP/UDP Lifecycle**: Run both client and server applications with `connect`, `listen`, and `accept` support.
 *   **Security Research**: Experiment with **Instant Recursive Capability Revocation** to sever process access system-wide.
-*   **Bare-metal Demos**: Run DOOM fire effects and graphical Tetris directly from the boot screen.
+*   **Bare-metal Demos**: Run DOOM fire effects, a standalone Doom ELF process (via `int 0x80` syscall forwarding), and graphical Tetris directly from the boot screen.
 
 ---
 
@@ -38,7 +38,7 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 *   **Filesystems**:
     *   **VFS**: Virtual Filesystem Switch with mount support.
     *   **ZiqaFS**: Journaling filesystem (Custom).
-    *   **FAT32**: Pure-Rust host-interop driver with file write, cluster allocation, file creation, and directory creation support.
+    *   **FAT32**: Pure-Rust host-interop driver with file write, cluster allocation, file creation, directory creation, rename, and truncate support.
     *   **RamFS & Page Cache**: High-speed memory-backed storage and LRU caching.
 *   **Network Stack**: `smoltcp`-based TCP/UDP socket layer with full server/client support, VirtIO-Net drivers.
 *   **Input/Output**: PS/2 Mouse (clamped 1080p), PS/2 Keyboard, UART serial, VGA LFB.
@@ -55,7 +55,7 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
     *   **Linux ABI**: 112 unique registered syscalls with 85+ functional implementations.
     *   **WASM ABI**: Experimental WebAssembly runtime integration.
 *   **eBPF Obsidian-Tier**: Advanced VM with Maps (Hash/Array/RingBuf), Tail Calls, Bounded Loops, and Tracepoints.
-*   **Compositor (NWCC)**: VGA-downsampled text-mode window manager with application API.
+*   **Compositor (NWCC)**: VGA-downsampled text-mode window manager with an application API.
 
 ---
 
@@ -72,13 +72,16 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 *   **Recursive Revocation**: Advanced capability security model.
 *   **Socket Stack (Full Lifecycle)**: TCP `listen` and `accept` are fully implemented and integrated with the Linux ABI.
 *   **Demand Paging Foundation**: Not-present page faults allocate and populate process pages from VMA metadata and stored ELF bytes.
+*   **FAT32**: Full read/write, rename, and truncate functionality.
+*   **Doom ELF Port**: Standalone Doom ELF binary (`src/zig/doom_port.zig`) compiled for x86_64-linux-musl, embedded in the kernel VFS at `/bin/doom`, and executed as a userspace process via `int 0x80` syscall forwarding (FB_BLIT, GET_TICKS, GET_KEY syscalls).
 
-### 🧪 IN-PROGRESS (Experimental / Skeleton)
-*   **Userspace Drivers**: Skeleton DRM and VirtIO-Net drivers (Microkernel phase).
-*   **FAT32 Write Path**: File writes, FAT updates, file creation, and directory creation are implemented; disk-backed unlink/rename and long filename support still need work.
-*   **POSIX Completeness**: 112 syscalls are registered; focusing on finishing signal management and advanced memory protection.
-*   **WASM ABI**: Can load modules but requires better host function coverage.
-*   **Kernel Threads**: `spawn_kthread()` and per-CPU scheduling support exist, but kernel thread lifecycle APIs remain limited compared with user processes.
+### 🧪 IN-PROGRESS (Experimental / Needs Maturation)
+*   **Userspace Drivers**: DRM driver now supports basic GPU command submission via IPC; VirtIO-Net driver implements full packet processing (RX rings, DMA buffer management, event loops) and command management via native syscalls; ready for network protocol stack integration.
+*   **POSIX Completeness**: Signal management is improving (trampoline logic and registration implemented); advanced memory protection polish remains required.
+*   **WASM ABI**: Host function dispatcher refactored to be modular and capability-aware; key WASI functions implemented (`fd_read`, `fd_write`, `args_get`, `args_sizes_get`, `proc_exit`); further expansion required for full capability mapping.
+*   **Kernel Threading**: `spawn_kthread()` supports generic arguments; `join` and `cancel` semantics are implemented; requires additional work on worker pools and scheduler parity with user processes.
+*   **Zig Build Orchestration**: Unified `build.zig` manages the full pipeline (Zig static libs → doom.elf → cargo build → bootimage → QEMU runners). The `build.rs` triggers Zig compilation for freestanding hot-path libs when `zig-hotpaths` feature is enabled.
+*   **Zig Hot-paths (blitter)**: Framebuffer blitter (`src/zig/blitter.zig`) with fill_rect, blit_bitmap, scroll_up, clear, doom_fire_step, fireworks_burst — called from Rust via C ABI. Compiled for `x86_64-freestanding-none` with ReleaseFast.
 
 ### ❌ MISSING (Not Yet Added / Future)
 *   **Production-grade Graphics**: Move from VGA LFB to real DRM/KMS acceleration.
@@ -86,15 +89,16 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 *   **Production Demand Paging**: Current demand paging is functional but rough; anonymous/file-backed page policy, eviction, swap, and stricter VMA source handling are still missing.
 *   **USB Stack**: No support for USB keyboards, mice, or mass storage yet.
 *   **Sound Subsystem**: No audio drivers or ABI.
-*   **Production Kernel Threading**: Need join/cancel semantics, arguments, worker pools, affinity controls, and clearer kernel/user scheduling parity.
+*   **Production Kernel Threading**: Need worker pools and affinity controls.
 
 ---
 
 ## 🚀 Future Vision (P2 Roadmap)
 1.  **Microkernel Maturation**: Move remaining Block, Net, and GPU driver logic into Ring 3 using `DeviceIo` capabilities. Current state is Phase 1: `DeviceIo` syscalls plus DRM/Net userspace driver skeletons, while block and several hardware drivers still initialize in kernel space.
 2.  **Native Rust ABI**: Move beyond Linux emulation to a native Ziqa-native ABI optimized for capability security.
-3.  **Zig Hot-paths**: Expand the use of Zig for performance-critical VFS and Networking hot-paths.
-4.  **Self-Hosting**: Port a compiler (Rustc/Zig) and build tools to run natively on ZiqaKernel.
+3.  **Zig Hot-paths (Expansion)**: Extend Zig usage beyond the blitter to VFS, networking, and filesystem hot-paths. The `build.zig` + `build.rs` infrastructure is in place for integrating more Zig code into the kernel.
+4.  **Doom ELF Maturation**: Connect the standalone `doom_port.zig` with `doomgeneric` C source (when imported) for a full playable Doom port. Currently the DG_* exports and syscall layer are ready for linking.
+5.  **Self-Hosting**: Port a compiler (Rustc/Zig) and build tools to run natively on ZiqaKernel.
 
 ---
 *ZiqaKernel is an architectural laboratory for exploring the limits of safety-critical systems.*

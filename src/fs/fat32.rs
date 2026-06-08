@@ -1339,8 +1339,39 @@ pub fn unlink_on_disk(path: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-pub fn rename_on_disk(_old: &str, _new: &str) -> Result<(), &'static str> {
-    Err("rename is not supported for FAT32 yet")
+pub fn rename_on_disk(old: &str, new: &str) -> Result<(), &'static str> {
+    let fs_guard = FAT32.lock();
+    let fs_arc = fs_guard.as_ref().ok_or("FAT32 filesystem not mounted")?;
+    let fs = fs_arc.lock();
+
+    let (old_parent, old_leaf) =
+        resolve_parent_dir(&*fs.disk, &fs.bpb, &fs.mount_point, old)?;
+    let (new_parent, new_leaf) =
+        resolve_parent_dir(&*fs.disk, &fs.bpb, &fs.mount_point, new)?;
+
+    if old_parent != new_parent {
+        return Err("Rename across directories not supported yet");
+    }
+
+    let (entry_cluster, entry_offset, _, _) = find_dir_entry(&*fs.disk, &fs.bpb, old_parent, &old_leaf)
+        .ok_or("Old file not found")?;
+    
+    let new_short_name = to_short_name(&new_leaf).ok_or("Invalid new filename")?;
+
+    let sector = fs.bpb.cluster_to_sector(entry_cluster);
+    let bytes_per_cluster = (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
+    let mut cluster_buf = vec![0u8; bytes_per_cluster];
+    
+    fs.disk.read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
+        .map_err(|_| "Failed to read directory sector")?;
+
+    let entry = &mut cluster_buf[entry_offset..entry_offset + 32];
+    entry[0..11].copy_from_slice(&new_short_name);
+
+    fs.disk.write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
+        .map_err(|_| "Failed to write directory sector")?;
+
+    Ok(())
 }
 
 pub fn truncate_on_disk(path: &str, new_size: usize) -> Result<(), &'static str> {
@@ -1354,31 +1385,74 @@ pub fn truncate_on_disk(path: &str, new_size: usize) -> Result<(), &'static str>
     let entry_info = find_dir_entry(&*fs.disk, &fs.bpb, parent_cluster, &leaf_name)
         .ok_or("File not found")?;
 
-    let (entry_cluster, entry_offset, first_cluster, _file_size) = entry_info;
+    let (entry_cluster, entry_offset, start_cluster, _old_size) = entry_info;
 
-    if new_size == 0 {
-        free_cluster_chain(&*fs.disk, &fs.bpb, first_cluster)
-            .map_err(|_| "Failed to free cluster chain")?;
+    let bytes_per_cluster = (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
+    let clusters_needed = if new_size == 0 {
+        0
+    } else {
+        (new_size + bytes_per_cluster - 1) / bytes_per_cluster
+    };
 
-        let bytes_per_cluster =
-            (fs.bpb.sectors_per_cluster as usize) * (fs.bpb.bytes_per_sector as usize);
-        let mut cluster_buf = vec![0u8; bytes_per_cluster];
-        let sector = fs.bpb.cluster_to_sector(entry_cluster);
-        fs.disk
-            .read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
-            .map_err(|_| "Failed to read directory sector")?;
-        let hi: u16 = 0;
-        let lo: u16 = 0;
-        cluster_buf[entry_offset + 20..entry_offset + 22].copy_from_slice(&hi.to_le_bytes());
-        cluster_buf[entry_offset + 26..entry_offset + 28].copy_from_slice(&lo.to_le_bytes());
-        cluster_buf[entry_offset + 28..entry_offset + 32].copy_from_slice(&0u32.to_le_bytes());
-        fs.disk
-            .write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
-            .map_err(|_| "Failed to write directory sector")?;
-        return Ok(());
+    let mut chain = if start_cluster == 0 {
+        Vec::new()
+    } else {
+        collect_cluster_chain(&*fs.disk, &fs.bpb, start_cluster)
+    };
+
+    let mut new_start_cluster = start_cluster;
+
+    // Shrink
+    if clusters_needed < chain.len() {
+        let first_to_free_idx = clusters_needed;
+        
+        // Mark new end of chain
+        if clusters_needed > 0 {
+            write_fat_entry(&*fs.disk, &fs.bpb, chain[clusters_needed - 1], 0x0FFF_FFFF)
+                .map_err(|_| "Failed to update end of chain")?;
+        } else {
+            new_start_cluster = 0;
+        }
+
+        // Free excess
+        for i in first_to_free_idx..chain.len() {
+            write_fat_entry(&*fs.disk, &fs.bpb, chain[i], 0)
+                .map_err(|_| "Failed to free cluster")?;
+        }
+        chain.truncate(clusters_needed);
+    }
+    // Expand
+    else if clusters_needed > chain.len() {
+        let mut last_cluster = chain.last().cloned();
+        let to_alloc = clusters_needed - chain.len();
+        for _ in 0..to_alloc {
+            let new_cl = allocate_cluster(&*fs.disk, &fs.bpb, last_cluster)
+                .ok_or("Disk Full")?;
+            if new_start_cluster == 0 {
+                new_start_cluster = new_cl;
+            }
+            chain.push(new_cl);
+            last_cluster = Some(new_cl);
+        }
     }
 
-    Err("truncate to non-zero is not supported for FAT32 yet")
+    // Update directory entry
+    let sector = fs.bpb.cluster_to_sector(entry_cluster);
+    let mut cluster_buf = vec![0u8; bytes_per_cluster];
+    fs.disk.read_sectors(sector, fs.bpb.sectors_per_cluster as u32, &mut cluster_buf)
+        .map_err(|_| "Failed to read directory sector")?;
+
+    let entry = &mut cluster_buf[entry_offset..entry_offset + 32];
+    let hi = ((new_start_cluster >> 16) & 0xFFFF) as u16;
+    let lo = (new_start_cluster & 0xFFFF) as u16;
+    entry[20..22].copy_from_slice(&hi.to_le_bytes());
+    entry[26..28].copy_from_slice(&lo.to_le_bytes());
+    entry[28..32].copy_from_slice(&(new_size as u32).to_le_bytes());
+
+    fs.disk.write_sectors(sector, fs.bpb.sectors_per_cluster as u32, &cluster_buf)
+        .map_err(|_| "Failed to write directory entry")?;
+
+    Ok(())
 }
 
 // ─── Trait helpers ───────────────────────────────────────────────────────────

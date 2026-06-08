@@ -10,42 +10,48 @@ pub const MODE_PAGE_FLIP: u64 = 0xc0206407;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // 1. Log startup
-    sys_write(1, b"[Userspace DRM] Driver started (Microkernel Mode)\n");
+    sys_write(1, b"[Userspace DRM] Driver started\n");
 
-    // 2. Request Hardware Access (MMIO for Framebuffer)
-    // In QEMU with virtio-gpu or standard VGA, BAR0 is often at 0xFD000000 or similar.
-    let phys_gpu_bar = 0xFD000000;
-    let bar_size = 0x1000000; // 16MB
-    
-    let virt_addr = syscall_dev_map(phys_gpu_bar, bar_size);
-    if virt_addr > 0 {
-        sys_write(1, b"[Userspace DRM] Successfully mapped GPU MMIO\n");
-    } else {
-        sys_write(1, b"[Userspace DRM] Failed to map GPU MMIO (Permission Denied?)\n");
+    // 1. Discover GPU IPC channel
+    let gpu_chan = syscall_get_gpu_chan();
+    if gpu_chan == 0 {
+        sys_write(1, b"[Userspace DRM] Failed to get GPU channel\n");
+        loop { syscall_yield(); }
     }
+    sys_write(1, b"[Userspace DRM] Connected to GPU channel\n");
 
-    // 3. Create an IPC channel to receive ioctls from the kernel gateway
-    let chan_id = syscall_ipc_create();
-    
-    // 4. Main Event Loop
+    // 2. Main Event Loop
     loop {
-        let mut msg = [0u8; 64];
-        let n = syscall_ipc_recv(chan_id, msg.as_mut_ptr(), 64);
+        // Send a draw test pattern command (code 2)
+        let cmd = [2u8]; 
+        syscall_ipc_send(gpu_chan, cmd.as_ptr(), 1);
         
-        if n > 0 {
-            // In a real implementation, we would decode the message
-            // and perform the hardware operations.
-            sys_write(1, b"[Userspace DRM] Received redirected ioctl request\n");
-            
-            // Example: hardware touch via I/O ports
-            syscall_dev_port_out(0x3D4, 1, 0x0E); // VGA CRTC Index
-        }
-        
-        // Yield to other processes
-        syscall_yield();
+        // Wait and flush
+        let flush = [1u8];
+        syscall_ipc_send(gpu_chan, flush.as_ptr(), 1);
+
+        for _ in 0..1000000 { syscall_yield(); }
     }
 }
+
+// ── Syscall Wrappers ─────────────────────────────────────────────────────────
+
+#[inline(always)]
+fn syscall_get_gpu_chan() -> u32 {
+    let res: u64;
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 1040, lateout("rax") res);
+    }
+    res as u32
+}
+
+#[inline(always)]
+fn syscall_ipc_send(chan: u32, ptr: *const u8, len: usize) {
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 1021, in("rdi") chan as u64, in("rsi") ptr as u64, in("rdx") len as u64);
+    }
+}
+// ... (rest of the file)
 
 // ── Syscall Wrappers ─────────────────────────────────────────────────────────
 

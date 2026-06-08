@@ -136,7 +136,7 @@ impl NetDevice {
             self.rx_bytes += data.len().min(MTU) as u64;
         } else {
             // Physical: transmit via VIRTIO_NET
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(feature = "net")]
             if let Some(net) = crate::drivers::virtio_net::VIRTIO_NET.lock().as_mut() {
                 let _ = net.transmit(data);
             }

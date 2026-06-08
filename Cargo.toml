@@ -40,6 +40,8 @@ fatfs = { version = "0.3.6", optional = true, default-features = false, features
 virtio-drivers = { version = "0.7.1", default-features = false, features = ["alloc"] }
 lz4_flex = { version = "0.11.6", default-features = false }
 libm = { version = "0.2.16", default-features = false }
+rmm = { path = "third_party/rmm" }
+bitflags = "2"
 
 
 

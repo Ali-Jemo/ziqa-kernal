@@ -11,7 +11,7 @@ use crate::process::vma::Vma;
 use signal::SignalState;
 use x86_64::structures::paging::PhysFrame;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pid(pub u64);
 
 impl Pid {
@@ -106,6 +106,8 @@ pub enum FdTarget {
     PipeWrite(u32),
     /// Regular file — index into FdTable::paths
     File(u8),
+    /// Scheme-backed file — index into FdTable::paths, and scheme handle ID
+    Scheme(u8, usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -169,6 +171,25 @@ impl FdTable {
         None
     }
 
+    /// Allocate a scheme-backed fd.
+    pub fn alloc_scheme(&mut self, path: &[u8], flags: u32, handle_id: usize) -> Option<usize> {
+        for (i, slot) in self.entries.iter_mut().enumerate().skip(3) {
+            if slot.is_none() {
+                let n = path.len().min(63);
+                self.paths[i][..n].copy_from_slice(&path[..n]);
+                self.paths[i][n] = 0;
+                self.path_lens[i] = n;
+                *slot = Some(FileDesc {
+                    target: FdTarget::Scheme(i as u8, handle_id),
+                    flags,
+                    offset: 0,
+                });
+                return Some(i);
+            }
+        }
+        None
+    }
+
     /// Allocate a generic fd (pipe, etc.)
     pub fn alloc(&mut self, desc: FileDesc) -> Option<usize> {
         for (i, slot) in self.entries.iter_mut().enumerate().skip(3) {
@@ -188,13 +209,14 @@ impl FdTable {
         self.entries.get_mut(fd)?.as_mut()
     }
 
-    /// Get the VFS path for a File fd.
+    /// Get the VFS path for a File or Scheme fd.
     pub fn path_of(&self, fd: usize) -> Option<&[u8]> {
         let desc = self.entries.get(fd)?.as_ref()?;
-        if let FdTarget::File(_) = desc.target {
-            Some(&self.paths[fd][..self.path_lens[fd]])
-        } else {
-            None
+        match desc.target {
+            FdTarget::File(_) | FdTarget::Scheme(_, _) => {
+                Some(&self.paths[fd][..self.path_lens[fd]])
+            }
+            _ => None,
         }
     }
 
@@ -262,6 +284,7 @@ pub struct Process {
     pub priority: u8,
     pub capabilities: CapabilitySpace,
     pub cpu_state: CpuState,
+    pub fpu_state: crate::arch::x86_64::FpuState,
     pub vmas: alloc::vec::Vec<Vma>,
     pub entry_point: VirtAddr,
     pub stack_top: VirtAddr,
@@ -317,6 +340,7 @@ impl Process {
             priority: 2,
             capabilities: CapabilitySpace::new(),
             cpu_state: cpu,
+            fpu_state: crate::arch::x86_64::FpuState::new(),
             vmas: alloc::vec::Vec::new(),
             entry_point: entry,
             stack_top: stack,

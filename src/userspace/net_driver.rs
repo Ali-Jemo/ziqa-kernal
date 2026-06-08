@@ -9,14 +9,76 @@ const PCI_DEVICE_VIRTIO_NET_LEGACY: u16 = 0x1000;
 const PCI_WILDCARD: u16 = 0xFFFF;
 const BAR_IS_IO: u64 = 1 << 63;
 
-const PCI_HOST_FEATURES: u16 = 0x00;
-const PCI_GUEST_FEATURES: u16 = 0x04;
-const PCI_DEVICE_STATUS: u16 = 0x12;
-const PCI_ISR: u16 = 0x13;
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VirtQueueDesc {
+    addr: u64,
+    len: u32,
+    flags: u16,
+    next: u16,
+}
 
-const STATUS_RESET: u8 = 0x00;
-const STATUS_ACKNOWLEDGE: u8 = 0x01;
-const STATUS_DRIVER: u8 = 0x02;
+#[repr(C)]
+struct VirtQueueAvail {
+    flags: u16,
+    idx: u16,
+    ring: [u16; 256],
+    used_event: u16,
+}
+
+#[repr(C)]
+struct VirtQueueUsedElem {
+    id: u32,
+    len: u32,
+}
+
+#[repr(C)]
+struct VirtQueueUsed {
+    flags: u16,
+    idx: u16,
+    ring: [VirtQueueUsedElem; 256],
+    avail_event: u16,
+}
+
+const VQ_DESC_F_WRITE: u16 = 2;
+const NUM_DESC: usize = 256;
+const QUEUE_MEM_SIZE: usize = 16384;
+static mut RX_QUEUE_DMA: [u8; QUEUE_MEM_SIZE] = [0u8; QUEUE_MEM_SIZE];
+static mut TX_QUEUE_DMA: [u8; QUEUE_MEM_SIZE] = [0u8; QUEUE_MEM_SIZE];
+const RX_BUF_SIZE: usize = 1526;
+static mut RX_BUFFERS: [[u8; RX_BUF_SIZE]; 256] = [[0u8; RX_BUF_SIZE]; 256];
+    mem: *mut u8,
+    size: u16,
+    last_used_idx: u16,
+}
+
+impl VirtQueueLegacy {
+    fn new(mem: *mut u8, size: u16) -> Self {
+        Self { mem, size, last_used_idx: 0 }
+    }
+
+    fn desc(&self, i: usize) -> &mut VirtQueueDesc {
+        unsafe { &mut *(self.mem as *mut VirtQueueDesc).add(i) }
+    }
+
+    fn avail_mut(&self) -> &mut VirtQueueAvail {
+        let off = self.size as usize * 16;
+        unsafe { &mut *(self.mem.add(off) as *mut VirtQueueAvail) }
+    }
+
+    fn used(&self) -> &VirtQueueUsed {
+        let desc_bytes = self.size as usize * 16;
+        let avail_bytes = 6 + self.size as usize * 2;
+        let off = (desc_bytes + avail_bytes + 4095) & !4095;
+        unsafe { &*(self.mem.add(off) as *const VirtQueueUsed) }
+    }
+
+    fn reclaim_completed(&mut self) {
+        while self.last_used_idx != self.used().idx {
+            self.last_used_idx = self.last_used_idx.wrapping_add(1);
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -59,8 +121,38 @@ pub extern "C" fn _start() -> ! {
 
     let _features = syscall_dev_port_in(io_base + PCI_HOST_FEATURES, 4);
     syscall_dev_port_out(io_base + PCI_GUEST_FEATURES, 4, 0);
-
-    sys_write(1, b"[Userspace Net] Device acknowledged. Waiting for interrupts...\n");
+    
+    // We need the physical addresses of the RX and TX queues for virtio ring setup.
+    let rx_phys = syscall_dev_virt_to_phys(unsafe { RX_QUEUE_DMA.as_ptr() as u64 });
+    let tx_phys = syscall_dev_virt_to_phys(unsafe { TX_QUEUE_DMA.as_ptr() as u64 });
+    if is_err(rx_phys) || is_err(tx_phys) {
+        sys_write(1, b"[Userspace Net] Failed to get physical address for DMA queues\n");
+        park();
+    }
+    // Pass the physical addresses (PFN) to the device
+    // PFN = physical address / 4096 (assuming 4KB pages)
+    // Select RX Queue (index 0)
+    syscall_dev_port_out(io_base + 0x0E, 2, 0);
+    syscall_dev_port_out(io_base + 0x08, 4, rx_phys / 4096);
+    // Select TX Queue (index 1)
+    syscall_dev_port_out(io_base + 0x0E, 2, 1);
+    syscall_dev_port_out(io_base + 0x08, 4, tx_phys / 4096);
+    let mut rx_q = VirtQueueLegacy::new(unsafe { RX_QUEUE_DMA.as_mut_ptr() }, 256);
+    let mut tx_q = VirtQueueLegacy::new(unsafe { TX_QUEUE_DMA.as_mut_ptr() }, 256);
+    // Populate RX queue with buffers so we can actually receive packets
+    for i in 0..256 {
+        let phys = syscall_dev_virt_to_phys(unsafe { RX_BUFFERS[i].as_ptr() as u64 });
+        let desc = rx_q.desc(i);
+        desc.addr = phys;
+        desc.len = RX_BUF_SIZE as u32;
+        desc.flags = VQ_DESC_F_WRITE;
+        desc.next = 0;
+        rx_q.avail_mut().ring[i] = i as u16;
+    }
+    rx_q.avail_mut().idx = 256;
+    // Kick RX Queue
+    syscall_dev_port_out(io_base + 0x10, 2, 0);
+    sys_write(1, b"[Userspace Net] Device acknowledged. Starting event loop...\n");
 
     // 2. Main Event Loop
     loop {
@@ -71,7 +163,24 @@ pub extern "C" fn _start() -> ! {
         let isr = syscall_dev_port_in(io_base + PCI_ISR, 1) as u8;
         if isr & 1 != 0 {
             sys_write(1, b"[Userspace Net] Received Packet IRQ!\n");
-            // Perform packet RX logic...
+            rx_q.reclaim_completed();
+            tx_q.reclaim_completed();
+            // Check for new RX packets
+            while rx_q.last_used_idx != rx_q.used().idx {
+                let used_idx = rx_q.last_used_idx as usize % 256;
+                let elem = &rx_q.used().ring[used_idx];
+                let desc_id = elem.id as usize;
+                // We got a packet!
+                sys_write(1, b"[Userspace Net] Packet received!\n");
+                // Re-enqueue the buffer
+                let avail_idx = rx_q.avail_mut().idx as usize % 256;
+                rx_q.avail_mut().ring[avail_idx] = desc_id as u16;
+                // barrier here in real impl
+                rx_q.avail_mut().idx = rx_q.avail_mut().idx.wrapping_add(1);
+                rx_q.last_used_idx = rx_q.last_used_idx.wrapping_add(1);
+            }
+            // Kick RX Queue again
+            syscall_dev_port_out(io_base + 0x10, 2, 0);
         }
         
         // Yield if nothing else to do
@@ -157,6 +266,14 @@ fn syscall_dev_pci_irq(bdf: u64) -> u64 {
     res
 }
 
+#[inline(always)]
+fn syscall_dev_virt_to_phys(virt: u64) -> u64 {
+    let res: u64;
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 1038, in("rdi") virt, lateout("rax") res);
+    }
+    res
+}
 #[inline(always)]
 fn syscall_yield() {
     unsafe {

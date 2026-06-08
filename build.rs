@@ -10,6 +10,7 @@ fn main() {
             .args(&[
                 "build",
                 "-Dtarget=x86_64-freestanding-none",
+                "-Dskip-cargo=true",
                 "--release=fast",
             ])
             .status()

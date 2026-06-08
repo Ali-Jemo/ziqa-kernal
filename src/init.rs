@@ -72,6 +72,10 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     
     drivers::acpi::init();
 
+    // Register Mouse IPC Channel (Channel ID 1)
+    crate::ipc::register_channel(1, alloc::sync::Arc::new(crate::ipc::Channel::new()));
+    // IPC Server Spawn: crate::process::scheduler::spawn_kthread(move || crate::drivers::mouse_server::run_mouse_server(1));
+
     // ── SMP / APIC Init ──────────────────────────────────────────────────
     if let Some(acpi_info) = &*drivers::acpi::ACPI_INFO.lock() {
         raw_serial_log("init: SMP/APIC init started\n");

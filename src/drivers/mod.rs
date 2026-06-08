@@ -1,6 +1,4 @@
 pub mod device_manager;
-pub mod virtio_net;
-pub mod virtio_net_proto;
 pub mod ata;
 pub mod block;
 pub mod block_registry;
@@ -8,12 +6,16 @@ pub mod block_registry;
 pub mod drm;
 pub mod framebuffer;
 pub mod keyboard;
+#[cfg(feature = "net")]
+pub mod virtio_net;
 pub mod uart;
 pub mod vga;
 pub mod virtio_block;
 pub mod virtio_block_new;
 pub mod virtio_hal;
 pub mod ps2_mouse;
+pub mod virtio_gpu;
+pub mod fb_console;
 pub mod pci;
 pub mod acpi;
-// pub mod input; // Directory is empty, removing from module tree
+pub mod mouse_server;

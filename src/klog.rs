@@ -164,6 +164,15 @@ macro_rules! klog {
     }};
 }
 
+/// Write a single character to the serial console.
+pub fn putc(c: char) {
+    use core::fmt::Write;
+    let mut buf = [0u8; 4];
+    let s = c.encode_utf8(&mut buf);
+    let mut serial = crate::drivers::uart::SERIAL1.lock();
+    let _ = serial.write_str(s);
+}
+
 /// Format into a fixed stack buffer (no alloc)
 pub fn fmt_to_buf<'a>(buf: &'a mut [u8; 128], args: core::fmt::Arguments<'_>) -> &'a str {
     use core::fmt::Write;

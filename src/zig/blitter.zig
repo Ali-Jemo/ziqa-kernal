@@ -528,6 +528,28 @@ export fn zig_draw_line(
 
 // ─── Fireworks Burst ────────────────────────────────────────────────────────
 
+/// Sine approximation using a 256-entry lookup table with linear interpolation.
+/// Single-precision error < 0.002, sufficient for particle animation.
+/// Argument x is in degrees (0.0 - 360.0).
+fn sin_approx(x: f32) f32 {
+    const table = comptime genSinTable(256);
+    const idx = @mod(x, 360.0) * (256.0 / 360.0);
+    const i = @as(usize, @intFromFloat(@floor(idx)));
+    const frac = idx - @floor(idx);
+    const ia = i & 255;
+    const ib = (i + 1) & 255;
+    return table[ia] + frac * (table[ib] - table[ia]);
+}
+
+fn genSinTable(comptime n: usize) [n]f32 {
+    var table: [n]f32 = undefined;
+    for (&table, 0..) |*v, i| {
+        const angle = @as(f32, @floatFromInt(i)) * 360.0 / @as(f32, @floatFromInt(n));
+        v.* = @sin(angle * std.math.pi / 180.0);
+    }
+    return table;
+}
+
 /// Generate a fireworks/explosion burst of particles at (cx, cy).
 /// Renders directly to the framebuffer. `particle_buf` is a scratch buffer
 /// that must be at least `max_particles * 4` bytes (x,y,vx,vy as i16).
@@ -558,8 +580,10 @@ export fn zig_fireworks_burst(
         const seed = hash32(i *% 374761393 +% tick *% 668265263);
         const angle = @as(f32, @floatFromInt(seed & 0xFFFF)) * 360.0 / 65536.0;
         const vel = @as(f32, @floatFromInt((seed >> 16) & 0xFF)) * @as(f32, @floatFromInt(speed)) / 128.0;
-        const vx: i16 = @intFromFloat(@cos(angle) * vel);
-        const vy: i16 = @intFromFloat(@sin(angle) * vel);
+        const sina = sin_approx(angle);
+        const cosa = sin_approx(angle + 90.0);
+        const vx: i16 = @intFromFloat(cosa * vel);
+        const vy: i16 = @intFromFloat(sina * vel);
 
         const off = @as(usize, i) * 4;
         if (off + 4 > buf_size) break;

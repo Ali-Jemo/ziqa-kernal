@@ -13,13 +13,16 @@
 #define ZIQA_CAP_WRITE   1002
 #define ZIQA_CAP_CLOSE   1003
 #define ZIQA_CAP_SEEK    1004
-
 // Standard POSIX error codes
 #define ENOENT 2
 #define EIO    5
 #define EBADF  9
 #define EMFILE 24
 #define EINVAL 22
+
+#define ZIQA_FORK        57
+#define ZIQA_EXECVE      59
+#define ZIQA_WAITPID     61
 
 // Internal helper for string length
 static size_t libposix_strlen(const char *s) {
@@ -194,4 +197,90 @@ ssize_t write(int fd, const void *buf, size_t count) {
     // Update internal offset
     fd_table[fd].offset += ret;
     return (ssize_t)ret;
+}
+int close(int fd) {
+    if (fd < 0 || fd >= MAX_FDS || !fd_table[fd].active) {
+        errno = EBADF;
+        return -1;
+    }
+    uint64_t cap_id = fd_table[fd].cap_id;
+    uint64_t ret = ziqa_syscall(ZIQA_CAP_CLOSE, cap_id, 0, 0, 0);
+    fd_table[fd].active = 0;
+    if (ret > 0xFFFFFFFFFFFFF000ULL) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+int dup(int oldfd) {
+    if (oldfd < 0 || oldfd >= MAX_FDS || !fd_table[oldfd].active) {
+        errno = EBADF;
+        return -1;
+    }
+    int newfd = alloc_fd();
+    if (newfd < 0) {
+        errno = EMFILE;
+        return -1;
+    }
+    fd_table[newfd].cap_id = fd_table[oldfd].cap_id;
+    fd_table[newfd].offset = fd_table[oldfd].offset;
+    return newfd;
+}
+int dup2(int oldfd, int newfd) {
+    if (oldfd < 0 || oldfd >= MAX_FDS || !fd_table[oldfd].active) {
+        errno = EBADF;
+        return -1;
+    }
+    if (newfd < 0 || newfd >= MAX_FDS) {
+        errno = EBADF;
+        return -1;
+    }
+    if (oldfd == newfd) {
+        return newfd;
+    }
+    if (fd_table[newfd].active) {
+        close(newfd);
+    }
+    fd_table[newfd].active = 1;
+    fd_table[newfd].cap_id = fd_table[oldfd].cap_id;
+    fd_table[newfd].offset = fd_table[oldfd].offset;
+    return newfd;
+}
+off_t lseek(int fd, off_t offset, int whence) {
+    if (fd < 0 || fd >= MAX_FDS || !fd_table[fd].active) {
+        errno = EBADF;
+        return -1;
+    }
+    uint64_t cap_id = fd_table[fd].cap_id;
+    uint64_t ret = ziqa_syscall(ZIQA_CAP_SEEK, cap_id, (uint64_t)offset, (uint64_t)whence, 0);
+    if (ret > 0xFFFFFFFFFFFFF000ULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    fd_table[fd].offset = ret;
+    return (off_t)ret;
+}
+pid_t fork(void) {
+    uint64_t ret = ziqa_syscall(ZIQA_FORK, 0, 0, 0, 0);
+    if (ret > 0xFFFFFFFFFFFFF000ULL) {
+        errno = EAGAIN; // simplification
+        return -1;
+    }
+    return (pid_t)ret;
+}
+int execve(const char *pathname, char *const argv[], char *const envp[]) {
+    uint64_t ret = ziqa_syscall(ZIQA_EXECVE, (uint64_t)pathname, (uint64_t)argv, (uint64_t)envp, 0);
+    if (ret > 0xFFFFFFFFFFFFF000ULL) {
+        errno = ENOENT; // simplification
+        return -1;
+    }
+    return 0; // should not return on success
+}
+pid_t waitpid(pid_t pid, int *status, int options) {
+    uint64_t ret = ziqa_syscall(ZIQA_WAITPID, (uint64_t)pid, (uint64_t)status, (uint64_t)options, 0);
+    if (ret > 0xFFFFFFFFFFFFF000ULL) {
+        errno = ECHILD;
+        return -1;
+    }
+    return (pid_t)ret;
 }
