@@ -247,6 +247,7 @@ fn encode_fd_target(target: &FdTarget) -> (u8, u32) {
         FdTarget::PipeRead(id)  => (3, *id),
         FdTarget::PipeWrite(id) => (4, *id),
         FdTarget::File(idx)     => (5, *idx as u32),
+        FdTarget::Scheme(idx, handle) => (6, ((*idx as u32) << 16) | (*handle as u32)),
     }
 }
 
@@ -258,6 +259,11 @@ fn decode_fd_target(tag: u8, data: u32) -> Option<FdTarget> {
         3 => Some(FdTarget::PipeRead(data)),
         4 => Some(FdTarget::PipeWrite(data)),
         5 => Some(FdTarget::File(data as u8)),
+        6 => {
+            let idx = (data >> 16) as u8;
+            let handle = (data & 0xFFFF) as usize;
+            Some(FdTarget::Scheme(idx, handle))
+        }
         _ => None,
     }
 }

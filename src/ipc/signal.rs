@@ -35,8 +35,17 @@ impl SignalQueue {
         for i in 0..32 {
             if (self.pending >> i) & 1 != 0 {
                 self.pending &= !(1 << i);
-                // In a real impl, we'd map bit index back to enum
-                return Some(Signal::Kill);
+                let sig = match i {
+                    9 => Some(Signal::Kill),
+                    19 => Some(Signal::Stop),
+                    18 => Some(Signal::Continue),
+                    10 => Some(Signal::Usr1),
+                    12 => Some(Signal::Usr2),
+                    _ => None,
+                };
+                if sig.is_some() {
+                    return sig;
+                }
             }
         }
         None
