@@ -198,9 +198,26 @@ extern "x86-interrupt" fn page_fault_handler(
             return crate::memory::paging::handle_cow_fault(pt_frame, fault_addr);
         }
 
-        // Demand page
+        // Demand page with binary data copying if applicable
+        let page_addr = fault_addr.align_down(4096u64);
+        let page_offset_in_vma = page_addr.as_u64() - vma.start.as_u64();
+        
+        let mut temp_buf = [0u8; 4096];
+        let mut init_data = None;
+        
+        if !proc.binary_data.is_empty() && page_offset_in_vma < vma.file_size {
+            let binary_offset = (vma.file_offset + page_offset_in_vma) as usize;
+            let copy_len = (vma.file_size - page_offset_in_vma).min(4096) as usize;
+            if binary_offset < proc.binary_data.len() {
+                let available = proc.binary_data.len() - binary_offset;
+                let actual_len = copy_len.min(available);
+                temp_buf[..actual_len].copy_from_slice(&proc.binary_data[binary_offset..binary_offset + actual_len]);
+                init_data = Some(&temp_buf[..actual_len]);
+            }
+        }
+
         let page_flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
-        crate::memory::paging::demand_page_for_frame(pt_frame, fault_addr, page_flags)
+        crate::memory::paging::demand_page_for_frame(pt_frame, fault_addr, page_flags, init_data)
     }).unwrap_or(false);
 
     if handled {

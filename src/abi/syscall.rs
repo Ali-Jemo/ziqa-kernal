@@ -839,6 +839,7 @@ fn ziqa_dev_map(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
         is_file_backed: false,
         file_path: None,
         file_offset: 0,
+        file_size: 0,
         bco_hook: None,
     }));
     

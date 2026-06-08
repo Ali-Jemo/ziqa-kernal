@@ -97,6 +97,7 @@ impl Scheduler {
             is_file_backed: false,
             file_path: None,
             file_offset: 0,
+            file_size: 0,
             bco_hook: None,
         }));
 
@@ -162,6 +163,7 @@ impl Scheduler {
             is_file_backed: false,
             file_path: None,
             file_offset: 0,
+            file_size: 0,
             bco_hook: None,
         }));
 

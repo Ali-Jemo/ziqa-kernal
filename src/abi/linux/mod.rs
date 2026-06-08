@@ -480,6 +480,7 @@ fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         is_file_backed: !is_anonymous,
         file_path: None,
         file_offset: 0,
+        file_size: 0,
         bco_hook: None,
     });
     

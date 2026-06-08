@@ -88,6 +88,7 @@ pub struct Grant {
     pub is_file_backed: bool,
     pub file_path: Option<alloc::string::String>,
     pub file_offset: u64,
+    pub file_size: u64,
     /// Optional eBPF program ID for behavioral monitoring
     pub bco_hook: Option<u32>,
 }
@@ -583,6 +584,7 @@ pub fn demand_page_for_frame(
     pt_frame: PhysFrame,
     fault_addr: VirtAddr,
     page_flags: PageTableFlags,
+    init_data: Option<&[u8]>,
 ) -> bool {
     let new_frame = {
         let mut fa_guard = FRAME_ALLOCATOR.lock();
@@ -595,6 +597,19 @@ pub fn demand_page_for_frame(
     };
 
     let po = phys_offset();
+    let frame_ptr = (po + new_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+    unsafe {
+        if let Some(data) = init_data {
+            let len = data.len().min(4096);
+            core::ptr::copy_nonoverlapping(data.as_ptr(), frame_ptr, len);
+            if len < 4096 {
+                core::ptr::write_bytes(frame_ptr.add(len), 0, 4096 - len);
+            }
+        } else {
+            core::ptr::write_bytes(frame_ptr, 0, 4096);
+        }
+    }
+
     let l4 = unsafe { frame_as_page_table_mut(pt_frame) };
     let mut mapper = unsafe { OffsetPageTable::new(l4, po) };
     let page = Page::containing_address(fault_addr);
