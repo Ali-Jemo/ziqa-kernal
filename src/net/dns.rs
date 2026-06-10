@@ -45,13 +45,16 @@ fn resolve_via_smoltcp(hostname: &str) -> Option<Ipv4Address> {
     let dns_socket = dns::Socket::new(&servers, vec![]);
     let handle = stack.sockets.add(dns_socket);
 
-    let query = {
-        let iface = &mut stack.iface;
-        let sockets = &mut stack.sockets;
-        sockets
-            .get_mut::<dns::Socket>(handle)
-            .start_query(iface.context(), hostname, DnsQueryType::A)
-            .ok()?
+    let query = match stack
+        .sockets
+        .get_mut::<dns::Socket>(handle)
+        .start_query(stack.iface.context(), hostname, DnsQueryType::A)
+    {
+        Ok(q) => q,
+        Err(_) => {
+            stack.sockets.remove(handle);
+            return None;
+        }
     };
 
     let deadline = crate::timer::uptime_ms() + DNS_TIMEOUT_MS;
@@ -60,11 +63,12 @@ fn resolve_via_smoltcp(hostname: &str) -> Option<Ipv4Address> {
     while crate::timer::uptime_ms() < deadline {
         stack.poll();
 
-        match stack
+        let result = stack
             .sockets
             .get_mut::<dns::Socket>(handle)
-            .get_query_result(query)
-        {
+            .get_query_result(query);
+
+        match result {
             Ok(addrs) => {
                 if let Some(IpAddress::Ipv4(ip)) = addrs.iter().next() {
                     answer = Some(*ip);

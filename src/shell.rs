@@ -1,4 +1,3 @@
-/// Interactive shell for ZiqaKernel
 
 use alloc::vec::Vec;
 use alloc::string::String;
@@ -897,9 +896,8 @@ impl Shell {
             #[cfg(feature = "net")]
             ("Network", &[
                 ("netstat",          "network device statistics"),
-                ("ifconfig",         "interface addresses and stats"),
-                ("ping [-c N] <ip>", "ICMP echo with RTT stats"),
-                ("wget [-O f] <url>","HTTP GET, saves to /tmp/"),
+                ("ping [-c N] <ip>", "ICMP echo (SLIRP: gateway only, no external ICMP)"),
+                ("wget [-O f] <url>", "HTTP GET (SLIRP: use IP literals, limited DNS)"),
             ]),
             #[cfg(feature = "games")]
             ("Entertainment", &[
@@ -1956,6 +1954,7 @@ impl Shell {
     }
 
     #[cfg(feature = "net")]
+    #[cfg(feature = "net")]
     fn cmd_ping(&mut self, args: &[String]) -> i32 {
         let joined = args.join(" ");
         let mut count: usize = 4;
@@ -1975,6 +1974,8 @@ impl Shell {
         if host.is_empty() {
             println!("Usage: ping [-c count] <ip>");
             println!("  Note: only IPv4 literals supported (e.g. ping 10.0.2.2)");
+            println!("  Note: QEMU user networking (SLIRP) does not forward ICMP to external hosts.");
+            println!("  Use 'ping 10.0.2.2' for gateway, or 'wget' for TCP connectivity test.");
             return 1;
         }
 
@@ -2097,6 +2098,8 @@ impl Shell {
             println!("Usage: wget [-O filename] <url>");
             println!("  Example: wget http://10.0.2.2/index.html");
             println!("  Note: only http:// and IPv4 hosts supported");
+            println!("  Note: QEMU user networking (SLIRP) has limited DNS/ICMP support.");
+            println!("  Use IP literals (e.g., wget http://10.0.2.2/) for best results.");
             return 1;
         }
 

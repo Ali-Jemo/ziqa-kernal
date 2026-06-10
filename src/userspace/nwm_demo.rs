@@ -7,6 +7,7 @@
 ///        Terminal: type+Enter; Editor: type, s=save, arrows=cursor
 
 use crate::process::Pid;
+use libm;
 
 const W: usize = 80;
 const H: usize = 25;
@@ -129,21 +130,23 @@ fn box_draw(s:&mut Screen, x:usize, y:usize, w:usize, h:usize, at:u8) {
 
 // ── App kinds ─────────────────────────────────────────────────────────────────
 #[derive(Clone,Copy,PartialEq)]
-enum App { Terminal, SysMon, Files, Network, Editor, About }
+enum App { Terminal, SysMon, Files, Network, Editor, About, Cube3D }
 
 impl App {
     fn title(self) -> &'static str { match self {
         App::Terminal => "Terminal", App::SysMon => "System Monitor",
         App::Files    => "File Manager", App::Network => "Network",
-        App::Editor   => "Text Editor", App::About => "About ZiqaOS",
+        App::Editor   => "Text Editor", App::About   => "About ZiqaOS",
+        App::Cube3D   => "3D Cube",
     }}
     fn default_size(self) -> (usize,usize) { match self {
-        App::SysMon  => (42,16),
-        App::Files   => (50,14),
-        App::Network => (44,14),
-        App::About   => (36,16),
-        App::Editor  => (50,16),
-        _            => (44,16),
+        App::Terminal => (44,16),
+        App::SysMon   => (42,16),
+        App::Files    => (50,14),
+        App::Network  => (44,14),
+        App::Editor   => (50,16),
+        App::About    => (36,16),
+        App::Cube3D   => (40,18),
     }}
 }
 
@@ -307,6 +310,70 @@ fn render_sysmon(s:&mut Screen, x:usize, y:usize, w:usize, h:usize, t:u32){
         s.print_n(x+8,r,sec/3600,2,0x0B); s.put(x+10,r,b'h',0x08);
         s.print_n(x+11,r,(sec/60)%60,2,0x0B); s.put(x+13,r,b'm',0x08);
         s.print_n(x+14,r,sec%60,2,0x0B); s.put(x+16,r,b's',0x08);
+    }
+}
+// ── 3D Rotating Cube ──────────────────────────────────────────────────────────
+
+fn render_cube3d(s: &mut Screen, cx: usize, cy: usize, w: usize, h: usize, t: u32) {
+    let hw = w / 2;
+    let hh = h / 2;
+    let bw = w.min(40);
+    let bh = h.min(20);
+    let yaw   = t as f32 * 0.07;
+    let pitch = libm::sinf(t as f32 * 0.05) * 0.6;
+    let cy_f = libm::cosf(yaw);
+    let sy_f = libm::sinf(yaw);
+    let cpf = libm::cosf(pitch);
+    let spf = libm::sinf(pitch);
+
+    const CAM: f32 = 3.5;
+    const V: [(f32, f32, f32); 8] = [
+        (-1.0, -1.0, -1.0),( 1.0, -1.0, -1.0),( 1.0,  1.0, -1.0),(-1.0,  1.0, -1.0),
+        (-1.0, -1.0,  1.0),( 1.0, -1.0,  1.0),( 1.0,  1.0,  1.0),(-1.0,  1.0,  1.0),
+    ];
+    const E: [(u8, u8); 12] = [
+        (0,1),(1,2),(2,3),(3,0),
+        (4,5),(5,6),(6,7),(7,4),
+        (0,4),(1,5),(2,6),(3,7),
+    ];
+
+    let mut pv = [(0i32, 0i32); 8];
+    for i in 0..8 {
+        let (vx, vy, vz) = V[i];
+        let x1 = vx * cy_f - vz * sy_f;
+        let z1 = vx * sy_f + vz * cy_f;
+        let y1 = vy * cpf - z1 * spf;
+        let z2 = vy * spf + z1 * cpf + CAM;
+        if z2 <= 0.1 { pv[i] = (-999, -999); continue; }
+        let sc = 2.2 / z2;
+        pv[i] = ((x1 * sc * hw as f32) as i32 + hw as i32,
+                 (y1 * sc * hh as f32) as i32 + hh as i32);
+    }
+
+    for (ei, &(a, b)) in E.iter().enumerate() {
+        let (x0, y0) = pv[a as usize];
+        let (x1, y1) = pv[b as usize];
+        if x0 < -500 || x1 < -500 { continue; }
+        let col = 0x0A + ((ei as u32 + t / 6) % 6) as u8;
+        line(s, cx, cy, bw, bh, x0, y0, x1, y1, b'*', col);
+    }
+}
+
+fn line(s: &mut Screen, ox: usize, oy: usize, bw: usize, bh: usize,
+        mut x0: i32, mut y0: i32, x1: i32, y1: i32, ch: u8, at: u8) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        if x0 >= 0 && x0 < bw as i32 && y0 >= 0 && y0 < bh as i32 {
+            s.put(ox + x0 as usize, oy + y0 as usize, ch, at);
+        }
+        if x0 == x1 && y0 == y1 { break; }
+        let e2 = 2 * err;
+        if e2 >= dy { err += dy; x0 += sx; }
+        if e2 <= dx { err += dx; y0 += sy; }
     }
 }
 
@@ -635,6 +702,7 @@ const MENU_APPS:&[(App,&str,&str)]=&[
     (App::Network, "[4] Network",     "Network stats & info"),
     (App::Editor,  "[5] Text Editor", "Edit text files"),
     (App::About,   "[6] About",       "About ZiqaOS"),
+    (App::Cube3D,  "[7] 3D Cube",     "Rotating wireframe cube"),
 ];
 
 fn draw_startmenu(s:&mut Screen, sel:usize){
@@ -716,6 +784,7 @@ fn draw_window(s:&mut Screen, win:&Win, active:bool, t:u32,
         App::Network  => render_network(s,cx,cy,cw,ch,t),
         App::Editor   => render_editor(s,cx,cy,cw,ch,ed,t),
         App::About    => render_about(s,cx,cy,cw,ch,t),
+        App::Cube3D   => render_cube3d(s, cx, cy, cw, ch, t),
     }
 }
 
@@ -1038,14 +1107,14 @@ pub fn run(){
             if ctx.open { ctx.open=false; }
             else if menu_open {
                 match key {
-                    b'j'|b'B' => { menu_sel=(menu_sel+1)%MENU_APPS.len(); }
+                    b'1'..=b'7' => { let idx=(key-b'1')as usize; if idx<MENU_APPS.len(){launch!(MENU_APPS[idx].0);} menu_open=false; }
                     b'k'|b'A' => { menu_sel=menu_sel.saturating_sub(1); }
                     b'\r'|b'\n' => { launch!(MENU_APPS[menu_sel].0); menu_open=false; }
                     b' '|0x1B  => { menu_open=false; }
-                    b'1'..=b'6' => { launch!(MENU_APPS[(key-b'1')as usize].0); menu_open=false; }
                     _ => {}
                 }
-            } else {
+            }
+            else {
                 let act=active_slot(&zorder,zlen);
                 let act_app=act.and_then(|i|wins[i].as_ref()).map(|w|w.app);
                 match key {
@@ -1061,7 +1130,7 @@ pub fn run(){
                     }
                     b'm' => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.minimized=!w.minimized;}}}
                     b'x' => { if let Some(i)=act{ close_slot!(i); }}
-                    b'1'..=b'6' => { launch!(MENU_APPS[(key-b'1')as usize].0); }
+                    b'1'..=b'7' => { launch!(MENU_APPS[(key-b'1')as usize].0); }
                     b'A' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y>DESK_TOP{w.y-=1;}}}}
                     b'B' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y+w.h<=DESK_BOT{w.y+=1;}}}}
                     b'C' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x+w.w<W{w.x+=1;}}}}
