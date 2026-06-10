@@ -48,17 +48,52 @@ pub fn _rmm_set_allocator(alloc: rmm::BuddyAllocator<rmm::x86_64::X8664Arch>) {
 /// Init hook: initialize RMM from boot info
 pub unsafe fn rmm_init_from_bootinfo(boot_info: &'static bootloader::BootInfo) {
     use rmm::{BumpAllocator, BuddyAllocator, MemoryArea};
+    use bootloader::bootinfo::MemoryRegionType;
 
-    // Convert bootloader MemoryRegion to rmm MemoryArea
-    let areas = boot_info.memory_map.iter().map(|region| {
-        MemoryArea {
-            base: rmm::PhysicalAddress::new(region.range.start_addr() as usize),
-            size: (region.range.end_addr() - region.range.start_addr()) as usize,
+    // Debug: print all memory regions
+    crate::println!("[RMM] Memory map regions:");
+    for region in boot_info.memory_map.iter() {
+        crate::println!(
+            "[RMM]   {:#x}-{:#x} type={:?}",
+            region.range.start_addr(),
+            region.range.end_addr(),
+            region.region_type
+        );
+    }
+
+    static mut RMM_AREAS: [MemoryArea; 32] = [MemoryArea {
+        base: rmm::PhysicalAddress::new(0),
+        size: 0,
+    }; 32];
+
+    let mut area_count = 0;
+    for region in boot_info.memory_map.iter() {
+        if region.region_type == MemoryRegionType::Usable {
+            if area_count < 32 {
+                RMM_AREAS[area_count] = MemoryArea {
+                    base: rmm::PhysicalAddress::new(region.range.start_addr() as usize),
+                    size: (region.range.end_addr() - region.range.start_addr()) as usize,
+                };
+                area_count += 1;
+            } else {
+                crate::println!("[RMM] Warning: more than 32 usable memory regions, some ignored.");
+            }
         }
-    }).collect::<alloc::vec::Vec<_>>().leak();
+    }
+    let areas = &mut RMM_AREAS[..area_count];
+
+    crate::println!("[RMM] Usable areas count: {}", areas.len());
+    for (i, area) in areas.iter().enumerate() {
+        crate::println!("[RMM]   Area {}: base={:#x} size={:#x}", i, area.base.data(), area.size);
+    }
+
+    if areas.is_empty() {
+        panic!("No usable memory regions found in bootloader memory map");
+    }
 
     let bump = BumpAllocator::new(areas, 0);
     let buddy = BuddyAllocator::new(bump).expect("Buddy init");
 
     *RMM_ALLOC.lock() = Some(buddy);
+    crate::println!("[RMM] Buddy allocator initialized successfully");
 }

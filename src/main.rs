@@ -109,6 +109,8 @@ fn init_subsystems() {
     #[cfg(feature = "net")]
     ziqa_kernel::net::init();
     ziqa_kernel::drivers::ps2_mouse::init();
+    // Initialize VFS before running tests (tests may need filesystem access)
+    ziqa_kernel::fs::vfs::VFS.write().init();
     set_fg(Color::White);
     section("Self-tests");
     ziqa_kernel::tests::run_all();

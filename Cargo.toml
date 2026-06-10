@@ -64,3 +64,6 @@ panic = "abort"
 
 [package.metadata.bootimage]
 run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={bootimage}", "-drive", "file=disk.img,if=none,format=raw,id=hdr0", "-device", "virtio-blk-pci,drive=hdr0", "-serial", "stdio", "-display", "none", "-device", "virtio-net-pci,netdev=net0", "-netdev", "user,id=net0"]
+
+[package.metadata.bootloader]
+physical-memory-offset = "0xFFFF800000000000"

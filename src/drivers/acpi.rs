@@ -66,6 +66,14 @@ impl AcpiHandler for KernelAcpiHandler {
 
 // ── Global ACPI state ────────────────────────────────────────────────────────
 
+/// ACPI table descriptor.
+#[derive(Debug, Clone)]
+pub struct AcpiTableInfo {
+    pub signature: [u8; 4],
+    pub physical_address: usize,
+    pub length: usize,
+}
+
 /// Summarised hardware topology extracted from the ACPI MADT.
 #[derive(Debug, Clone)]
 pub struct AcpiInfo {
@@ -77,6 +85,44 @@ pub struct AcpiInfo {
     pub io_apic_gsi_base: u32,
     /// Total number of processors (BSP + APs) discovered.
     pub processor_count: usize,
+    /// List of all discovered SDTs.
+    pub tables: alloc::vec::Vec<AcpiTableInfo>,
+    /// Physical address of the RSDP.
+    pub rsdp_address: usize,
+}
+
+fn find_rsdp_phys() -> Option<usize> {
+    let phys_offset = KernelAcpiHandler::phys_offset();
+    // Scan EBDA first
+    let ebda_seg_ptr = (0x40E + phys_offset) as *const u16;
+    let ebda_phys = unsafe { *ebda_seg_ptr as usize * 16 };
+    if ebda_phys >= 0x80000 && ebda_phys < 0xA0000 {
+        let ebda_virt = ebda_phys + phys_offset as usize;
+        for offset in (0..1024).step_by(16) {
+            let addr = ebda_virt + offset;
+            unsafe {
+                let sig = core::slice::from_raw_parts(addr as *const u8, 8);
+                if sig == b"RSD PTR " {
+                    return Some(ebda_phys + offset);
+                }
+            }
+        }
+    }
+
+    // Scan BIOS ROM
+    let bios_start = 0xE0000;
+    let bios_end = 0xFFFFF;
+    let bios_virt = bios_start + phys_offset as usize;
+    for offset in (0..(bios_end - bios_start)).step_by(16) {
+        let addr = bios_virt + offset;
+        unsafe {
+            let sig = core::slice::from_raw_parts(addr as *const u8, 8);
+            if sig == b"RSD PTR " {
+                return Some(bios_start + offset);
+            }
+        }
+    }
+    None
 }
 
 /// Global ACPI information, populated by [`init`].
@@ -214,11 +260,23 @@ pub fn init() {
 
             // ── Store global state ───────────────────────────────────────
             let first_ioapic = apic.io_apics.first();
+            let mut table_infos = alloc::vec::Vec::new();
+            for (sig, sdt) in &tables.sdts {
+                table_infos.push(AcpiTableInfo {
+                    signature: sig.as_str().as_bytes().try_into().unwrap_or([0; 4]),
+                    physical_address: sdt.physical_address,
+                    length: sdt.length as usize,
+                });
+            }
+            let rsdp_address = find_rsdp_phys().unwrap_or(0);
+
             let info = AcpiInfo {
                 local_apic_address: apic.local_apic_address,
                 io_apic_address: first_ioapic.map_or(0, |io| io.address),
                 io_apic_gsi_base: first_ioapic.map_or(0, |io| io.global_system_interrupt_base),
                 processor_count: proc_count,
+                tables: table_infos,
+                rsdp_address,
             };
             *ACPI_INFO.lock() = Some(info);
         }

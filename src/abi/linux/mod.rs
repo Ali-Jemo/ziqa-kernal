@@ -834,7 +834,7 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if let Some(res) = crate::fs::vfs::VFS.read().handle_scheme(path_str, flags as usize) {
         match res {
             Ok(id) => {
-                let fd = ctx.process.fds.alloc_scheme(path_str.as_bytes(), flags, id).unwrap_or(3);
+                let fd = ctx.process.fds.alloc_scheme(path_str.as_bytes(), flags, id).ok_or(AbiError::Other("EMFILE"))?;
                 return Ok(fd as u64);
             }
             Err(e) => return Err(e),
@@ -878,7 +878,7 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
-        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).unwrap_or(3);
+        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).ok_or(AbiError::Other("EMFILE"))?;
         return Ok(fd as u64);
     }
     Ok((-2_i64) as u64) // -ENOENT
@@ -1450,7 +1450,7 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             .read_raw(path_str, &mut [0u8; 1], 0)
             .is_ok()
     {
-        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).unwrap_or(3);
+        let fd = ctx.process.fds.alloc_file(path_str.as_bytes(), flags).ok_or(AbiError::Other("EMFILE"))?;
         return Ok(fd as u64);
     }
     Ok((-2_i64) as u64) // -ENOENT
@@ -1569,7 +1569,7 @@ fn sys_socket(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         .process
         .fds
         .alloc_file(b"socket:", socktype)
-        .unwrap_or(3);
+        .ok_or(AbiError::Other("EMFILE"))?;
     crate::net::socket::SOCKETS.lock().create(fd, domain, socktype, protocol);
     Ok(fd as u64)
 }
@@ -1841,7 +1841,7 @@ fn sys_creat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             vfs.create(path_str);
         }
     }
-    let fd = ctx.process.fds.alloc_file(&tmp[..n], 0x0041).unwrap_or(3); // O_CREAT|O_WRONLY
+    let fd = ctx.process.fds.alloc_file(&tmp[..n], 0x0041).ok_or(AbiError::Other("EMFILE"))?; // O_CREAT|O_WRONLY
     Ok(fd as u64)
 }
 
@@ -2033,27 +2033,36 @@ fn sys_clock_getres(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_epoll_create1(flags) → fd
 fn sys_epoll_create1(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd = ctx.process.fds.alloc_file(b"epoll:", 0).unwrap_or(3);
-    Ok(fd as u64)
+    if let Some(res) = crate::fs::vfs::VFS.read().handle_scheme("event:", 0) {
+        match res {
+            Ok(id) => {
+                let fd = ctx.process.fds.alloc_scheme(b"event:", 0, id).ok_or(AbiError::Other("EMFILE"))?;
+                return Ok(fd as u64);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(AbiError::Other("ENOSYS"))
 }
 
 /// sys_eventfd(initval, flags) → fd
 fn sys_eventfd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd = ctx.process.fds.alloc_file(b"eventfd:", 0).unwrap_or(3);
+    let fd = ctx.process.fds.alloc_file(b"eventfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
+
 
 /// sys_signalfd(fd, mask, flags) → fd
 fn sys_signalfd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _fd = ctx.args[0] as i32;
-    let fd = ctx.process.fds.alloc_file(b"signalfd:", 0).unwrap_or(3);
+    let fd = ctx.process.fds.alloc_file(b"signalfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
 
 /// sys_timerfd_create(clockid, flags) → fd
 fn sys_timerfd_create(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _clockid = ctx.args[0];
-    let fd = ctx.process.fds.alloc_file(b"timerfd:", 0).unwrap_or(3);
+    let fd = ctx.process.fds.alloc_file(b"timerfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
 
@@ -2076,13 +2085,13 @@ fn sys_getcpu(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 
 /// sys_pidfd_open(pid, flags) → fd
 fn sys_pidfd_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd = ctx.process.fds.alloc_file(b"pidfd:", 0).unwrap_or(3);
+    let fd = ctx.process.fds.alloc_file(b"pidfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
 
 /// sys_memfd_create(name, flags) → fd
 fn sys_memfd_create(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd = ctx.process.fds.alloc_file(b"memfd:", 0).unwrap_or(3);
+    let fd = ctx.process.fds.alloc_file(b"memfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
 

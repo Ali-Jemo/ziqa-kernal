@@ -16,14 +16,26 @@ pub mod time;
 pub mod irq;
 pub mod keyboard;
 pub mod proc;
+pub mod acpi;
+pub mod dtb;
+pub mod serio;
+pub mod memory;
+pub mod event;
+pub mod sys;
 
 use self::debug::DebugScheme;
 use self::pipe::PipeScheme;
 use self::time::TimeScheme;
 use self::proc::ProcScheme;
-
 use self::irq::IrqSchemeWrapper;
 use self::keyboard::KeyboardScheme;
+use self::dtb::DtbScheme;
+use self::serio::SerioScheme;
+use self::acpi::AcpiScheme;
+use self::memory::MemoryScheme;
+use self::event::EventScheme;
+use self::user::UserScheme;
+use self::sys::SysScheme;
 
 pub type SchemeResult<T> = Result<T, crate::abi::AbiError>;
 
@@ -35,6 +47,11 @@ pub trait Scheme: Send + Sync {
     fn read(&self, id: usize, buf: &mut [u8]) -> SchemeResult<usize>;
     
     /// Write to a resource
+    
+    /// Check for readiness events. Used by the event scheme.
+    fn fevent(&self, _id: usize, _flags: usize) -> SchemeResult<usize> {
+        Ok(0) // Default: not ready
+    }
     fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize>;
     
     /// Close a resource
@@ -50,6 +67,10 @@ impl SchemeRegistry {
         Self {
             schemes: BTreeMap::new(),
         }
+    }
+    
+    pub fn iter_names(&self) -> alloc::vec::Vec<String> {
+        self.schemes.keys().cloned().collect()
     }
     
     pub fn register(&mut self, name: &str, scheme: Box<dyn Scheme>) {
@@ -70,4 +91,14 @@ pub fn init() {
     registry.register("proc", Box::new(ProcScheme::new()));
     registry.register("irq", Box::new(IrqSchemeWrapper::new()));
     registry.register("keyboard", Box::new(KeyboardScheme::new()));
+    registry.register("acpi", Box::new(AcpiScheme::new()));
+    registry.register("dtb", Box::new(DtbScheme::new()));
+    registry.register("memory", Box::new(MemoryScheme::new()));
+    registry.register("event", Box::new(EventScheme::new()));
+    registry.register("serio", Box::new(SerioScheme::new()));
+    registry.register("user", Box::new(UserScheme::new()));
+    registry.register("sys", Box::new(SysScheme::new()));
+    // Log registered schemes
+    crate::klog!(crate::klog::Level::Info, "init: ZiqaScheme registry initialized");
+    crate::klog!(crate::klog::Level::Info, "Scheme: acpi, dtb, memory, event, serio, user, sys registered");
 }

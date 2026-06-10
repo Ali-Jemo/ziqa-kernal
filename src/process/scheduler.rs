@@ -150,6 +150,11 @@ impl Scheduler {
         let mut proc = Process::new(pid, plugin.kind(), entry, stack);
         proc.binary_data = binary.to_vec();
 
+        let kstack = alloc::vec![0u8; 65536];
+        let top = kstack.as_ptr() as u64 + 65536;
+        proc.kernel_stack = Some(kstack);
+        proc.kernel_stack_top = top;
+
         if let Some(frame) = crate::memory::paging::create_process_page_table() {
             proc.page_table_frame = Some(frame);
         }

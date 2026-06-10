@@ -247,8 +247,8 @@ pub fn run_all() {
         
         let mut proc = Process::new(Pid(777), AbiKind::ZiqaNative, VirtAddr::new(0), VirtAddr::new(0));
         
-        // 1. ZIQA_CAP_REQUEST("test_cap.txt")
-        let path = b"test_cap.txt";
+        // 1. ZIQA_CAP_REQUEST("pipe:test_cap") - use pipe scheme which exists
+        let path = b"pipe:test_cap";
         let path_ptr = path.as_ptr() as u64;
         let mut ctx = SyscallContext::new(nr::ZIQA_CAP_REQUEST, [1, path_ptr, path.len() as u64, 0, 0, 0], &mut proc);
         let registry = crate::abi::AbiRegistry::new();

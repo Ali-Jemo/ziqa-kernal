@@ -16,7 +16,10 @@
 | **Scheduler hardening** | Added `without_interrupts` blocks and interrupt-safe scheduling to prevent race conditions. |
 | **Boot sequence logging** | Added extensive serial logging to `init.rs` and `main.rs` for debugging boot failures. |
 | **VirtIO PCI register offsets** | Corrected VirtIO network device PCI register offsets for proper device detection. |
-| **Exit handling in syscall dispatch** | After `sys_exit`, drops process lock and calls `SCHEDULER.schedule()` to prevent return trampoline resuming a dead process. |
+| **Double fault on context switch** | Added kernel stack allocation in `spawn_elf()` for all processes (including WASM); static frame allocator array replaced early heap allocation. |
+| **VFS not initialized panic** | Moved VFS initialization before self-tests in `init_subsystems()` to prevent uninitialized access during snapshot tests. |
+| **WASM loop control flow** | Replaced malformed WASM binary with valid loop module; inline interpreter tests avoid scheduler deadlock. |
+| **Capability I/O test failure** | Fixed test to use `pipe:` scheme (which exists and supports read/write) instead of non-existent file. |
 
 ## What We've Added
 
@@ -43,3 +46,14 @@
 | **sys_waitpid status** | Corrected child exit status reporting in `sys_waitpid`. |
 | **POSIX ABI Cleanup** | Synchronized waitpid options, fixed compiler issues, consolidated POSIX implementation. |
 | **Debug Instrumentation** | Serial logging across boot sequence, missing exception handlers, `without_interrupts` scheduler hardening. |
+| **Redox Port: dtb Scheme** | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| **Redox Port: memory Scheme** | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| **Redox Port: user Scheme** | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| **Redox Port: debug Scheme** | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| **Redox Port: sys Scheme** | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| **Redox Port: event Scheme** | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| **Schemes Registry** | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| **VFS Offset Support** | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| **Capability I/O Test** | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| **WASM Inline Tests** | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| **VFS Early Init** | VFS initialized before self-tests to support snapshot tests and capability I/O. |

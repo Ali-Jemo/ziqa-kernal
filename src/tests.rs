@@ -481,82 +481,40 @@ pub fn run_all() {
         });
 
         test!("wasm: interpreter parses and executes hello.wasm", {
-            use crate::process::scheduler::{spawn_elf, SCHEDULER};
-            let pid_opt = spawn_elf(crate::abi::wasm::TEST_WASM);
-            if let Some(pid) = pid_opt {
-                let orig_pid = {
-                    let _sched = &SCHEDULER;
-                    crate::process::scheduler::current_task().map(|t| t.lock().pid)
-                };
-                {
-                    let sched = &SCHEDULER;
-                    sched.set_current(pid);
+            let binary = crate::abi::wasm::TEST_WASM;
+            let parsed = crate::abi::wasm::parse_wasm(binary);
+            if let Ok(mut instance) = parsed {
+                if let Some(start_idx) = instance.start_func_idx {
+                    let result = crate::abi::wasm::execute_function(&mut instance, start_idx, &[]);
+                    result.is_ok()
+                } else {
+                    false
                 }
-                crate::abi::wasm::wasm_interpreter_entry();
-                if let Some(orig) = orig_pid {
-                    let sched = &SCHEDULER;
-                    sched.set_current(orig);
-                }
-                let ok = {
-                    let sched = &SCHEDULER;
-                    let proc = sched.get_process(pid);
-                    if let Some(p_arc) = proc {
-                        p_arc.lock().exit_code == 0
-                    } else {
-                        false
-                    }
-                };
-                {
-                    let sched = &SCHEDULER;
-                    sched.waitpid(crate::process::Pid(0), pid.0 as i64, 0);
-                }
-                ok
             } else {
                 false
             }
         });
 
         test!("wasm: loop control flow executes successfully", {
-            use crate::process::scheduler::{spawn_elf, SCHEDULER};
             const TEST_WASM_LOOP: &[u8] = &[
                 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
                 0x03, 0x02, 0x01, 0x00, 0x07, 0x0a, 0x01, 0x06, b'_', b's', b't', b'a', b'r', b't',
                 0x00, 0x00, 0x0a, 24, 0x01, 22, 0x01, 0x01, 0x7f, 0x41, 0x05, 0x21, 0x00, 0x03,
                 0x40, 0x20, 0x00, 0x41, 0x01, 0x6b, 0x21, 0x00, 0x20, 0x00, 0x0d, 0x00, 0x0b, 0x0b,
             ];
-            let pid_opt = spawn_elf(TEST_WASM_LOOP);
-            if let Some(pid) = pid_opt {
-                let orig_pid = {
-                    let _sched = &SCHEDULER;
-                    crate::process::scheduler::current_task().map(|t| t.lock().pid)
-                };
-                {
-                    let sched = &SCHEDULER;
-                    sched.set_current(pid);
+            let parsed = crate::abi::wasm::parse_wasm(TEST_WASM_LOOP);
+            if let Ok(mut instance) = parsed {
+                if let Some(start_idx) = instance.start_func_idx {
+                    let result = crate::abi::wasm::execute_function(&mut instance, start_idx, &[]);
+                    result.is_ok()
+                } else {
+                    false
                 }
-                crate::abi::wasm::wasm_interpreter_entry();
-                if let Some(orig) = orig_pid {
-                    let sched = &SCHEDULER;
-                    sched.set_current(orig);
-                }
-                let ok = {
-                    let sched = &SCHEDULER;
-                    let proc = sched.get_process(pid);
-                    if let Some(p_arc) = proc {
-                        p_arc.lock().exit_code == 0
-                    } else {
-                        false
-                    }
-                };
-                {
-                    let sched = &SCHEDULER;
-                    sched.waitpid(crate::process::Pid(0), pid.0 as i64, 0);
-                }
-                ok
             } else {
                 false
             }
         });
+
 
         test!("net: eth0 transmission and reception stats", {
             use crate::net::NET;

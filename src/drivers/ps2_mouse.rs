@@ -97,7 +97,7 @@ fn wait_write() {
     }
 }
 
-fn mouse_write(data: u8) {
+pub fn mouse_write(data: u8) {
     let mut port_64 = Port::<u8>::new(0x64);
     let mut port_60 = Port::<u8>::new(0x60);
     wait_write();
@@ -105,7 +105,6 @@ fn mouse_write(data: u8) {
     wait_write();
     unsafe { port_60.write(data); }
 }
-
 fn mouse_read() -> u8 {
     let mut port = Port::<u8>::new(0x60);
     wait_read();
@@ -116,6 +115,9 @@ fn mouse_read() -> u8 {
 pub fn on_interrupt() {
     let mut port = Port::<u8>::new(0x60);
     let b = unsafe { port.read() };
+    
+    // Push to serio scheme (device index 1 = mouse)
+    crate::scheme::serio::SerioScheme::input(1, b);
     
     let mut state = MOUSE_STATE.lock();
     match state.cycle {

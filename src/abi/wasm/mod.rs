@@ -109,14 +109,14 @@ fn read_leb128_signed(data: &[u8], offset: &mut usize) -> Result<i64, ()> {
 
 // ─── WASM Interpreter Structures ─────────────────────────────────────────────
 
-struct WasmInstance {
-    memory: Vec<u8>,
-    functions: Vec<WasmFunction>,
-    type_sigs: Vec<(usize, usize)>,
-    start_func_idx: Option<usize>,
+pub struct WasmInstance {
+    pub memory: Vec<u8>,
+    pub functions: Vec<WasmFunction>,
+    pub type_sigs: Vec<(usize, usize)>,
+    pub start_func_idx: Option<usize>,
 }
 
-enum WasmFunction {
+pub enum WasmFunction {
     Imported {
         module: String,
         name: String,
@@ -128,11 +128,10 @@ enum WasmFunction {
         code: Vec<u8>,
     },
 }
-
 #[derive(Clone)]
-struct WasmLocalDecl {
-    count: u32,
-    _val_type: u8,
+pub struct WasmLocalDecl {
+    pub count: u32,
+    pub _val_type: u8,
 }
 
 #[derive(Clone)]
@@ -149,7 +148,7 @@ enum WasmFunctionInfo {
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
-fn parse_wasm(data: &[u8]) -> Result<WasmInstance, &'static str> {
+pub fn parse_wasm(data: &[u8]) -> Result<WasmInstance, &'static str> {
     if data.len() < 8 {
         return Err("Binary too small");
     }
@@ -492,7 +491,7 @@ fn find_matching_end(code: &[u8], mut pc: usize) -> Result<usize, &'static str> 
 
 // ─── Execution ───────────────────────────────────────────────────────────────
 
-fn execute_function(
+pub fn execute_function(
     instance: &mut WasmInstance,
     func_idx: usize,
     args: &[i32],

@@ -10,6 +10,7 @@ use spin::Mutex;
 pub enum ProcTarget {
     Mem(Pid, u64),
     Regs(Pid),
+    Status(Pid),
 }
 
 pub struct ProcScheme {
@@ -46,6 +47,7 @@ impl Scheme for ProcScheme {
                 ProcTarget::Mem(pid, addr)
             }
             "regs" => ProcTarget::Regs(pid),
+            "status" => ProcTarget::Status(pid),
             _ => return Err(AbiError::Other("Invalid target")),
         };
 
@@ -74,6 +76,23 @@ impl Scheme for ProcScheme {
         let target = handles.get(&id).ok_or(AbiError::Other("Invalid handle"))?;
 
         match target {
+            ProcTarget::Status(pid) => {
+                let proc_arc = process::scheduler::SCHEDULER.get_process(*pid).ok_or(AbiError::Other("Process not found"))?;
+                let proc = proc_arc.lock();
+                let text = alloc::format!(
+                    "pid={}\nstate={:?}\nabi={:?}\npriority={}\nexit_code={}\nparent={}\n",
+                    proc.pid.0,
+                    proc.state,
+                    proc.abi,
+                    proc.priority,
+                    proc.exit_code,
+                    proc.parent,
+                );
+                let bytes = text.as_bytes();
+                let len = core::cmp::min(buf.len(), bytes.len());
+                buf[..len].copy_from_slice(&bytes[..len]);
+                Ok(len)
+            }
             ProcTarget::Regs(pid) => {
                 let proc_arc = process::scheduler::SCHEDULER.get_process(*pid).ok_or(AbiError::Other("Process not found"))?;
                 let proc = proc_arc.lock();
@@ -115,6 +134,9 @@ impl Scheme for ProcScheme {
                 } else {
                     Err(AbiError::Other("Memory write failed"))
                 }
+            }
+            ProcTarget::Status(_) => {
+                Err(AbiError::Other("Status is read-only"))
             }
         }
     }

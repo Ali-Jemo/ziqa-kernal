@@ -7,7 +7,7 @@ use crate::sync::wait_condition::WaitCondition;
 
 #[derive(Debug)]
 pub struct WaitQueue<T> {
-    inner: Mutex<VecDeque<T>>,
+    pub inner: Mutex<VecDeque<T>>,
     pub condition: WaitCondition,
 }
 
@@ -33,6 +33,14 @@ impl<T> WaitQueue<T> {
             }
             self.condition.wait(reason);
         }
+    }
+
+    pub fn receive_nonblocking(&self) -> Option<T> {
+        self.inner.lock().pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {

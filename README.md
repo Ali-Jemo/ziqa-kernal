@@ -18,6 +18,17 @@
 </p>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🔬 Executive Summary
 ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_64` bare metal — with select hot paths in **Zig**. It acts as a testbed for advanced OS design patterns: **SMP + APIC**, **ACPI/PCI enumeration**, **Instant Capability Revocation**, **A-Tier Scalable Architecture**, **Plugin-based ABI Layer**, **Capability-based Security**, **Hybrid Rust/Zig FFI**, **eBPF "Obsidian-Tier" VM (Maps/Helpers/Stack/Tail Calls/Tracepoints)**, **io_uring**, **Per-Process Page Tables + COW Fork**, **VMA-based Memory Management**, **PS/2 Mouse**, **FAT32 (read-only)**, **Userspace Drivers (DRM/Net)**, **TCP/UDP Socket Stack**, **NWCC Desktop Demo (6 apps)**, **DOOM fire / Tetris demos**, and a staged VGA boot experience.
@@ -37,6 +48,17 @@ ZiqaKernel is an **experimental OS research sandbox** written in Rust for `x86_6
 It is **not** a production-ready OS, but an architectural laboratory for exploring the limits of safety-critical systems.
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🩹 What We've Fixed
 
@@ -55,8 +77,22 @@ It is **not** a production-ready OS, but an architectural laboratory for explori
 | **Boot sequence logging** | Added extensive serial logging to `init.rs` and `main.rs` for debugging boot failures. |
 | **VirtIO PCI register offsets** | Corrected VirtIO network device PCI register offsets for proper device detection. |
 | **Exit handling in syscall dispatch** | After `sys_exit`, drops process lock and calls `SCHEDULER.schedule()` to prevent return trampoline resuming a dead process. |
-
+| **Double fault on context switch** | Added kernel stack allocation in `spawn_elf()` for all processes (including WASM); static frame allocator array replaced early heap allocation. |
+| **VFS not initialized panic** | Moved VFS initialization before self-tests in `init_subsystems()` to prevent uninitialized access during snapshot tests. |
+| **WASM loop control flow** | Replaced malformed WASM binary with valid loop module; inline interpreter tests avoid scheduler deadlock. |
+| **Capability I/O test failure** | Fixed test to use `pipe:` scheme (which exists and supports read/write) instead of non-existent file. |
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## ✨ What We've Added
 
@@ -90,6 +126,17 @@ It is **not** a production-ready OS, but an architectural laboratory for explori
 | **Debug Instrumentation** | Serial logging across boot sequence, missing exception handlers, `without_interrupts` scheduler hardening. |
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🧠 Knowledge Graph Insights
 Run `/graphify` to generate an interactive architectural knowledge graph. The latest analysis (1194 nodes · 1621 edges · 122 communities) reveals:
@@ -140,6 +187,17 @@ View the full interactive graph: [graphify-out/graph.html](graphify-out/graph.ht
 Read the detailed analysis: [graphify-out/GRAPH_REPORT.md](graphify-out/GRAPH_REPORT.md)
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🏗️ Architecture Spectrum
 ZiqaKernel prioritizes modularity and safety research over industrial-scale stability.
@@ -149,6 +207,17 @@ ZiqaKernel prioritizes modularity and safety research over industrial-scale stab
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 📊 Comparative Analysis: Capability Matrix
 
@@ -157,6 +226,17 @@ ZiqaKernel prioritizes modularity and safety research over industrial-scale stab
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🧠 Design Philosophy: Why We Build This
 ZiqaKernel exists because modern OS architecture is stagnant. We solve systemic issues via:
@@ -172,6 +252,17 @@ ZiqaKernel exists because modern OS architecture is stagnant. We solve systemic 
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 📈 Knowledge Graph Benchmark
 
@@ -193,6 +284,17 @@ graphify token reduction benchmark
 </pre>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🛠️ Engineering Audit Findings (May 2026)
 
@@ -238,6 +340,17 @@ The boot presentation in [`src/boot_screen.rs`](src/boot_screen.rs) now renders 
 3. **Stage III — Services + Shell**: ABI registry, VFS/ZiqaFs, consoles, device probes, IPC/SHM, eBPF, shell handoff.
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🧩 Hybrid Rust/Zig FFI
 Performance-critical graphics operations are written in **Zig** (`src/zig/blitter.zig`) and called from Rust via C-ABI FFI:
@@ -253,6 +366,17 @@ The Zig module is compiled as a static library (`build.zig`) and linked via `bui
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🔌 System Interconnectivity
 ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**.
@@ -266,6 +390,17 @@ ZiqaKernel connects disparate subsystems through a central **Core ABI Registry**
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## ⚙️ Subsystem Deep Dives
 
@@ -452,6 +587,17 @@ The interactive shell ([`src/shell.rs`](src/shell.rs) — ~2120 lines) provides 
 - **All commands**: `help`, `uptime`, `ps`, `spawn`, `spawnelf`, `exec`, `kill`, `sleep`, `meminfo`, `diskinfo`, `netstat`, `klog`, `doom`, `tetris`, `reboot`, `echo`, `clear`, `edit`, `ls`, `cd`, `pwd`, `mkdir`, `dir`, `rm`, `rmdir`, `cat`, `ping`, `wget`, `ifconfig`, `mv`, `cp`, `touch`, `stat`, `du`, `alias`, `export`, `history`, `bg`, `fg`, `jobs`, `bench`, `test`, `compress`, `snap`, `ls-snap`, `rm-snap`
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 💡 Documentation Coverage
 
@@ -464,6 +610,17 @@ As part of the ongoing effort to reduce weakly-connected nodes, the following do
 | [`BUILD_OPTIMIZATIONS.md`](BUILD_OPTIMIZATIONS.md) | Build speed tuning (codegen units, incremental, sccache) | N/A |
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🎨 Art Assets
 Architectural diagrams and flowcharts in `assets/` provide visual overviews of kernel subsystems:
@@ -490,6 +647,17 @@ Architectural diagrams and flowcharts in `assets/` provide visual overviews of k
 | `pagefault.svg` | Page fault handling flow |
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🚀 Quick Start
 ### Build & Run
@@ -514,6 +682,17 @@ make zig-check   # Verify Zig blitter compiles independently
 ```
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 📈 Technical Roadmap
 
@@ -567,6 +746,17 @@ make zig-check   # Verify Zig blitter compiles independently
 </div>
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 🤝 Contributing
 We welcome contributions from the community! Whether you're fixing bugs, adding features, or improving documentation, your help is appreciated.
@@ -609,6 +799,17 @@ make run-gui
 Please use the GitHub issue tracker to report bugs or request features.
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 📜 Code of Conduct
 Please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
@@ -634,9 +835,31 @@ Examples of unacceptable behavior include:
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project team. All complaints will be reviewed and investigated promptly and fairly.
 
 ---
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
 
 ## 📄 License
 MIT
 
 ---
-<sup>Last updated: June 5, 2026 | Knowledge graph: 1194 nodes, 1621 edges | Token reduction: 75.4x | SMP + APIC: ✅ complete | ACPI/PCI: ✅ complete | Device Model: ✅ complete | PS/2 Mouse: ✅ complete | FAT32: ✅ experimental | Socket Stack: ✅ experimental | eBPF Obsidian-Tier: ✅ complete | NWCC Desktop Demo: ✅ demo | COW Fork + VMA: ✅ complete | Userspace Drivers: ✅ skeleton | 115+ syscalls | 40+ shell commands | Ring 3 + SMEP/SMAP/UMIP: ✅ complete | A-Tier Scalability: ✅ complete | Microkernel Phase 1: ✅ complete | Memory Compression: ✅ experimental | Snapshot Persistence: ✅ experimental | Instant-On Resume: ✅ experimental</sup>
+| Redox Port: dtb Scheme | Device Tree Blob access (`/scheme/dtb`) for ARM/RISC-V bootloader-passed FDT. |
+| Redox Port: memory Scheme | Direct physical memory access (`/scheme/memory:physical`) with offset tracking via VFS. |
+| Redox Port: user Scheme | Userspace scheme hosting for running drivers/filesystems in Ring 3 (`/scheme/user`). |
+| Redox Port: debug Scheme | Enhanced serial/debug console with `disable-vga` special fd and wait-queue input buffer. |
+| Redox Port: sys Scheme | System info endpoints: `sys:context` (process list), `sys:scheme` (registered schemes), `sys:cpu`, `sys:uptime`. |
+| Redox Port: event Scheme | Event notification (`/scheme/event`) with `fevent` readiness and `sys_epoll_create1` integration. |
+| Schemes Registry | Unified `SCHEME_REGISTRY` with `iter_names()` for dynamic `sys:scheme` listing. |
+| VFS Offset Support | `Scheme` trait extended with `offset` parameter; VFS now manages file pointers. |
+| Capability I/O Test | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
+| WASM Inline Tests | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
+| VFS Early Init | VFS initialized before self-tests to support snapshot tests and capability I/O. |
+<sup>Last updated: June 10, 2026 | Knowledge graph: 10469 nodes, 21249 edges | Token reduction: 75.4x | SMP + APIC: ✅ complete | ACPI/PCI: ✅ complete | Device Model: ✅ complete | PS/2 Mouse: ✅ complete | FAT32: ✅ experimental | Socket Stack: ✅ experimental | eBPF Obsidian-Tier: ✅ complete | NWCC Desktop Demo: ✅ demo | COW Fork + VMA: ✅ complete | Userspace Drivers: ✅ skeleton | 115+ syscalls | 40+ shell commands | Ring 3 + SMEP/SMAP/UMIP: ✅ complete | A-Tier Scalability: ✅ complete | Microkernel Phase 1: ✅ complete | Memory Compression: ✅ experimental | Snapshot Persistence: ✅ experimental | Instant-On Resume: ✅ experimental</sup>

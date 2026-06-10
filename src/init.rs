@@ -40,10 +40,29 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
     raw_serial_log("init: klogs done, starting memory init\n");
 
     // Memory and heap init.
-    
     use memory::paging::MemoryMapper;
     use x86_64::VirtAddr;
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    raw_serial_log("init: physical_memory_offset = 0x");
+    // Print hex manually to avoid allocation
+    let mut val = phys_offset.as_u64();
+    let mut buf = [0u8; 16];
+    let mut i = 16;
+    if val == 0 {
+        raw_serial_log("0");
+    } else {
+        while val > 0 {
+            i -= 1;
+            let digit = (val & 0xF) as u8;
+            buf[i] = if digit < 10 { b'0' + digit } else { b'A' + digit - 10 };
+            val >>= 4;
+        }
+        // Print from i to end
+        for j in i..16 {
+            raw_serial_log(core::str::from_utf8(&buf[j..=j]).unwrap());
+        }
+    }
+    raw_serial_log("\n");
     raw_serial_log("init: doing frame allocator init\n");
 
     unsafe { memory::frame_allocator::rmm_init_from_bootinfo(boot_info); }
@@ -60,7 +79,6 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
 
     memory::paging::init_kernel_mapper(VirtAddr::new(boot_info.physical_memory_offset));
     raw_serial_log("init: kernel mapper done\n");
-
     // Device/scheduler init.
     drivers::pci::init();
     drivers::device_manager::init();
