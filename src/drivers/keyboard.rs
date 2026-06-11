@@ -5,6 +5,7 @@ use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, Scancod
 /// The keyboard ISR pushes raw scancodes here.
 /// sys_read(stdin) drains decoded characters from this buffer.
 use spin::Mutex;
+use core::sync::atomic::{AtomicU16, Ordering};
 
 const BUF_CAP: usize = 256;
 
@@ -52,6 +53,11 @@ static INPUT_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
 static EDITOR_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
 static ECHO_ENABLED: Mutex<bool> = Mutex::new(true);
 
+/// Last decoded key available for compositor polling.
+/// 0 = no pending event; bit 8 set = Unicode; bits 0-7 = key data.
+/// Written from the keyboard ISR, read+cleared by compositor thread.
+pub static COMPOSITOR_LAST_KEY: AtomicU16 = AtomicU16::new(0);
+
 lazy_static! {
     static ref KB: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> = Mutex::new(Keyboard::new(
         ScancodeSet1::new(),
@@ -76,6 +82,8 @@ pub fn push_scancode(scancode: u8) {
                         let b = c as u8;
                         INPUT_BUF.lock().push(b);
                         EDITOR_BUF.lock().push(b);
+                        // Notify compositor (ISR-safe atomic store)
+                        COMPOSITOR_LAST_KEY.store(b as u16 | 0x100, Ordering::Release);
                     }
                 }
                 DecodedKey::RawKey(k) => {
@@ -96,6 +104,8 @@ pub fn push_scancode(scancode: u8) {
                         INPUT_BUF.lock().push(code);
                     }
                     EDITOR_BUF.lock().push(code);
+                    // Notify compositor (ISR-safe atomic store)
+                    COMPOSITOR_LAST_KEY.store(code as u16, Ordering::Release);
                 }
             }
         }
@@ -184,4 +194,13 @@ pub fn push_raw_byte(b: u8) {
     }
     INPUT_BUF.lock().push(b);
     EDITOR_BUF.lock().push(b);
+}
+
+/// Read and clear the last compositor-relevant key event.
+/// Returns 0 if no event pending, or a packed key value:
+/// - bit 8 set  = Unicode character (bits 0-7 = ASCII)
+/// - bit 8 clear = Raw key code (0x80-0x88)
+/// Safe to call from any context (uses atomic swap).
+pub fn poll_compositor_key() -> u16 {
+    COMPOSITOR_LAST_KEY.swap(0, Ordering::Acquire)
 }

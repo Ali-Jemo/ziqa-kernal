@@ -17,6 +17,8 @@
 #define ENOENT 2
 #define EIO    5
 #define EBADF  9
+#define ECHILD 10
+#define EAGAIN 11
 #define EMFILE 24
 #define EINVAL 22
 
@@ -66,19 +68,18 @@ typedef struct {
 
 static PosixFd fd_table[MAX_FDS];
 
-// Initialize default FDs (stdin, stdout, stderr)
 void libposix_init() {
     // Request standard capabilities from kernel
     fd_table[0].active = 1;
-    fd_table[0].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stdin", 5, 0);
+    fd_table[0].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stdin", libposix_strlen("stdin"), 0);
     fd_table[0].offset = 0;
 
     fd_table[1].active = 1;
-    fd_table[1].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stdout", 6, 0);
+    fd_table[1].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stdout", libposix_strlen("stdout"), 0);
     fd_table[1].offset = 0;
 
     fd_table[2].active = 1;
-    fd_table[2].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stderr", 6, 0);
+    fd_table[2].cap_id = ziqa_syscall(ZIQA_CAP_REQUEST, 1, (uint64_t)"stderr", libposix_strlen("stderr"), 0);
     fd_table[2].offset = 0;
 }
 
@@ -123,37 +124,6 @@ int open(const char *pathname, int flags, ...) {
     return fd;
 }
 
-int close(int fd) {
-    if (fd < 0 || fd >= MAX_FDS || !fd_table[fd].active) {
-        errno = EBADF;
-        return -1;
-    }
-    
-    // Call native ZIQA_CAP_CLOSE (1003)
-    ziqa_syscall(ZIQA_CAP_CLOSE, (uint64_t)fd, 0, 0, 0);
-    
-    fd_table[fd].active = 0;
-    fd_table[fd].cap_id = 0;
-    return 0;
-}
-
-off_t lseek(int fd, off_t offset, int whence) {
-    if (fd < 0 || fd >= MAX_FDS || !fd_table[fd].active) {
-        errno = EBADF;
-        return -1;
-    }
-    
-    // Call native ZIQA_CAP_SEEK (1004)
-    uint64_t ret = ziqa_syscall(ZIQA_CAP_SEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence, 0);
-    
-    if (ret > 0xFFFFFFFFFFFFF000ULL) {
-        errno = EIO;
-        return -1;
-    }
-    
-    fd_table[fd].offset = (size_t)ret;
-    return (off_t)ret;
-}
 
 ssize_t read(int fd, void *buf, size_t count) {
     if (fd < 0 || fd >= MAX_FDS || !fd_table[fd].active) {

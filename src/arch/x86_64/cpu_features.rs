@@ -63,12 +63,12 @@ pub fn init() -> CpuFeatures {
         enabled |= CpuFeatures::UMIP;
     }
 
-    // Temporarily disabled CR4 write to check if SMAP/SMEP is causing the hang
-    // Cr4::write(cr4);
+    // Enable SSE support in CR4
+    cr4 |= Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE;
+
+    // Write back the updated CR4 value to apply SMEP, SMAP, UMIP, and SSE settings
     unsafe {
-        let mut serial = uart_16550::SerialPort::new(0x3f8);
-        serial.init();
-        let _ = core::fmt::Write::write_str(&mut serial, "cpu_features::init: bypassed CR4 write\n");
+        Cr4::write(cr4);
     }
 
     enabled

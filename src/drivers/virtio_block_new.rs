@@ -73,6 +73,8 @@ impl crate::drivers::device_manager::Driver for VirtioBlockDriverNew {
         }
 
         if let Some(addr) = mmio_addr {
+            crate::drivers::pci::enable_bus_mastering(device.address);
+            crate::drivers::pci::enable_memory_space(device.address);
             crate::println!("[VirtIO-block-new] Found MMIO BAR at {:#X}", addr);
             
             // Map the MMIO region. 

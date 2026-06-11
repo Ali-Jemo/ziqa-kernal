@@ -49,6 +49,8 @@ impl Driver for VirtioGpuDriver {
         }
 
         if let Some(addr) = mmio_addr {
+            crate::drivers::pci::enable_bus_mastering(device.address);
+            crate::drivers::pci::enable_memory_space(device.address);
             crate::println!("[VirtIO-GPU] Found MMIO BAR at {:#X}", addr);
             let virt_addr = crate::memory::paging::phys_offset().as_u64() + addr;
             let header = unsafe { NonNull::new_unchecked(virt_addr as *mut VirtIOHeader) };
@@ -104,13 +106,15 @@ impl Driver for VirtioGpuDriver {
 }
 
 pub fn is_available() -> bool {
-    VIRTIO_GPU.lock().is_some()
+    VIRTIO_GPU.lock().is_some() || crate::drivers::framebuffer::is_bga_available()
 }
 
 pub fn get_resolution() -> Option<(u32, u32)> {
     let gpu_lock = VIRTIO_GPU.lock();
     if let Some(gpu) = gpu_lock.as_ref() {
         Some((gpu.width, gpu.height))
+    } else if let Some((_, w, h, _)) = crate::drivers::framebuffer::get_bga_fb_info() {
+        Some((w, h))
     } else {
         None
     }
@@ -123,7 +127,21 @@ pub fn get_fb_ptr() -> Option<*mut u8> {
             return Some(gpu.fb_ptr);
         }
     }
+    if let Some((addr, _, _, _)) = crate::drivers::framebuffer::get_bga_fb_info() {
+        return Some(addr as *mut u8);
+    }
     None
+}
+
+/// Returns (virtual_address, width, height, bpp) if the framebuffer is ready.
+pub fn get_fb_info() -> Option<(u64, u32, u32, u32)> {
+    let gpu_lock = VIRTIO_GPU.lock();
+    if let Some(gpu) = gpu_lock.as_ref() {
+        if !gpu.fb_ptr.is_null() {
+            return Some((gpu.fb_ptr as u64, gpu.width, gpu.height, 32));
+        }
+    }
+    crate::drivers::framebuffer::get_bga_fb_info()
 }
 
 pub fn init_display() {
@@ -197,20 +215,27 @@ pub fn draw_test_pattern() {
 }
 
 pub static GPU_IPC_CHANNEL: Mutex<Option<u32>> = Mutex::new(None);
-
-#[allow(dead_code)]
-fn gpu_ipc_listener(_arg: *const ()) {
-    let chan_id = *GPU_IPC_CHANNEL.lock().as_ref().unwrap();
+pub fn gpu_ipc_listener(_arg: *const ()) {
+    let chan_id = match *GPU_IPC_CHANNEL.lock() {
+        Some(id) => id,
+        None => {
+            crate::klog!(
+                crate::klog::Level::Warn,
+                "[VirtIO-GPU] IPC listener: channel not available"
+            );
+            return;
+        }
+    };
     loop {
         if let Ok(msg) = crate::ipc::recv(chan_id) {
             if msg.len > 0 {
                 match msg.data[0] {
-                    1 => flush(), // 1 = Flush
-                    2 => draw_test_pattern(), // 2 = Draw
+                    1 => flush(),          // Flush
+                    2 => draw_test_pattern(), // Draw test pattern
                     _ => {}
                 }
             }
         }
-        crate::process::scheduler::SCHEDULER.schedule();
+        crate::process::scheduler::yield_now();
     }
 }

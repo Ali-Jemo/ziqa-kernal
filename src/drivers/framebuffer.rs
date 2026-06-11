@@ -173,3 +173,87 @@ pub fn init(addr: u64) {
 pub fn init_xrgb(addr: u64, width: usize, height: usize) {
     *FB.lock() = Some(Framebuffer::new_xrgb(addr, width, height));
 }
+
+pub static BGA_FB_INFO: Mutex<Option<(u64, u32, u32, u32)>> = Mutex::new(None);
+
+pub fn is_bga_available() -> bool {
+    BGA_FB_INFO.lock().is_some()
+}
+
+pub fn get_bga_fb_info() -> Option<(u64, u32, u32, u32)> {
+    *BGA_FB_INFO.lock()
+}
+
+fn vbe_write(index: u16, value: u16) {
+    use x86_64::instructions::port::Port;
+    let mut index_port = Port::new(0x01CE);
+    let mut data_port = Port::new(0x01CF);
+    unsafe {
+        index_port.write(index);
+        data_port.write(value);
+    }
+}
+
+pub fn init_bga() -> bool {
+    if let Some(device) = crate::drivers::pci::find_device(0x1234, 0x1111) {
+        crate::println!("[BGA] Found Bochs Graphics Adapter at PCI {:02X}:{:02X}", device.bus, device.dev);
+        
+        crate::drivers::pci::enable_memory_space(device.address);
+        
+        let (phys_addr, is_io) = crate::drivers::pci::bar_address(device.bars[0]);
+        if is_io || phys_addr == 0 {
+            crate::println!("[BGA] Invalid BAR0 address");
+            return false;
+        }
+        
+        let width = 1024u32;
+        let height = 768u32;
+        let bpp = 32u32;
+        
+        vbe_write(0, 0xB0C0);
+        vbe_write(1, width as u16);
+        vbe_write(2, height as u16);
+        vbe_write(3, bpp as u16);
+        vbe_write(4, 0x01 | 0x40);
+        
+        let virt_addr = crate::memory::paging::phys_offset().as_u64() + phys_addr;
+        
+        crate::println!("[BGA] Framebuffer configured at phys {:#X}, virt {:#X} ({}x{} @ {}bpp)", 
+            phys_addr, virt_addr, width, height, bpp);
+            
+        let fb_size_bytes = width * height * 4;
+        let page_size = 4096u64;
+        let pages_count = (fb_size_bytes as u64 + page_size - 1) / page_size;
+        
+        let mut mapper_guard = crate::memory::paging::KERNEL_MAPPER.lock();
+        if let Some(mapper) = mapper_guard.as_mut() {
+            let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+            if let Some(fa) = fa_guard.as_mut() {
+                use x86_64::structures::paging::{Page, PhysFrame, Mapper, PageTableFlags, Size4KiB};
+                use x86_64::{VirtAddr, PhysAddr};
+                
+                for i in 0..pages_count {
+                    let page_virt = virt_addr + i * page_size;
+                    let page_phys = phys_addr + i * page_size;
+                    
+                    let page: Page<Size4KiB> = Page::containing_address(VirtAddr::new(page_virt));
+                    let frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(PhysAddr::new(page_phys));
+                    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+                    
+                    if let Ok(flusher) = unsafe { mapper.mapper.map_to(page, frame, flags, fa) } {
+                        flusher.flush();
+                    }
+                }
+                crate::println!("[BGA] Mapped {} pages for framebuffer", pages_count);
+            }
+        }
+        
+        *BGA_FB_INFO.lock() = Some((virt_addr, width, height, bpp));
+        
+        crate::drivers::fb_console::init(virt_addr as *mut u8, width as usize, height as usize, (width * 4) as usize);
+        
+        true
+    } else {
+        false
+    }
+}

@@ -249,10 +249,23 @@ extern "x86-interrupt" fn timer_handler(_frame: InterruptStackFrame) {
         crate::process::scheduler::tick();
         crate::timer::tick();
     }
+    // Send EOI *before* schedule() — schedule() may context-switch away
+    // and never return to this handler, leaving the APIC starved of EOI.
     send_eoi(InterruptIndex::Timer as u8);
+    // Only preempt once the kernel has finished boot/init.
+    if crate::arch::x86_64::per_cpu::current_cpu().cpu_id == 0
+        && crate::process::scheduler::preemption_enabled()
+    {
+        crate::process::scheduler::SCHEDULER.schedule();
+    }
 }
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
+    use x86_64::instructions::port::Port;
+    let mut port = Port::new(0x60);
+    let scancode: u8 = unsafe { port.read() };
+    crate::drivers::keyboard::push_scancode(scancode);
+
     notify_irq(InterruptIndex::Keyboard as u8);
     send_eoi(InterruptIndex::Keyboard as u8);
 }

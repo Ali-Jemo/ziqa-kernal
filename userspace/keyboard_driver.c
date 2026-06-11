@@ -15,11 +15,6 @@ static size_t my_strlen(const char *s) {
     return strlen(s);
 }
 
-static int thread_errno = 0;
-int *__errno_location(void) {
-    return &thread_errno;
-}
-
 // Inline assembly helper to read from an I/O port using ZiqaKernel syscall ZIQA_DEV_PORT_IN (1031)
 static uint64_t sys_port_in(uint16_t port, uint64_t size) {
     uint64_t res;

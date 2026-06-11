@@ -114,6 +114,14 @@ The `Cargo.toml` defines the Rust project structure:
   - `acpi` - ACPI table parsing
   - `alloc` - heap allocation support
 
+
+## Graphics & Compositor Architecture
+
+- **Kernel-mode Compositor**: Implemented in `src/userspace/compositor.rs`, this thread manages display surfaces, tracks dirty regions, and performs compositing to the framebuffer.
+- **BGA Fallback**: The display system automatically falls back to the Bochs Graphics Adapter (BGA) if VirtIO GPU is not available, configuring it via standard VBE ports.
+- **Client Protocol**: IPC-based protocol (channel 3) for clients to create surfaces, attach SHM buffers, set positions, and flush updates.
+- **Input Forwarding**: Input events (keyboard, mouse) are polled via an atomic-based mechanism and forwarded to the compositor.
+
 ## Makefile (`Makefile`)
 
 The `Makefile` provides convenience commands for building and running the kernel:

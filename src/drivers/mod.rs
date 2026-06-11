@@ -18,4 +18,8 @@ pub mod virtio_gpu;
 pub mod fb_console;
 pub mod pci;
 pub mod acpi;
+pub mod xhci;
+pub mod audio;
 pub mod mouse_server;
+pub mod ahci;
+pub mod nvme;

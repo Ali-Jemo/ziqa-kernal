@@ -50,7 +50,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     // 1. Core Init
     ziqa_kernel::init(boot_info);
-    print_banner();
+    // print_banner(); // Removed to allow new boot screen
     KLOG.lock().min_level = Level::Debug;
     ziqa_kernel::klog!(Level::Info, "ZiqaKernel v1.0 booting");
 
@@ -61,11 +61,36 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // 3. Service/FS Setup
     init_services();
 
+    // ── GPU Display / Compositor Init ───────────────────────────────────
+    section("Display");
+    if ziqa_kernel::drivers::virtio_gpu::is_available() {
+        if !ziqa_kernel::drivers::framebuffer::is_bga_available() {
+            ziqa_kernel::drivers::virtio_gpu::init_display();
+            ziqa_kernel::process::scheduler::spawn_kthread(
+                ziqa_kernel::drivers::virtio_gpu::gpu_ipc_listener,
+                core::ptr::null(),
+            );
+            crate::println!(" ~ VirtIO GPU display ................... ready");
+        } else {
+            crate::println!(" ~ BGA Display .......................... ready");
+        }
+        crate::println!(" ~ Compositor kernel thread ............ deferred");
+    } else {
+        crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
+    }
+    set_fg(Color::White);
+
     // 4. Verification/Demos
     run_verification();
 
     // 5. Startup and shell
+    // Run startup with preemption disabled so the boot process completes
+    // initialization (driver spawning, FS mounting, etc.) without being
+    // preempted by the timer into a newly-spawned process.
     run_startup();
+
+    println!("[DEBUG] About to start shell");
+    ziqa_kernel::process::scheduler::enable_preemption();
 
     ziqa_kernel::shell::start();
 }
@@ -79,29 +104,6 @@ fn section(title: &str) {
     println!("");
     println!("── {} ──", title);
     set_fg(Color::White);
-}
-
-fn print_banner() {
-    vga::clear_screen();
-    set_fg(Color::LightCyan);
-    println!("╔══════════════════════════════════════════════════════════════════════════════╗");
-    set_fg(Color::White);
-    println!("║                                                                              ║");
-    set_fg(Color::LightGreen);
-    println!("║                         ░░  ZIQA KERNEL  ░░  v1.0                            ║");
-    set_fg(Color::Yellow);
-    println!("║                       ░░░░  From scratch, for learning  ░░░░                  ║");
-    set_fg(Color::White);
-    println!("║                                                                              ║");
-    set_fg(Color::LightCyan);
-    println!("║        ▓ 23 modules   ▓ 100+ syscalls  ▓ MLFQ sched   ▓ eBPF VM              ║");
-    println!("║        ▓ DRM/KMS      ▓ io_uring       ▓ IPC/SHM       ▓ Capability sec       ║");
-    println!("║        ▓ Userspace Drv ▓ Ring 3 DRM    ▓ Microkernel   ▓ Hardware Cap         ║");
-    set_fg(Color::White);
-    println!("║                                                                              ║");
-    set_fg(Color::LightCyan);
-    println!("╚══════════════════════════════════════════════════════════════════════════════╝");
-    println!();
 }
 
 fn init_subsystems() {
@@ -127,20 +129,50 @@ fn init_services() {
             let _ = ziqa_kernel::fs::File::write(&mut *file, b"Welcome to ZiqaKernel v0.7!\n", 0);
         }
         vfs.mount("/etc/motd", demo_file);
-        vfs.mount("/bin/test", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../assets/test_elf.bin")))));
+        vfs.mount(
+            "/bin/test",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../assets/test_elf.bin"
+            )))),
+        );
         #[cfg(feature = "wasm")]
-        vfs.mount("/bin/hello.wasm", Arc::new(Mutex::new(RamFile::from_bytes(ziqa_kernel::abi::wasm::TEST_WASM))));
-        
+        vfs.mount(
+            "/bin/hello.wasm",
+            Arc::new(Mutex::new(RamFile::from_bytes(
+                ziqa_kernel::abi::wasm::TEST_WASM,
+            ))),
+        );
+
         // Busybox binary
-        vfs.mount("/bin/busybox", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/busybox-1.36.1/busybox")))));
+        vfs.mount(
+            "/bin/busybox",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../userspace/busybox-1.36.1/busybox"
+            )))),
+        );
         // Keyboard driver
-        vfs.mount("/bin/keyboard_driver", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/keyboard_driver.elf")))));
+        vfs.mount(
+            "/bin/keyboard_driver",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../userspace/keyboard_driver.elf"
+            )))),
+        );
         // Verification script
-        vfs.mount("/bin/test.sh", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../userspace/hush_test.sh")))));
+        vfs.mount(
+            "/bin/test.sh",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../userspace/hush_test.sh"
+            )))),
+        );
 
         // Doom ELF binary (compiled by build.zig from src/zig/doom_port.zig)
         #[cfg(feature = "games")]
-        vfs.mount("/bin/doom", Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!("../zig-out/bin/doom")))));
+        vfs.mount(
+            "/bin/doom",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../zig-out/bin/doom"
+            )))),
+        );
     }
 
     // Disk filesystems
@@ -149,7 +181,10 @@ fn init_services() {
 
         if let Some(entry) = block_registry::first() {
             let disk = entry.device.clone();
-            println!(" ~ root disk .......................... /dev/{} ({})", entry.name, entry.driver);
+            println!(
+                " ~ root disk .......................... /dev/{} ({})",
+                entry.name, entry.driver
+            );
 
             // 1. Try to mount FAT32 (host-editable)
             #[cfg(feature = "fat32")]
@@ -159,7 +194,11 @@ fn init_services() {
                     println!(" ~ FAT32 partition found at sector {}", start);
                     match fat32::mount_fat32(disk.clone(), start, "/fat") {
                         Ok(()) => {
-                            ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/fat", "fat32");
+                            ziqa_kernel::fs::vfs::register_mount(
+                                &alloc::format!("/dev/{}", entry.name),
+                                "/fat",
+                                "fat32",
+                            );
                             println!(" ~ FAT32 ............................. mounted at /fat");
                             true
                         }
@@ -177,16 +216,24 @@ fn init_services() {
 
             // 2. Try to mount ZiqaFS
             let ziqafs_result = ZiqaFs::mount(disk.clone());
-            
+
             if let Ok(ziqafs) = ziqafs_result {
                 ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                ziqa_kernel::fs::vfs::register_mount(
+                    &alloc::format!("/dev/{}", entry.name),
+                    "/disk",
+                    "ziqafs",
+                );
                 println!(" ~ ZiqaFS ............................. mounted at /disk");
             } else if !fat32_mounted {
                 // Disk is blank or unrecognized, and no FAT32 data to protect. Safe to format.
                 let ziqafs = ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS");
                 ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                ziqa_kernel::fs::vfs::register_mount(
+                    &alloc::format!("/dev/{}", entry.name),
+                    "/disk",
+                    "ziqafs",
+                );
                 println!(" ~ ZiqaFS ............................. formatted and mounted at /disk");
             } else {
                 println!(" ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)");
@@ -222,24 +269,72 @@ fn run_verification() {
     // Verification logic omitted for brevity, but this is now encapsulated
 }
 
+fn verify_logger(_arg: *const ()) {
+    // Yield 10 times to let the compositor and demo client run
+    for _ in 0..10 {
+        ziqa_kernel::process::scheduler::yield_now();
+    }
+    crate::println!("\n── Verification Log Dump ──");
+    ziqa_kernel::klog::KLOG.lock().dump();
+    crate::println!("───────────────────────────\n");
+}
 fn run_startup() {
-    ziqa_kernel::boot_screen::show_boot_screen();
-    ziqa_kernel::drivers::vga::clear_screen();
+    // ziqa_kernel::drivers::vga::clear_screen(); // Removed to keep new boot screen visible
     ziqa_kernel::drivers::uart::VGA_ENABLED.store(true, core::sync::atomic::Ordering::Relaxed);
     section("Startup");
     set_fg(Color::LightGreen);
 
-    // Spawn the built-in test ELF as a user process
+    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_kthread(
+        |_| ziqa_kernel::drivers::mouse_server::run_mouse_server(1),
+        core::ptr::null(),
+    ) {
+        println!(
+            " ✓ PS/2 Mouse IPC Server ............... spawned: {:?}",
+            pid
+        );
+    } else {
+        println!(" ! Failed to spawn PS/2 Mouse IPC Server");
+    }
+
+    // Spawn the built-in test ELF as a user process (DEFERRED)
+    println!(" ~ Deferred user process spawn");
+    /*
     let binary = include_bytes!("../assets/test_elf.bin");
     if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(binary) {
-        println!(" ✓ Spawned user process pid={} ............ from test_elf.bin", pid.0);
+        println!(
+            " ✓ Spawned user process pid={} ............ from test_elf.bin",
+            pid.0
+        );
     } else {
         println!(" ! Failed to spawn user process");
     }
+    */
+
+    // Spawn built-in compositor demo client (kernel thread)
+    println!(" ~ Deferred compositor demo client spawn");
+    /*
+    #[cfg(feature = "games")]
+    {
+        println!(" ~ Spawning compositor demo client...");
+        ziqa_kernel::process::scheduler::spawn_kthread(
+            ziqa_kernel::userspace::demo_client::demo_client_main,
+            core::ptr::null(),
+        );
+        println!(" ✓ Demo compositor client ................ spawned");
+    }
+    */
+
+    // Spawn verification log dumper
+    #[cfg(feature = "games")]
+    {
+        ziqa_kernel::process::scheduler::spawn_kthread(verify_logger, core::ptr::null());
+    }
 
     // Spawn the userspace keyboard driver
+    println!(" ~ Spawning keyboard driver...");
     let kb_driver_bin = include_bytes!("../userspace/keyboard_driver.elf");
     if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(kb_driver_bin) {
+        println!("[DEBUG startup] spawn_elf returned pid={}", pid.0);
         ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
             proc.capabilities.grant(
                 ziqa_kernel::capability::ResourceKind::DeviceIo,
@@ -248,34 +343,59 @@ fn run_startup() {
                 None,
             );
         });
-        println!(" ✓ Spawned Userspace Keyboard Driver pid={} .... from userspace/keyboard_driver.elf", pid.0);
+        println!("[DEBUG startup] with_process_mut done");
+        println!(
+            " ✓ Spawned Userspace Keyboard Driver pid={} .... from userspace/keyboard_driver.elf",
+            pid.0
+        );
     } else {
         println!(" ! Failed to spawn Userspace Keyboard Driver");
     }
-
     // Spawn Doom as a user-space process
     #[cfg(feature = "games")]
     {
         let doom_binary = include_bytes!("../zig-out/bin/doom");
         if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(doom_binary) {
-            println!(" ✓ Spawned Doom pid={} ..................... from zig-out/bin/doom", pid.0);
+            println!(
+                " ✓ Spawned Doom pid={} ..................... from zig-out/bin/doom",
+                pid.0
+            );
         } else {
             println!(" ! Failed to spawn Doom process (games feature enabled but doom.elf may need rebuilding)");
         }
     }
+    // Yield to let compositor and demo client initialize and log
+    #[cfg(feature = "games")]
+    {
+        for _ in 0..50 {
+            ziqa_kernel::process::scheduler::yield_now();
+        }
+    }
 
     // Restore any saved snapshots for instant-on resume
+    let binary = include_bytes!("../assets/test_elf.bin");
     let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(binary);
     if restored > 0 {
         set_fg(Color::LightGreen);
-        println!(" ✓ Instant-on resume: {} processes restored from snapshot", restored);
+        println!(
+            " ✓ Instant-on resume: {} processes restored from snapshot",
+            restored
+        );
         set_fg(Color::White);
     }
 
     println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");
     set_fg(Color::White);
-}
 
+    // Dump boot logs for verification
+    #[cfg(feature = "games")]
+    {
+        println!("\n── Boot log dump ──");
+        ziqa_kernel::klog::KLOG.lock().dump();
+        println!("───────────────────\n");
+    }
+    ziqa_kernel::boot_screen::show_boot_screen();
+}
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("\n[PANIC] {}", info);

@@ -89,7 +89,7 @@ impl Timer {
                     crate::process::scheduler::with_process_mut(pid, |proc| {
                         if proc.state == crate::process::ProcessState::Blocked {
                             proc.timed_out = true;
-                            proc.make_ready();
+                            proc.schedule_ready();
                         }
                     });
                     *slot = None;

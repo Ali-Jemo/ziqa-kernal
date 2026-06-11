@@ -4,14 +4,16 @@
 We have implemented a high-performance, kernel-level, tiered memory compression system for the ZiqaKernel. The system transparently increases effective system RAM capacity by compressing idle (cold) memory pages, making modern, memory-intensive software performant on resource-constrained hardware.
 
 ## Current State: Phase 1-5 Completed
-The core framework is fully functional and thread-safe.
-
 ### Key Components Implemented:
 *   **Compression Engine:** Adaptive system using LZ4 (for warm data) and an RLE stub (for cold data). Entropy detection prevents CPU thrashing on incompressible data.
 *   **CompressedPageStore:** Sharded, thread-safe memory pool (32 shards) to manage compressed page storage without global lock contention.
 *   **Fault Handler:** Fully integrated into the OS page fault path; handles transparent on-demand decompression, frame allocation, and TLB invalidation.
 *   **Background Daemon:** Proactive kernel thread that scans process VMAs, classifies page "coldness", compresses, and updates PTEs.
 *   **Capability Integration:** Security-aware design; processes can opt-in/out via `ResourceKind::MemoryCompression` capability tokens.
+*   **Kernel-mode Compositor:** Manages SHM-backed surfaces, tracks dirty regions, composites to GPU framebuffer (with BGA fallback), and forwards input events.
+*   **Built-in Demo Client:** Rust-based kernel thread providing an animated surface demo.
+
+---
 
 ---
 

@@ -105,6 +105,17 @@ pub fn mouse_write(data: u8) {
     wait_write();
     unsafe { port_60.write(data); }
 }
+/// Apply a USB HID mouse report (called from the xHCI HID driver).
+/// Updates the shared mouse state so the compositor/mouse-server
+/// sees USB mouse movement and button events in the same coordinate
+/// system as PS/2 mouse input.
+pub fn apply_usb_report(buttons: u8, dx: i8, dy: i8) {
+    let mut state = MOUSE_STATE.lock();
+    state.left_pressed = (buttons & 0x01) != 0;
+    state.right_pressed = (buttons & 0x02) != 0;
+    state.x = state.x.saturating_add(dx as i32).clamp(0, 1920);
+    state.y = state.y.saturating_add(dy as i32).clamp(0, 1080);
+}
 fn mouse_read() -> u8 {
     let mut port = Port::<u8>::new(0x60);
     wait_read();

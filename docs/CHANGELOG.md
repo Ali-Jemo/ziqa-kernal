@@ -20,6 +20,9 @@
 | **VFS not initialized panic** | Moved VFS initialization before self-tests in `init_subsystems()` to prevent uninitialized access during snapshot tests. |
 | **WASM loop control flow** | Replaced malformed WASM binary with valid loop module; inline interpreter tests avoid scheduler deadlock. |
 | **Capability I/O test failure** | Fixed test to use `pipe:` scheme (which exists and supports read/write) instead of non-existent file. |
+| **HPET hang on boot** | Fixed APIC timer calibration hang by ensuring HPET counter is enabled and TSC calibrated after ACPI init. |
+| **NVMe AbiError lifetime** | Replaced `alloc::format!` / `AbiError::Other(&msg)` (local String can't satisfy `'static`) with `println!` + static error string in NVMe poll_cq path. |
+| **Dynamic linker compilation** | Fixed type inference, unused variable warnings, and memory ordering in `elf_loader.rs` to compile cleanly against nightly kernel ABI. |
 
 ## What We've Added
 
@@ -30,6 +33,8 @@
 | **PCI Enumeration** | Full CF8/CFC bus scan (0–255 × 0–31 × 0–7), BAR decoding, class-based device discovery. |
 | **Device Driver Model** | Generic `Driver` trait with PCI match/init lifecycle, global `DeviceManager`, block device registry. |
 | **PS/2 Mouse Driver** | 3-byte packet decode, signed delta clamping, integrated with NWCC desktop for cursor/window interaction. |
+| **AHCI/SATA Driver** | AHCI 1.3 compliant DMA driver with 4K bounce buffers, port multiplication, NCQ-ready architecture. Registers `sata{N}` block devices. |
+| **NVMe Driver** | NVMe 1.4 driver with admin/I/O queues, namespace identification, LBA read/write. Registers `nvme{N}n{M}` block devices. |
 | **FAT32 (Read-Only)** | Pure Rust FAT32: MBR/BPB parsing, cluster chain walking, short-name directory parsing, recursive VFS mount. |
 | **Socket Stack (TCP/UDP)** | Socket state machine via smoltcp, connect/send/recv/close, AF_UNIX loopback, UDP datagrams. |
 | **eBPF Hash Maps** | Linear-probing hash map type with insert/update/delete, shared via `Arc<BpfMap>`. |
@@ -57,3 +62,13 @@
 | **Capability I/O Test** | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
 | **WASM Inline Tests** | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
 | **VFS Early Init** | VFS initialized before self-tests to support snapshot tests and capability I/O. |
+
+| **AHCI SATA Driver** | Full AHCI 1.3 driver: PCI BAR5 MMIO mapping, HBA reset/init, port scanning, DMA bounce buffers for PRD page-boundary safety, polling command completion with error decode, `BlockDevice` trait per-port registration. |
+| **In-Kernel Dynamic Linker** | `load_elf()` resolves DT_NEEDED shared libraries with DT_GNU_HASH bloom-filter O(1) symbol lookup. Handles R_X86_64_RELATIVE, GLOB_DAT, JUMP_SLOT, COPY, PC32, GOT64 relocations. Library search: DT_RUNPATH → `/lib/` → `/usr/lib/`. 16-byte stack alignment per Linux ABI. Circular dependency detection for `dlopen` cycles. |
+| **NVMe Driver (Gap #3)** | Full NVMe controller: PCI BAR3 MMIO, admin queue with identify/namespace commands. Multi-queue I/O (up to 8 queue pairs, round-robin distribution), namespace enumeration (each active NSID → `nvme0n{N}`), DMA bounce buffers for PRP page-boundary safety, controller capability-aware queue sizing, identity logging (vendor/model/serial/fw/LBA format), async event configuration via Set Features. 632 lines. |
+| **TTY/PTY Completion** | Blocking reads via `WaitCondition` in PTY scheme, SIGQUIT/SIGTSTP signal dispatch through `send_signal_to_process_group()`, `TIOCSCTTY` fix for session leader attachment, `RingBuf` made public, `SIGTSTP = 20` constant. |
+| **Audio Subsystem (Gap #4)** | Intel HDA driver: PCI class 0x04/0x03 detection (Intel/AMD/NVIDIA), MMIO BAR mapping via BAR 0, DMA buffers for CORB/RIRB command interface, immediate verb polling for codec enumeration, `Driver` trait integration. PCI `class_name` extended with "Multimedia" (0x04). 335 lines. |
+| **VirtIO GPU / Compositor Support** | VirtIO GPU driver: framebuffer initialization (`init_display`), GPU IPC listener thread, `get_fb_info()` for framebuffer metadata (virtual address, width, height, BPP). New syscall `ZIQA_DEV_GET_GPU_CHAN (1040)` returns GPU IPC channel ID. Two new IPC channels registered at init: Channel 3 (compositor protocol) and Channel 4 (compositor input events). |
+| **Kernel-Mode Compositor Protocol** | Display server IPC protocol with opcodes: `CreateSurface`, `Flush`, `Damage` (dirty rect tracking via `DrmRect`), `BufferAttach` (SHM buffer attachment), `SetPosition`, `Input`. Compositor kernel thread (`compositor_main`) and demo client (`demo_client_main`) spawned via `games` feature flag. |
+| **Input Subsystem for Compositor** | Keyboard driver exposes `COMPOSITOR_LAST_KEY` (AtomicU16) for ISR-safe key event delivery to compositor. PS/2 mouse driver adds `apply_usb_report()` for xHCI HID mouse events unified with PS/2 input. DRM driver adds `MODE_DAMAGE` ioctl and `DrmRect` for damage tracking. |
+| **Audio Subsystem (Gap #4)** | Intel HDA driver: PCI class 0x04/0x03 detection (Intel/AMD/NVIDIA), MMIO BAR mapping via BAR 0, DMA buffers for CORB/RIRB command interface, immediate verb polling for codec enumeration, `Driver` trait integration. PCI `class_name` extended with "Multimedia" (0x04). 335 lines. |

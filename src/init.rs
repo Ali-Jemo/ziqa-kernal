@@ -9,65 +9,40 @@
 use crate::{abi, arch, drivers, memory, process, BOOT_INFO};
 use alloc::boxed::Box;
 
-fn raw_serial_log(s: &str) {
-    unsafe {
-        let mut serial = uart_16550::SerialPort::new(0x3f8);
-        serial.init();
-        let _ = core::fmt::Write::write_str(&mut serial, s);
-    }
-}
-
 /// Initialize hardware, memory, scheduler, and core registries needed before
 /// higher-level startup/demo code runs.
 pub fn init(boot_info: &'static bootloader::BootInfo) {
     *BOOT_INFO.lock() = Some(boot_info);
 
-    raw_serial_log("init: starting bsp\n");
+    crate::println!("init: starting bsp");
     // Initialize per-CPU data for BSP early (sets up GS.base)
     arch::x86_64::per_cpu::init_bsp(0);
-    raw_serial_log("init: bsp done, starting GDT\n");
+    crate::println!("init: bsp done, starting GDT");
 
     // Hardware init.
     arch::x86_64::gdt::init();
-    raw_serial_log("init: GDT done, starting IDT\n");
+    crate::println!("init: GDT done, starting IDT");
     arch::x86_64::interrupts::init_idt();
-    raw_serial_log("init: IDT done, starting PIC\n");
+    crate::println!("init: IDT done, starting PIC");
     arch::x86_64::interrupts::init_pics();
-    raw_serial_log("init: PIC done, starting Syscalls\n");
+    crate::println!("init: PIC done, starting Syscalls");
     arch::x86_64::switch::init_syscalls();
-    raw_serial_log("init: early hardware done\n");
+    crate::println!("init: early hardware done");
 
-    raw_serial_log("init: klogs done, starting memory init\n");
+    crate::println!("init: klogs done, starting memory init");
 
     // Memory and heap init.
     use memory::paging::MemoryMapper;
     use x86_64::VirtAddr;
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    raw_serial_log("init: physical_memory_offset = 0x");
-    // Print hex manually to avoid allocation
-    let mut val = phys_offset.as_u64();
-    let mut buf = [0u8; 16];
-    let mut i = 16;
-    if val == 0 {
-        raw_serial_log("0");
-    } else {
-        while val > 0 {
-            i -= 1;
-            let digit = (val & 0xF) as u8;
-            buf[i] = if digit < 10 { b'0' + digit } else { b'A' + digit - 10 };
-            val >>= 4;
-        }
-        // Print from i to end
-        for j in i..16 {
-            raw_serial_log(core::str::from_utf8(&buf[j..=j]).unwrap());
-        }
-    }
-    raw_serial_log("\n");
-    raw_serial_log("init: doing frame allocator init\n");
+    crate::println!("init: physical_memory_offset = {:#x}", phys_offset.as_u64());
+    crate::println!("init: doing frame allocator init");
 
-    unsafe { memory::frame_allocator::rmm_init_from_bootinfo(boot_info); }
+    unsafe {
+        memory::frame_allocator::rmm_init_from_bootinfo(boot_info);
+    }
     *memory::FRAME_ALLOCATOR.lock() = Some(memory::BootInfoFrameAllocator);
-    raw_serial_log("init: frame allocator done, starting heap init\n");
+    crate::println!("init: frame allocator done, starting heap init");
 
     let mut mapper = unsafe { MemoryMapper::new(phys_offset) };
     memory::heap::init_heap(
@@ -75,64 +50,103 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
         &mut *memory::FRAME_ALLOCATOR.lock().as_mut().unwrap(),
     )
     .expect("heap init failed");
-    raw_serial_log("init: heap done, starting kernel mapper\n");
+    crate::println!("init: heap done, starting kernel mapper");
 
     memory::paging::init_kernel_mapper(VirtAddr::new(boot_info.physical_memory_offset));
-    raw_serial_log("init: kernel mapper done\n");
+    crate::println!("init: kernel mapper done");
+
+    crate::println!("init: initializing scheduler");
+    process::scheduler::init();
+    crate::println!("init: scheduler initialized (running as PID 0)");
     // Device/scheduler init.
     drivers::pci::init();
     drivers::device_manager::init();
-    
-    drivers::device_manager::DEVICE_MANAGER.lock().register_driver(Box::new(crate::drivers::virtio_block_new::VirtioBlockDriverNew));
+
+    drivers::device_manager::DEVICE_MANAGER
+        .lock()
+        .register_driver(Box::new(
+            crate::drivers::virtio_block_new::VirtioBlockDriverNew,
+        ));
     drivers::virtio_block::register();
     drivers::ata::register();
-    
-    drivers::device_manager::DEVICE_MANAGER.lock().scan_and_match();
-    
+    drivers::device_manager::DEVICE_MANAGER
+        .lock()
+        .register_driver(Box::new(crate::drivers::virtio_gpu::VirtioGpuDriver));
+    drivers::xhci::register();
+    drivers::ahci::register();
+    drivers::nvme::register();
+    drivers::audio::register();
+
+    // Scan — match all registered drivers against PCI devices
+    drivers::device_manager::scan();
+
+    // Initialize Bochs Graphics Adapter if present
+    crate::drivers::framebuffer::init_bga();
+
     drivers::acpi::init();
 
     // Register Mouse IPC Channel (Channel ID 1)
     crate::ipc::register_channel(1, alloc::sync::Arc::new(crate::ipc::Channel::new()));
-    
-    // Spawn mouse server process
-    crate::process::scheduler::spawn_kthread(|_| {
-        crate::drivers::mouse_server::run_mouse_server(1);
-    }, core::ptr::null());
+
+    // Register Compositor IPC Channel (Channel ID 3)
+    // Used by the kernel-mode compositor thread and userspace clients.
+    #[cfg(feature = "games")]
+    {
+        crate::ipc::register_channel(3, alloc::sync::Arc::new(crate::ipc::Channel::new()));
+        crate::println!(" ~ Compositor channel 3 ................ registered");
+    }
+
+    // Register Compositor Input Event Channel (Channel ID 4)
+    // Compositor sends keyboard/mouse events here for any client to read.
+    #[cfg(feature = "games")]
+    {
+        crate::ipc::register_channel(4, alloc::sync::Arc::new(crate::ipc::Channel::new()));
+        crate::println!(" ~ Compositor event channel 4 ............ registered");
+    }
 
     // ── SMP / APIC Init ──────────────────────────────────────────────────
     if let Some(acpi_info) = &*drivers::acpi::ACPI_INFO.lock() {
-        raw_serial_log("init: SMP/APIC init started\n");
+        crate::println!("init: SMP/APIC init started");
         crate::klog!(crate::klog::Level::Info, "APIC: initializing...");
 
-        raw_serial_log("init: enabling lapic on BSP\n");
+        crate::println!("init: enabling lapic on BSP");
         arch::x86_64::apic::enable_lapic_in_bsp();
-        raw_serial_log("init: enabling lapic on BSP done, initializing APIC\n");
+        crate::println!("init: enabling lapic on BSP done, initializing APIC");
         arch::x86_64::apic::init(acpi_info);
 
-        raw_serial_log("init: initializing BSP per_cpu\n");
+        crate::println!("init: initializing BSP per_cpu");
         let bsp_apic_id = arch::x86_64::apic::lapic_id();
         arch::x86_64::per_cpu::init_bsp(bsp_apic_id);
 
-        raw_serial_log("init: enabling APIC\n");
+        crate::println!("init: enabling APIC");
         arch::x86_64::apic::enable();
-        raw_serial_log("init: disabling PIC\n");
+        crate::println!("init: disabling PIC");
         arch::x86_64::apic::disable_pic();
 
-        raw_serial_log("init: calibrating APIC timer\n");
+        crate::println!("init: calibrating APIC timer");
         let timer_count = arch::x86_64::apic::calibrate_timer(5);
-        raw_serial_log("init: starting APIC timer\n");
+        crate::println!("init: starting APIC timer");
         arch::x86_64::apic::start_periodic_timer(timer_count);
 
-        raw_serial_log("init: booting APs\n");
+        crate::println!("init: booting APs");
         arch::x86_64::smp::boot_aps(acpi_info);
-        raw_serial_log("init: SMP/APIC init done\n");
+        crate::println!("init: SMP/APIC init done");
     } else {
-        crate::klog!(crate::klog::Level::Warn, "APIC: ACPI info not available, using legacy PIC");
+        crate::klog!(
+            crate::klog::Level::Warn,
+            "APIC: ACPI info not available, using legacy PIC"
+        );
     }
 
     #[cfg(feature = "drm")]
-    drivers::drm::init();
+    {
+        drivers::drm::init();
+    }
 
+    // Compositor channel is registered above (ID 3).
+    // The compositor kernel thread is spawned in main.rs after init_display.
+    #[cfg(not(feature = "games"))]
+    crate::println!(" ~ Compositor .......................... disabled (games feature)");
     // Enable SMEP/SMAP/UMIP if the CPU supports them (CR4 bits 20/21/11).
     // CPU security features are enabled LAST. SMAP in particular would
     // fault the moment the kernel touches a user-accessible page without
@@ -153,9 +167,7 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
         cpu_features.contains(crate::arch::x86_64::cpu_features::CpuFeatures::UMIP),
     );
 
-    raw_serial_log("init: calling scheduler::init\n");
-    process::scheduler::init();
-    raw_serial_log("init: scheduler::init completed\n");
+    crate::println!("init: finishing hardware setup");
 
     crate::println!(" ~ GDT, IDT, APIC, Heap ................ loaded");
     crate::println!(" ~ Memory mapper ...................... initialized");

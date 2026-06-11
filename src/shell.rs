@@ -793,6 +793,7 @@ impl Shell {
                     }
                 }
             } else {
+                crate::process::scheduler::yield_now();
                 x86_64::instructions::hlt();
             }
         }

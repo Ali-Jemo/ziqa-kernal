@@ -412,8 +412,13 @@ impl Process {
         }
     }
 
-    pub fn make_ready(&mut self) {
+    pub fn set_state_ready(&mut self) {
         self.state = ProcessState::Ready;
+    }
+
+    pub fn schedule_ready(&mut self) {
+        self.set_state_ready();
+        crate::process::scheduler::SCHEDULER.ready_queues.lock().push(self.pid, self.vruntime);
     }
     pub fn exit(&mut self, code: i64) {
         self.state = ProcessState::Exited(code);

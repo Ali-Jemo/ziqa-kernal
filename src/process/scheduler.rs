@@ -6,7 +6,7 @@ use crate::process::{AbiKind, Pid, Process, ProcessState, ProcessTable as PidAll
 use crate::process::vma::Vma;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
 
 /// The global process table, allowing concurrent access to different processes.
@@ -102,20 +102,24 @@ impl Scheduler {
         }));
 
         init_process_stack(&mut proc);
-        proc.make_ready();
 
         let mut table = self.process_table.write();
-        table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
-        self.ready_queues.lock().push(pid, 0);
+        let proc_arc = Arc::new(Mutex::new(proc));
+        table.tasks.insert(pid, proc_arc.clone());
+
+        proc_arc.lock().schedule_ready();
         Some(pid)
     }
 
     pub fn spawn_kthread(&self, entry: fn(*const ()), arg: *const ()) -> Option<Pid> {
         let pid = self.pid_allocator.lock().alloc_pid();
-        // The kthread's first RIP/PC is the asm trampoline.
         let trampoline = kthread_trampoline as *const () as u64;
         let mut proc = Process::new(pid, AbiKind::ZiqaNative, VirtAddr::new(trampoline), VirtAddr::new(0));
-        // Setup architecture-specific kernel state (e.g. privilege levels)
+        
+        let kstack = alloc::vec![0u8; 65536];
+        let top = kstack.as_ptr() as u64 + 65536;
+        proc.kernel_stack = Some(kstack);
+        proc.kernel_stack_top = top;
         #[cfg(target_arch = "x86_64")]
         {
             proc.cpu_state.cs = 0x8;
@@ -124,20 +128,21 @@ impl Scheduler {
         }
         #[cfg(target_arch = "aarch64")]
         {
-            proc.cpu_state.spsr_el1 = 0x05; // EL1h
+            proc.cpu_state.spsr_el1 = 0x05;
         }
         #[cfg(target_arch = "riscv64")]
         {
-            proc.cpu_state.sstatus = 0x100; // SPP=1 (Supervisor)
+            proc.cpu_state.sstatus = 0x100;
         }
 
         proc.page_table_frame = None;
-        proc.make_ready();
         init_kthread_stack(&mut proc, entry as u64, arg as u64);
 
         let mut table = self.process_table.write();
-        table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
-        self.ready_queues.lock().push(pid, 0);
+        let proc_arc = Arc::new(Mutex::new(proc));
+        table.tasks.insert(pid, proc_arc.clone());
+
+        proc_arc.lock().schedule_ready();
         Some(pid)
     }
 
@@ -172,16 +177,23 @@ impl Scheduler {
             bco_hook: None,
         }));
 
+        crate::println!("[DEBUG spawn_elf] starting plugin.load");
         match plugin.load(binary, &mut proc) {
             Ok(()) => {
+                crate::println!("[DEBUG spawn_elf] plugin.load ok, starting init_process_stack");
                 init_process_stack(&mut proc);
-                proc.make_ready();
+                crate::println!("[DEBUG spawn_elf] init_process_stack ok, pushing to ready queue");
+                proc.set_state_ready();
                 let mut table = self.process_table.write();
                 table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
                 self.ready_queues.lock().push(pid, 0);
+                crate::println!("[DEBUG spawn_elf] returning Some(pid={:?})", pid);
                 Some(pid)
             }
-            Err(_) => None,
+            Err(e) => {
+                crate::println!("[DEBUG spawn_elf] plugin.load failed: {:?}", e);
+                None
+            }
         }
     }
 
@@ -248,7 +260,7 @@ impl Scheduler {
         for waiter_pid in waiters {
             if let Some(proc_mutex) = self.get_process(Pid(waiter_pid)) {
                 let mut proc = proc_mutex.lock();
-                proc.make_ready();
+                proc.set_state_ready();
                 self.ready_queues.lock().push(proc.pid, proc.vruntime);
             }
         }
@@ -388,6 +400,7 @@ impl Scheduler {
                         drop(table);
                         
                         let mut write_table = self.process_table.write();
+                        crate::println!("[Scheduler] REAPING process PID {}!", pid.0);
                         write_table.tasks.remove(&pid);
                         return Some((pid, code));
                     }
@@ -441,11 +454,19 @@ impl Scheduler {
             crate::arch::disable_interrupts();
         }
 
-        let next_pid = self.ready_queues.lock().pop_lowest();
-        
-        if let Some(new_pid) = next_pid {
+        loop {
+            let next_pid = self.ready_queues.lock().pop_lowest();
+            let new_pid = match next_pid {
+                Some(pid) => pid,
+                None => {
+                    if interrupts_enabled {
+                        crate::arch::enable_interrupts();
+                    }
+                    return;
+                }
+            };
+
             let old_pid = self.current_pid();
-            
             if old_pid == Some(new_pid) {
                 if interrupts_enabled {
                     crate::arch::enable_interrupts();
@@ -453,10 +474,17 @@ impl Scheduler {
                 return;
             }
 
+            let new_proc_arc = match self.get_process(new_pid) {
+                Some(p) => p,
+                None => {
+                    crate::println!("[Scheduler WARNING] Ready task PID {} missing from table, skipping!", new_pid.0);
+                    continue;
+                }
+            };
+
             self.set_current_pid(Some(new_pid));
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
-            let new_proc_arc = self.get_process(new_pid).expect("Ready task missing from table");
 
             // Save FS/GS base of the old process
             #[cfg(target_arch = "x86_64")]
@@ -495,7 +523,6 @@ impl Scheduler {
             if let Some(frame) = new_cr3 {
                 #[cfg(target_arch = "x86_64")]
                 unsafe { x86_64::registers::control::Cr3::write(frame, x86_64::registers::control::Cr3Flags::empty()); }
-                // TODO: Add ASID/TTBR switching for aarch64, SATP for riscv64
             }
             crate::arch::update_trap_stacks(new_kstack_top);
             if let Some(old_arc) = old_proc_arc {
@@ -522,6 +549,7 @@ impl Scheduler {
                     );
                 }
             }
+            break;
         }
 
         if interrupts_enabled {
@@ -579,6 +607,22 @@ impl Scheduler {
 }
 
 pub static SCHEDULER: Scheduler = Scheduler::new();
+
+/// Gate for timer-driven preemption. Set to `true` once boot/init is complete
+/// and the shell is about to start. Until then, the timer handler will NOT
+/// call `schedule()`, preventing the boot process from being preempted
+/// mid-startup into a freshly-spawned user process.
+static PREEMPTION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Signal that preemptive scheduling may begin.
+pub fn enable_preemption() {
+    PREEMPTION_ENABLED.store(true, Ordering::Release);
+}
+
+/// Check whether timer-driven preemption is allowed.
+pub fn preemption_enabled() -> bool {
+    PREEMPTION_ENABLED.load(Ordering::Acquire)
+}
 
 pub fn tick() { SCHEDULER.tick(); }
 pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
@@ -691,7 +735,9 @@ pub fn current_task() -> Option<Arc<Mutex<Process>>> {
 #[deprecated(note = "process lock is held with IRQs on; can deadlock against timer ISR. Use with_current_task(_mut) instead.")]
 pub fn current_task_mut() -> Option<Arc<Mutex<Process>>> { current_task() }
 pub fn list_pids() -> Vec<Pid> { crate::arch::without_interrupts(|| SCHEDULER.list_pids()) }
-pub fn yield_now() { crate::arch::yield_now(); }
+pub fn yield_now() {
+    SCHEDULER.schedule();
+}
 
 /// Replace a process with a new ELF binary (execve).
 /// This clears old mappings, loads the new binary, and resets CPU state.

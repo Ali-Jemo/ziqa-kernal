@@ -30,10 +30,12 @@ lazy_static! {
             | x86_64::structures::gdt::DescriptorFlags::WRITABLE;
         let kernel_data_selector = gdt.add_entry(x86_64::structures::gdt::Descriptor::UserSegment(kernel_data_flags.bits()));
 
-        let user_data_selector =
+        let mut user_data_selector =
             gdt.add_entry(x86_64::structures::gdt::Descriptor::user_data_segment());
-        let user_code_selector =
+        user_data_selector.0 |= 3;
+        let mut user_code_selector =
             gdt.add_entry(x86_64::structures::gdt::Descriptor::user_code_segment());
+        user_code_selector.0 |= 3;
         let tss_selector = gdt.add_entry(x86_64::structures::gdt::Descriptor::tss_segment(&TSS));
         (
             gdt,

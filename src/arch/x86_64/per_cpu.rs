@@ -74,8 +74,7 @@ static mut BSP_PER_CPU: PerCpu = PerCpu::empty();
 /// Pointers to all per-CPU areas (indexed by cpu_id)
 static mut PER_CPU_PTRS: [*const PerCpu; MAX_CPUS] = [core::ptr::null(); MAX_CPUS];
 
-pub static CPU_COUNT: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(1);
+pub static CPU_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1);
 
 /// Initialize per-CPU data for the BSP.
 /// Called very early in `init()`, before anything else.
@@ -85,8 +84,9 @@ pub fn init_bsp(apic_id: u32) {
         (*cpu).cpu_id = 0;
         (*cpu).apic_id = apic_id;
         (*cpu).is_bsp = true;
-        (*cpu).current_pid = AtomicU64::new(u64::MAX);
-        (*cpu).ticks = AtomicU64::new(0);
+        // init_bsp is called once before scheduler init and again after ACPI
+        // discovers the real LAPIC ID. Preserve scheduler state on the second
+        // call so the boot task remains the current task.
         PER_CPU_PTRS[0] = cpu as *const PerCpu;
         set_gs_base(cpu as *const PerCpu as u64);
     }

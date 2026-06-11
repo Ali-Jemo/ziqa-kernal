@@ -1,6 +1,5 @@
 # ZiqaKernel / Axiq-IQ: Status & Engineering Roadmap
-*Updated: Sunday, June 7, 2026*
-
+*Updated: Wednesday, June 11, 2026*
 This document provides a comprehensive overview of the current state of the ZiqaKernel, its features from the low-level base to the high-level services, and the roadmap of what has been implemented and what remains for the future.
 
 ---
@@ -16,7 +15,7 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 *   **Full TCP/UDP Lifecycle**: Run both client and server applications with `connect`, `listen`, and `accept` support.
 *   **Security Research**: Experiment with **Instant Recursive Capability Revocation** to sever process access system-wide.
 *   **Bare-metal Demos**: Run DOOM fire effects, a standalone Doom ELF process (via `int 0x80` syscall forwarding), and graphical Tetris directly from the boot screen.
-
+*   **GPU-Accelerated Compositing**: VirtIO GPU framebuffer with kernel-mode compositor (IPC protocol: CreateSurface, Flush, Damage, BufferAttach, SetPosition, Input) — spawnable via `games` feature flag. Demo client renders to compositor surfaces via SHM buffers.
 ---
 
 ## 🏛️ The Feature Floor Spectrum
@@ -34,16 +33,14 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 
 ### 2. Middle Floor (Drivers, I/O & VFS)
 *   **Device Driver Model**: Generic `Driver` trait with PCI auto-probing and `DeviceManager`.
-*   **Block & Storage**: `BlockRegistry` with VirtIO-Block (MMIO) and ATA drivers.
+*   **Block & Storage**: `BlockRegistry` with VirtIO-Block (MMIO) and ATA drivers. **AHCI SATA** and **NVMe** drivers registered explicitly in `init()` for deterministic initialization.
 *   **Filesystems**:
     *   **VFS**: Virtual Filesystem Switch with mount support.
     *   **ZiqaFS**: Journaling filesystem (Custom).
     *   **FAT32**: Pure-Rust host-interop driver with file write, cluster allocation, file creation, directory creation, rename, and truncate support.
     *   **RamFS & Page Cache**: High-speed memory-backed storage and LRU caching.
 *   **Network Stack**: `smoltcp`-based TCP/UDP socket layer with full server/client support, VirtIO-Net drivers.
-*   **Input/Output**: PS/2 Mouse (clamped 1080p), PS/2 Keyboard, UART serial, VGA LFB.
-
-### 3. High Floor (Process, Security & Userspace)
+*   **Input/Output**: PS/2 Mouse (clamped 1080p), PS/2 Keyboard, UART serial, VGA LFB. **xHCI USB 3.0 HID** (keyboard/mouse with scancode decoding). **Intel HDA Audio** (codec enumeration via CORB/RIRB).
 *   **Process Management**:
     *   **MLFQ Scheduler**: Multi-Level Feedback Queue with priority boosting.
     *   **Ring 3 Isolation**: Full privilege separation with assembly-hardened syscall trampolines.
@@ -84,13 +81,12 @@ As of June 2026, **ZiqaKernel** is a sophisticated architectural scaffold and OS
 *   **Zig Hot-paths (blitter)**: Framebuffer blitter (`src/zig/blitter.zig`) with fill_rect, blit_bitmap, scroll_up, clear, doom_fire_step, fireworks_burst — called from Rust via C ABI. Compiled for `x86_64-freestanding-none` with ReleaseFast.
 
 ### ❌ MISSING (Not Yet Added / Future)
-*   **Production-grade Graphics**: Move from VGA LFB to real DRM/KMS acceleration.
+*   **Production-grade Graphics**: Move from VGA LFB to real DRM/KMS acceleration. **Progress**: VirtIO GPU driver with framebuffer init, IPC listener, `get_fb_info()`. Kernel-mode compositor with IPC protocol (CreateSurface, Flush, Damage, BufferAttach, SetPosition, Input) and demo client. DRM damage tracking via `MODE_DAMAGE` ioctl and `DrmRect`.
 *   **Multi-Architecture**: Support for `aarch64` (ARM64) or `riscv64`.
 *   **Production Demand Paging**: Current demand paging is functional but rough; anonymous/file-backed page policy, eviction, swap, and stricter VMA source handling are still missing.
-*   **USB Stack**: No support for USB keyboards, mice, or mass storage yet.
-*   **Sound Subsystem**: No audio drivers or ABI.
+*   **USB Stack**: xHCI USB 3.0 HID driver implemented (PCI probe, MMIO mapping, command/event rings, port enumeration, USB HID boot-keyboard/mouse). Mass storage not yet implemented.
+*   **Sound Subsystem**: Intel HDA driver (PCI class 0x04/0x03 detection, MMIO BAR mapping, CORB/RIRB DMA buffers, codec enumeration). Audio ABI not yet exposed.
 *   **Production Kernel Threading**: Need worker pools and affinity controls.
-
 ---
 
 ## 🚀 Future Vision (P2 Roadmap)

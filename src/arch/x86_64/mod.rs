@@ -173,8 +173,8 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
             let slots = (kstack_top - 56) as *mut u64;
             slots.add(0).write(0);                  // rbp
             slots.add(1).write(0);                  // rbx
-            slots.add(2).write(arg);                // r12 -> arg
-            slots.add(3).write(entry);              // r13 -> entry
+            slots.add(2).write(entry);              // r13 -> entry
+            slots.add(3).write(arg);                // r12 -> arg
             slots.add(4).write(0);                  // r14
             slots.add(5).write(0);                  // r15
             // Return address for the kthread's first `switch_context` ret.

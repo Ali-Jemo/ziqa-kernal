@@ -97,7 +97,6 @@ pub fn bar_address(bar_val: u32) -> (u64, bool) {
     };
     (address, is_io)
 }
-
 pub fn device_count() -> usize {
     PCI_DEVICES.lock().len()
 }
@@ -107,6 +106,7 @@ pub fn class_name(class: u8) -> &'static str {
         0x01 => "Storage",
         0x02 => "Network",
         0x03 => "Display",
+        0x04 => "Multimedia",
         0x06 => "Bridge",
         0x0C => "Serial Bus",
         _ => "Other",

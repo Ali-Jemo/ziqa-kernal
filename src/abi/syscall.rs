@@ -174,6 +174,9 @@ pub mod nr {
     /// Translate virtual address to physical address for DMA
     /// args: [virt_addr] → phys_addr / -errno
     pub const ZIQA_DEV_VIRT_TO_PHYS: u64 = 1038;
+    /// Get GPU IPC channel ID
+    /// args: (none) → channel_id / 0 (no GPU)
+    pub const ZIQA_DEV_GET_GPU_CHAN: u64 = 1040;
 
     // ── ZiqaKernel native capability syscalls (userspace libposix ABI) ────────
     /// Request a capability for a resource (e.g., File, Network).
@@ -475,6 +478,13 @@ pub fn dispatch_syscall(
         nr::ZIQA_DEV_PORT_OUT => return ziqa_dev_port_out(ctx),
         nr::ZIQA_DEV_MAP => return ziqa_dev_map(ctx),
         nr::ZIQA_DEV_IRQ_WAIT => return ziqa_dev_irq_wait(ctx),
+        nr::ZIQA_DEV_GET_GPU_CHAN => {
+            let guard = crate::drivers::virtio_gpu::GPU_IPC_CHANNEL.lock();
+            return match guard.as_ref() {
+                Some(id) => Ok(*id as u64),
+                None => Ok(0),
+            };
+        }
         nr::ZIQA_DEV_PCI_FIND => return ziqa_dev_pci_find(ctx),
         nr::ZIQA_DEV_PCI_BAR => return ziqa_dev_pci_bar(ctx),
         nr::ZIQA_DEV_PCI_IRQ => return ziqa_dev_pci_irq(ctx),

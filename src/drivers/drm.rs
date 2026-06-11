@@ -29,6 +29,8 @@ pub mod ioctl {
 
     /// Page flip ioctl
     pub const MODE_PAGE_FLIP: u64 = 0xc0206407;
+    /// Damage ioctl – placeholder value for tracking damaged regions
+    pub const MODE_DAMAGE: u64 = 0x4504;
 }
 
 /// Framebuffer object identifier
@@ -70,6 +72,21 @@ pub struct DrmResources {
     pub connector_id: u32,
     pub width: u32,
     pub height: u32,
+}
+/// Rectangle used for damage tracking. Mirrors userspace layout.
+#[repr(C)]
+pub struct DrmRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Damage descriptor passed from userspace.
+#[repr(C)]
+pub struct DrmDamage {
+    pub rects: *const DrmRect,
+    pub count: u32,
 }
 
 /// DRM device state

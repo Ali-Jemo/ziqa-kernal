@@ -52,7 +52,7 @@ impl Event {
         for pid in waiters.drain(..) {
             if let Some(proc_arc) = scheduler::SCHEDULER.get_process(pid) {
                 let mut proc = proc_arc.lock();
-                proc.make_ready();
+                proc.set_state_ready();
                 scheduler::SCHEDULER
                     .ready_queues
                     .lock()

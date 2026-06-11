@@ -764,5 +764,43 @@ pub fn create_process_page_table() -> Option<PhysFrame> {
         new_table[i] = parent_table[i].clone();
     }
 
+    // Copy the kernel heap mapping (L4 index 136) since it is in the lower half
+    // but houses the kernel stacks allocated via Vec.
+    new_table[136] = parent_table[136].clone();
+
+    // Allocate private Level 3 and Level 2 page tables for L4 index 0 (low-half)
+    // so the kernel mappings stay present but don't conflict with private userspace.
+    let new_l3_frame = fa.allocate_frame()?;
+    let new_l3_table = unsafe { frame_as_page_table_mut(new_l3_frame) };
+    for i in 0..512 {
+        new_l3_table[i].set_unused();
+    }
+
+    let l3_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+    new_table[0].set_addr(new_l3_frame.start_address(), l3_flags);
+
+    let new_l2_frame = fa.allocate_frame()?;
+    let new_l2_table = unsafe { frame_as_page_table_mut(new_l2_frame) };
+    for i in 0..512 {
+        new_l2_table[i].set_unused();
+    }
+
+    let l2_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+    new_l3_table[0].set_addr(new_l2_frame.start_address(), l2_flags);
+
+    if parent_table[0].flags().contains(PageTableFlags::PRESENT) {
+        if let Ok(parent_l3_frame) = parent_table[0].frame() {
+            let parent_l3_table = unsafe { frame_as_page_table(parent_l3_frame) };
+            if parent_l3_table[0].flags().contains(PageTableFlags::PRESENT) {
+                if let Ok(parent_l2_frame) = parent_l3_table[0].frame() {
+                    let parent_l2_table = unsafe { frame_as_page_table(parent_l2_frame) };
+                    for i in 0..512 {
+                        new_l2_table[i] = parent_l2_table[i].clone();
+                    }
+                }
+            }
+        }
+    }
+
     Some(new_frame)
 }
