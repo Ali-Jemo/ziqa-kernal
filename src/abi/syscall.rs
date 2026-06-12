@@ -289,6 +289,21 @@ pub fn dispatch_syscall(
             klog_syscall("io_uring_submit", n as u64);
             return Ok(n as u64);
         }
+        204 => { // fb_blit(pixels, palette, w, h, dst_x, dst_y) - Doom FB blit (stub)
+            let w = ctx.args[2] as u32;
+            let h = ctx.args[3] as u32;
+            klog_syscall("fb_blit", (w * h) as u64);
+            return Ok(0);
+        }
+        205 => { // get_ticks() - Doom ticks
+            let ticks = crate::timer::uptime_ms();
+            klog_syscall("get_ticks", ticks);
+            return Ok(ticks);
+        }
+        206 => { // get_key() - Doom key input (stub)
+            klog_syscall("get_key", 0);
+            return Ok(0);
+        }
         _ => {}
     }
 

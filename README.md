@@ -86,13 +86,13 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 | Scheduler / processes | Experimental | Process table, ready queue, kernel threads, ELF/native process launch, signal handling. |
 | VFS / schemes | Experimental | VFS mount layer, scheme registry, Redox-style schemes, RAM mounts, FAT32 read-only mount, ZiqaFS. |
 | Drivers | Experimental | VirtIO block/GPU, ATA/AHCI, NVMe, xHCI, PS/2 mouse, keyboard, framebuffer, audio, DRM. |
-| ABI / syscalls | Experimental | Linux ABI plugin, POSIX syscall surface, WASM ABI behind feature flags, eBPF VM/verifier. |
-| Graphics / compositor | Demo / experimental | VirtIO GPU or BGA framebuffer, SHM-backed surfaces, dirty rectangles, compositor IPC channel, demo client. |
+| ABI / syscalls | Experimental | Linux ABI plugin, POSIX syscall surface, WASM ABI behind feature flags, eBPF VM/verifier, shell syscall inspection/probes. |
+| Graphics / compositor | Demo / experimental | VirtIO GPU or BGA framebuffer, SHM-backed surfaces, dirty rectangles, compositor IPC channel, demo client, NWM text desktop mirrored into the linear framebuffer. |
 | Userspace drivers | Skeleton | DRM and VirtIO-Net userspace driver experiments behind feature flags. |
 | Network | Experimental | smoltcp-backed TCP/UDP socket experiments behind `net` feature. |
 | Memory compression | Experimental | LZ4 page compression, compressed page store, page-fault decompression, daemon/status hooks. |
 | Snapshots | Experimental | Process snapshot save/load/resume experiments through FAT32-backed snapshot storage. |
-| Shell / demos | Functional / experimental | Shell, BusyBox, DOOM/Tetris/demo clients behind `games` feature, built-in utilities. |
+| Shell / demos | Functional / experimental | Foreground-safe shell, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. |
 
 ---
 
@@ -154,10 +154,19 @@ The current boot path is:
 - Capability-style resource checks and DeviceIo grants for userspace driver experiments.
 - Performance utilities using RDTSC and heap profiling hooks.
 
+
+### Shell and Runtime Diagnostics
+
+- Foreground shell owns serial input while a command line is active; scheduler preemption stays disabled during line editing and command execution to keep demo/kernel threads from stealing input.
+- `syscalls [filter]` lists the curated native syscall table by name, number, category, arguments, and safety.
+- `syscall <name|nr>` safely probes side-effect-free syscall state such as PID, parent PID, uptime ticks, current signal mask, and GPU channel ID. Unsafe process, IPC mutation, network, and framebuffer calls are listed but not invoked by the shell probe.
+
 ### Graphics and Userspace Experiments
 
 - Kernel-mode compositor with SHM-backed surfaces, dirty rectangles, damage tracking, and compositing.
 - Compositor IPC protocol documented in [`docs/COMPOSITOR_IPC.md`](docs/COMPOSITOR_IPC.md).
+- NWM demo (`nwm-test`) renders an 80×25 text desktop through VGA memory and mirrors dirty cells into the active linear framebuffer so QEMU GTK shows the desktop on BGA/VirtIO display paths.
+- NWM supports desktop icons, taskbar restore/focus, start-menu launching, window maximize/restore, contextual mouse cursor shapes, and the Snake/Cube/System monitor demos.
 - Demo client and userspace display server experiments.
 - Zig blitter hot paths for framebuffer operations.
 - DOOM/Tetris/demo binaries behind the `games` feature.
@@ -239,7 +248,7 @@ docker compose run dev
 | [`src/scheme/`](src/scheme) | Scheme registry and scheme implementations. |
 | [`src/abi/`](src/abi) | ABI plugins, syscall dispatch, Linux/WASM ABI surfaces. |
 | [`src/ebpf/`](src/ebpf) | eBPF verifier, VM, maps, helpers, tracepoints. |
-| [`src/shell.rs`](src/shell.rs) | Shell parser, command registry, builtins, job control. |
+| [`src/shell.rs`](src/shell.rs) | Shell parser, command registry, builtins, job control, syscall table/probe commands. |
 | [`docs/`](docs/) | Architecture, roadmap, build configuration, compositor IPC. |
 | [`assets/`](assets/) | Diagrams and embedded boot/test binaries. |
 

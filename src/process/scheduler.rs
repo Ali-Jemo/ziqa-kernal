@@ -619,6 +619,11 @@ pub fn enable_preemption() {
     PREEMPTION_ENABLED.store(true, Ordering::Release);
 }
 
+/// Stop timer-driven preemption while the foreground kernel shell owns input.
+pub fn disable_preemption() {
+    PREEMPTION_ENABLED.store(false, Ordering::Release);
+}
+
 /// Check whether timer-driven preemption is allowed.
 pub fn preemption_enabled() -> bool {
     PREEMPTION_ENABLED.load(Ordering::Acquire)

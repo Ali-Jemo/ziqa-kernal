@@ -4,9 +4,12 @@
 
 | Issue | Fix |
 | :--- | :--- |
+| **Shell handoff starvation** | Keeps the foreground shell non-preemptible while reading/executing commands and removed the idle input `yield_now()`, preventing Doom/kthreads from stealing serial input. |
+| **Shell syscall tools** | Added `syscalls [filter]` and `syscall <name|nr>` so the shell can inspect supported syscall numbers and safely probe harmless kernel syscalls. |
 | **VGA color mapping** | Corrected syntax error in VGA color palette initialization for proper CP437-safe rendering. |
 | **Linear framebuffer (LFB)** | Enabled and initialized LFB for high-res graphics; fixed hardware blitting path. |
 | **nwm-test compilation** | Resolved linker errors and compilation failures; ensured kernel threads have proper stacks. |
+| **nwm-test invisible in GUI** | Mirrored the NWM text-mode desktop into the active linear framebuffer and replaced its PID 0 sleep with a foreground-safe frame delay. |
 | **nwm-test compositor hang** | Fixed deadlock by spawning compositor and client as separate tasks instead of blocking on the same thread. |
 | **Missing SHM/IPC syscalls** | Implemented missing native SHM and IPC syscalls; synchronized Zig client ABI with kernel. |
 | **Compositor heap exhaustion** | Resolved heap exhaustion panic by pre-registering the demo surface. |
@@ -62,7 +65,7 @@
 | **Capability I/O Test** | `[Path 2] userspace: capability-based I/O` test using `pipe:` scheme for libposix simulation. |
 | **WASM Inline Tests** | Self-tests use inline `parse_wasm`/`execute_function` avoiding scheduler deadlocks. |
 | **VFS Early Init** | VFS initialized before self-tests to support snapshot tests and capability I/O. |
-
+| **Documentation refresh** | Updated README and compositor IPC docs to describe foreground-safe shell input, syscall inspection/probe commands, and the NWM linear-framebuffer mirror path. |
 | **AHCI SATA Driver** | Full AHCI 1.3 driver: PCI BAR5 MMIO mapping, HBA reset/init, port scanning, DMA bounce buffers for PRD page-boundary safety, polling command completion with error decode, `BlockDevice` trait per-port registration. |
 | **In-Kernel Dynamic Linker** | `load_elf()` resolves DT_NEEDED shared libraries with DT_GNU_HASH bloom-filter O(1) symbol lookup. Handles R_X86_64_RELATIVE, GLOB_DAT, JUMP_SLOT, COPY, PC32, GOT64 relocations. Library search: DT_RUNPATH → `/lib/` → `/usr/lib/`. 16-byte stack alignment per Linux ABI. Circular dependency detection for `dlopen` cycles. |
 | **NVMe Driver (Gap #3)** | Full NVMe controller: PCI BAR3 MMIO, admin queue with identify/namespace commands. Multi-queue I/O (up to 8 queue pairs, round-robin distribution), namespace enumeration (each active NSID → `nvme0n{N}`), DMA bounce buffers for PRP page-boundary safety, controller capability-aware queue sizing, identity logging (vendor/model/serial/fw/LBA format), async event configuration via Set Features. 632 lines. |
@@ -72,3 +75,4 @@
 | **Kernel-Mode Compositor Protocol** | Display server IPC protocol with opcodes: `CreateSurface`, `Flush`, `Damage` (dirty rect tracking via `DrmRect`), `BufferAttach` (SHM buffer attachment), `SetPosition`, `Input`. Compositor kernel thread (`compositor_main`) and demo client (`demo_client_main`) spawned via `games` feature flag. |
 | **Input Subsystem for Compositor** | Keyboard driver exposes `COMPOSITOR_LAST_KEY` (AtomicU16) for ISR-safe key event delivery to compositor. PS/2 mouse driver adds `apply_usb_report()` for xHCI HID mouse events unified with PS/2 input. DRM driver adds `MODE_DAMAGE` ioctl and `DrmRect` for damage tracking. |
 | **Audio Subsystem (Gap #4)** | Intel HDA driver: PCI class 0x04/0x03 detection (Intel/AMD/NVIDIA), MMIO BAR mapping via BAR 0, DMA buffers for CORB/RIRB command interface, immediate verb polling for codec enumeration, `Driver` trait integration. PCI `class_name` extended with "Multimedia" (0x04). 335 lines. |
+| **nwm-test Enhancements** | Added full desktop mouse interactions (double-click to maximize/restore windows and launch icons, drag-to-select on desktop, taskbar window focus/restore clicks, start button click). Upgraded keyboard controls (WASD support for Snake, `f` key for maximize/restore toggle). Dynamic contextual mouse cursor shapes (resize, drag, selection). Integrated ZRAM memory compression stats (page counts, ratio) into `SysMon` and Terminal `zram`/`neofetch` commands, fixed missing desktop icon for "3D Cube", enabled down arrow menu navigation, and added serial terminal escape sequence mapping to prevent immediate WM exit on arrow key presses. |

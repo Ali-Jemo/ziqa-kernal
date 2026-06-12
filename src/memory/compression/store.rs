@@ -107,4 +107,14 @@ impl CompressedPageStore {
             // TODO: Return frame to free-list when we have a real frame deallocator.
         }
     }
+
+    pub fn get_stats(&self) -> (usize, usize, usize) {
+        let page_map = self.page_map.lock();
+        let count = page_map.len();
+        let mut compressed_size = 0;
+        for loc in page_map.values() {
+            compressed_size += loc.compressed_len;
+        }
+        (count, count * PAGE_SIZE, compressed_size)
+    }
 }

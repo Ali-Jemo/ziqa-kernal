@@ -6,7 +6,7 @@
 ///        1-6=launch  h=help  q/ESC=quit
 ///        Terminal: type+Enter; Editor: type, s=save, arrows=cursor
 
-use crate::process::Pid;
+use core::hint::spin_loop;
 use libm;
 
 const W: usize = 80;
@@ -95,13 +95,19 @@ impl Screen {
         if x<W && y<H { self.shadow[y][x]=(ch as u16)|((at as u16)<<8); }
     }
     fn flush(&mut self) {
+        let mut fb_dirty = false;
         for y in 0..H { for x in 0..W {
             let c=self.shadow[y][x];
             if c!=self.prev[y][x] {
                 unsafe{core::ptr::write_volatile(self.vga.add(y*W+x),c);}
+                crate::drivers::fb_console::draw_cell(x, y, c as u8, (c >> 8) as u8);
                 self.prev[y][x]=c;
+                fb_dirty = true;
             }
         }}
+        if fb_dirty {
+            crate::drivers::fb_console::flush();
+        }
     }
     fn fill(&mut self, x:usize, y:usize, w:usize, h:usize, ch:u8, at:u8) {
         for r in y..y+h { for c in x..x+w { self.put(c,r,ch,at); } }
@@ -130,14 +136,14 @@ fn box_draw(s:&mut Screen, x:usize, y:usize, w:usize, h:usize, at:u8) {
 
 // ── App kinds ─────────────────────────────────────────────────────────────────
 #[derive(Clone,Copy,PartialEq)]
-enum App { Terminal, SysMon, Files, Network, Editor, About, Cube3D }
+enum App { Terminal, SysMon, Files, Network, Editor, About, Cube3D, Snake }
 
 impl App {
     fn title(self) -> &'static str { match self {
         App::Terminal => "Terminal", App::SysMon => "System Monitor",
         App::Files    => "File Manager", App::Network => "Network",
         App::Editor   => "Text Editor", App::About   => "About ZiqaOS",
-        App::Cube3D   => "3D Cube",
+        App::Cube3D   => "3D Cube", App::Snake => "Snake Game",
     }}
     fn default_size(self) -> (usize,usize) { match self {
         App::Terminal => (44,16),
@@ -147,6 +153,7 @@ impl App {
         App::Editor   => (50,16),
         App::About    => (36,16),
         App::Cube3D   => (40,18),
+        App::Snake    => (34,16),
     }}
 }
 
@@ -220,14 +227,35 @@ struct Win {
     x: usize, y: usize,
     w: usize, h: usize,
     minimized: bool,
+    maximized: bool,
+    saved_geom: Option<(usize, usize, usize, usize)>,
     scroll: usize,
 }
 impl Win {
     fn new(app:App, x:usize, y:usize)->Self{
         let (w,h)=app.default_size();
-        Self{app,x,y,w,h,minimized:false,scroll:0}
+        Self{app,x,y,w,h,minimized:false,maximized:false,saved_geom:None,scroll:0}
+    }
+    fn toggle_maximize(&mut self) {
+        if self.maximized {
+            if let Some((sx, sy, sw, sh)) = self.saved_geom {
+                self.x = sx;
+                self.y = sy;
+                self.w = sw;
+                self.h = sh;
+            }
+            self.maximized = false;
+        } else {
+            self.saved_geom = Some((self.x, self.y, self.w, self.h));
+            self.x = 0;
+            self.y = DESK_TOP;
+            self.w = W;
+            self.h = DESK_BOT - DESK_TOP + 1;
+            self.maximized = true;
+        }
     }
     fn clamp(&mut self){
+        if self.maximized { return; }
         if self.x+self.w>W{self.x=W.saturating_sub(self.w);}
         if self.y<DESK_TOP{self.y=DESK_TOP;}
         if self.y+self.h>DESK_BOT+1{self.y=DESK_BOT+1-self.h.min(DESK_BOT);}
@@ -272,12 +300,24 @@ fn render_sysmon(s:&mut Screen, x:usize, y:usize, w:usize, h:usize, t:u32){
     let bw=w.saturating_sub(11).min(24);
     let cpu=cpu_v(t); let mem=mem_v(t);
     let net=rx_v(t)/2; let dsk=2+t/20%12;
-    for (r,(lbl,pct,col)) in [("CPU",cpu,0x0Au8),("MEM",mem,0x0E),("NET",net,0x0B),("DSK",dsk,0x0D)].iter().enumerate(){
-        if r>=h{break;}
-        let c=if *pct>80{0x0C}else{*col};
-        let f=(bw as u32*pct/100)as usize;
-        s.print(x,y+r,lbl,0x0F); s.print_n(x+4,y+r,*pct,3,c);
-        s.print(x+7,y+r,"% [",0x0F); hbar(s,x+10,y+r,bw,f,c); s.put(x+10+bw,y+r,b']',0x0F);
+    let (comp_count, comp_orig, comp_size) = crate::memory::compression::PAGE_STORE.get_stats();
+    let savings_pct = if comp_orig > 0 { ((comp_orig.saturating_sub(comp_size)) * 100 / comp_orig) as u32 } else { 0 };
+    let meters = [
+        ("CPU", cpu, 0x0Au8),
+        ("MEM", mem, 0x0E),
+        ("NET", net, 0x0B),
+        ("DSK", dsk, 0x0D),
+        ("CMP", savings_pct, 0x0D),
+    ];
+    for (r, &(lbl, pct, col)) in meters.iter().enumerate() {
+        if r >= h { break; }
+        let c = if pct > 80 { 0x0C } else { col };
+        let f = (bw as u32 * pct / 100) as usize;
+        s.print(x, y + r, lbl, 0x0F);
+        s.print_n(x + 4, y + r, pct, 3, c);
+        s.print(x + 7, y + r, "% [", 0x0F);
+        hbar(s, x + 10, y + r, bw, f, c);
+        s.put(x + 10 + bw, y + r, b']', 0x0F);
     }
     if h>6{
         s.print(x,y+5,"System Performance",0x08);
@@ -310,6 +350,10 @@ fn render_sysmon(s:&mut Screen, x:usize, y:usize, w:usize, h:usize, t:u32){
         s.print_n(x+8,r,sec/3600,2,0x0B); s.put(x+10,r,b'h',0x08);
         s.print_n(x+11,r,(sec/60)%60,2,0x0B); s.put(x+13,r,b'm',0x08);
         s.print_n(x+14,r,sec%60,2,0x0B); s.put(x+16,r,b's',0x08);
+        
+        s.print(x + w.saturating_sub(16), r, "ZRAM:", 0x08);
+        s.print_n(x + w.saturating_sub(11), r, comp_count as u32, 4, 0x0A);
+        s.print(x + w.saturating_sub(7), r, "pgs", 0x08);
     }
 }
 // ── 3D Rotating Cube ──────────────────────────────────────────────────────────
@@ -375,6 +419,109 @@ fn line(s: &mut Screen, ox: usize, oy: usize, bw: usize, bh: usize,
         if e2 >= dy { err += dy; x0 += sx; }
         if e2 <= dx { err += dx; y0 += sy; }
     }
+}
+
+struct Snake {
+    body: [(usize, usize); 64],
+    len: usize,
+    dir: (i32, i32), // (dx, dy)
+    food: (usize, usize),
+    score: u32,
+    game_over: bool,
+    last_tick: u32,
+}
+
+impl Snake {
+    fn new() -> Self {
+        let mut body = [(0, 0); 64];
+        body[0] = (10, 5);
+        body[1] = (9, 5);
+        body[2] = (8, 5);
+        Self {
+            body,
+            len: 3,
+            dir: (1, 0), // Moving right
+            food: (15, 7),
+            score: 0,
+            game_over: false,
+            last_tick: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn step(&mut self, w: usize, h: usize, tick: u32) {
+        if self.game_over {
+            return;
+        }
+        if tick.wrapping_sub(self.last_tick) < 6 {
+            return;
+        }
+        self.last_tick = tick;
+
+        let head = self.body[0];
+        let next_x = (head.0 as i32 + self.dir.0) as usize;
+        let next_y = (head.1 as i32 + self.dir.1) as usize;
+
+        if next_x == 0 || next_x >= w - 1 || next_y == 0 || next_y >= h - 1 {
+            self.game_over = true;
+            return;
+        }
+
+        for i in 0..self.len {
+            if self.body[i] == (next_x, next_y) {
+                self.game_over = true;
+                return;
+            }
+        }
+
+        for i in (1..self.len).rev() {
+            self.body[i] = self.body[i - 1];
+        }
+        self.body[0] = (next_x, next_y);
+
+        if (next_x, next_y) == self.food {
+            if self.len < 64 {
+                self.body[self.len] = self.body[self.len - 1];
+                self.len += 1;
+            }
+            self.score += 10;
+            let mut fx = (tick as usize % (w - 2)) + 1;
+            let mut fy = (tick as usize % (h - 2)) + 1;
+            if fx == 0 { fx = 1; }
+            if fy == 0 { fy = 1; }
+            self.food = (fx, fy);
+        }
+    }
+}
+
+fn render_snake(s: &mut Screen, x: usize, y: usize, w: usize, h: usize, snake: &mut Snake, tick: u32) {
+    snake.step(w, h, tick);
+
+    for c in 0..w {
+        s.put(x + c, y, 0xCD, 0x07);
+        s.put(x + c, y + h - 1, 0xCD, 0x07);
+    }
+    for r in 1..h - 1 {
+        s.put(x, y + r, 0xBA, 0x07);
+        s.put(x + w - 1, y + r, 0xBA, 0x07);
+    }
+
+    if snake.game_over {
+        s.print(x + (w.saturating_sub(10)) / 2, y + h / 2, "GAME OVER", 0x0C);
+        s.print(x + (w.saturating_sub(18)) / 2, y + h / 2 + 1, "Press 'r' to restart", 0x0E);
+    } else {
+        s.put(x + snake.food.0, y + snake.food.1, 0x0F, 0x0E);
+        for i in 1..snake.len {
+            s.put(x + snake.body[i].0, y + snake.body[i].1, 0xFE, 0x0A);
+        }
+        s.put(x + snake.body[0].0, y + snake.body[0].1, 0x01, 0x0F);
+    }
+
+    s.print(x + 2, y + h - 1, "Score:", 0x70);
+    s.print_n(x + 8, y + h - 1, snake.score, 4, 0x70);
 }
 
 const FM:&[(&str,&str,u8,&str)]=&[
@@ -530,24 +677,43 @@ fn draw_selection(s: &mut Screen, start: (usize, usize), current: (usize, usize)
 
 fn draw_cursor(s: &mut Screen, m: &Mouse, wins: &[Option<Win>; 6], zorder: &[usize; 6], zlen: usize) {
     let (cx, cy) = (m.cx, m.cy);
-    
-    // Check if we are over a resize corner for cursor feedback
-    let is_resizing = m.resize_slot.is_some() || matches!(hit_window(wins, zorder, zlen, cx, cy), Some((_, 4)));
-    let cursor_color = if is_resizing { 0x0B } else { 0x0E }; // cyan for resize, yellow normal
-    let cursor_char = if is_resizing { 0x12 } else { 0x10 };  // ↕ for resize, ► normal
+
+    let hit = hit_window(wins, zorder, zlen, cx, cy);
+    let is_dragging  = m.drag_slot.is_some();
+    let is_resizing  = m.resize_slot.is_some() || matches!(hit, Some((_, 4)));
+    let is_selecting = m.select_start.is_some();
+    let over_title   = matches!(hit, Some((_, 0)));
+    let over_close   = matches!(hit, Some((_, 1)));
+    let over_btn     = matches!(hit, Some((_, 2))) || matches!(hit, Some((_, 5)));
+
+    let (cursor_char, cursor_color): (u8, u8) = if m.btn && (is_dragging || over_title) {
+        (0x0F, 0x0F) // ☼ white — move/drag
+    } else if is_resizing {
+        (0x12, 0x0B) // ↕ cyan — resize
+    } else if is_selecting {
+        (0x1B, 0x0A) // ← green — selection
+    } else if over_close {
+        (0x58, 0x0C) // X red — close
+    } else if over_title || over_btn {
+        (0x1E, 0x0F) // ▲ white — title bar
+    } else if hit.is_some() {
+        (0x10, 0x0F) // ► white — content
+    } else {
+        (0x10, 0x0E) // ► yellow — desktop
+    };
 
     if cx < W && cy < H {
         let bg = (s.shadow[cy][cx] >> 8) as u8 & 0xF0;
-        s.put(cx, cy, cursor_char, bg | cursor_color as u8);
+        s.put(cx, cy, cursor_char, bg | cursor_color);
     }
-    // Highlight cell below-right as cursor "tail"
-    if cx + 1 < W && cy + 1 < H && !is_resizing {
+    // Highlight cell below-right as cursor "tail" (not while dragging/resizing)
+    if !is_dragging && !is_resizing && cx + 1 < W && cy + 1 < H {
         let bg = (s.shadow[cy+1][cx+1] >> 8) as u8 & 0xF0;
-        s.put(cx+1, cy+1, 0xFA, bg | 0x08); // dim grey dot
+        s.put(cx+1, cy+1, 0xFA, bg | 0x08);
     }
-    // Click indicator
-    if m.btn && cx < W && cy < H {
-        s.put(cx, cy, 0x04, 0x4F);
+    // Click indicator — flash on press
+    if m.btn && cx < W && cy < H && !is_dragging && !is_resizing {
+        s.put(cx, cy, 0x04, 0x4F); // ♦ bright white on red
     }
 }
 
@@ -574,6 +740,7 @@ fn hit_window(wins: &[Option<Win>; 6], zorder: &[usize; 6], zlen: usize,
             if w.w > 10 {
                 let bx = w.x + w.w - 10;
                 if cx >= bx + 6 && cx <= bx + 8 { return Some((slot, 1)); } // [X]
+                if cx >= bx + 3 && cx <= bx + 5 { return Some((slot, 5)); } // [-] (Maximize)
                 if cx >= bx && cx <= bx + 2 { return Some((slot, 2)); }     // [_]
             }
             return Some((slot, 0)); // title drag
@@ -583,7 +750,7 @@ fn hit_window(wins: &[Option<Win>; 6], zorder: &[usize; 6], zlen: usize,
     None
 }
 
-fn draw_wallpaper(s: &mut Screen, tick: u32, mouse_cx: usize, mouse_cy: usize) {
+fn draw_wallpaper(s: &mut Screen, tick: u32, selected_icon: Option<usize>, mouse_cx: usize, mouse_cy: usize) {
     // Gradient-like background: vary blue shade by column zone
     for r in DESK_TOP..=DESK_BOT {
         for c in 0..W {
@@ -632,13 +799,15 @@ fn draw_wallpaper(s: &mut Screen, tick: u32, mouse_cx: usize, mouse_cy: usize) {
         (2,  14, 0x04, "Network",  "[4]"),   // ♦
         (2,  18, 0x05, "Editor",   "[5]"),   // ♣
         (12, 2,  0x06, "About",    "[6]"),   // ♠
+        (12, 6,  0x0F, "3D Cube",  "[7]"),   // ☼
+        (12, 10, 0xFE, "Snake",    "[8]"),   // ■
     ];
     for (i, &(ix, iy, glyph, lbl, num)) in icons.iter().enumerate() {
-        // Hover highlight — covers the whole 4x5 icon + label area
         let hovered = (mouse_cx >= ix && mouse_cx <= ix + 7)
                    && (mouse_cy >= iy && mouse_cy <= iy + 4);
-        let bg: u8 = if hovered { 0x3E } else { 0x1E }; // cyan or yellow on blue
-        let lbg: u8 = if hovered { 0x3F } else { 0x17 };
+        let selected = selected_icon == Some(i);
+        let bg: u8 = if selected { 0x4E } else if hovered { 0x3E } else { 0x1E };
+        let lbg: u8 = if selected { 0x4F } else if hovered { 0x3F } else { 0x17 };
         // Icon box: glyph + border
         s.put(ix,   iy, 0xDA, 0x18); // ┌
         s.put(ix+1, iy, 0xC4, 0x18); // ─
@@ -683,8 +852,8 @@ fn draw_wallpaper(s: &mut Screen, tick: u32, mouse_cx: usize, mouse_cy: usize) {
 }
 
 fn hit_icon(cx: usize, cy: usize) -> Option<usize> {
-    // Icons at (2,2),(2,6),(2,10),(2,14),(2,18),(12,2) — each 4×5 cells
-    let pos: &[(usize, usize)] = &[(2,2),(2,6),(2,10),(2,14),(2,18),(12,2)];
+    // Icons at (2,2),(2,6),(2,10),(2,14),(2,18),(12,2),(12,6),(12,10) — each 4×5 cells
+    let pos: &[(usize, usize)] = &[(2,2),(2,6),(2,10),(2,14),(2,18),(12,2),(12,6),(12,10)];
     for (i, &(ix, iy)) in pos.iter().enumerate() {
         if cx >= ix && cx <= ix+3 && cy >= iy && cy <= iy+4 {
             return Some(i);
@@ -703,6 +872,7 @@ const MENU_APPS:&[(App,&str,&str)]=&[
     (App::Editor,  "[5] Text Editor", "Edit text files"),
     (App::About,   "[6] About",       "About ZiqaOS"),
     (App::Cube3D,  "[7] 3D Cube",     "Rotating wireframe cube"),
+    (App::Snake,   "[8] Snake",       "Play classic Snake"),
 ];
 
 fn draw_startmenu(s:&mut Screen, sel:usize){
@@ -726,7 +896,7 @@ fn draw_startmenu(s:&mut Screen, sel:usize){
 // ── Window chrome ─────────────────────────────────────────────────────────────
 
 fn draw_window(s:&mut Screen, win:&Win, active:bool, t:u32,
-               tout:&TOut, tinp:&IBuf, ed:&EdBuf, mx:usize, my:usize, mbtn:bool){
+               tout:&TOut, tinp:&IBuf, ed:&EdBuf, snake:&mut Snake, mx:usize, my:usize, mbtn:bool){
     if win.minimized{return;}
     let (wx,wy,ww,wh)=(win.x,win.y,win.w,win.h);
     if ww<4||wh<3{return;}
@@ -767,8 +937,9 @@ fn draw_window(s:&mut Screen, win:&Win, active:bool, t:u32,
                 b_cls = if mbtn { 0x4F } else { 0xCE }; // deeper red on click
             }
         }
+        let max_char = if win.maximized { "[=]" } else { "[-]" };
         s.print(bx, wy, "[_]", b_min);
-        s.print(bx+3, wy, "[-]", b_max);
+        s.print(bx+3, wy, max_char, b_max);
         s.print(bx+6, wy, "[X]", b_cls);
     }
 
@@ -785,6 +956,7 @@ fn draw_window(s:&mut Screen, win:&Win, active:bool, t:u32,
         App::Editor   => render_editor(s,cx,cy,cw,ch,ed,t),
         App::About    => render_about(s,cx,cy,cw,ch,t),
         App::Cube3D   => render_cube3d(s, cx, cy, cw, ch, t),
+        App::Snake    => render_snake(s, cx, cy, cw, ch, snake, t),
     }
 }
 
@@ -852,7 +1024,7 @@ fn draw_taskbar(s: &mut Screen, wins: &[Option<Win>; 6], zorder: &[usize; 6], zl
 // ── Help overlay ──────────────────────────────────────────────────────────────
 
 fn draw_help(s:&mut Screen){
-    let bx=20;let by=4;let bw=42;let bh=16;
+    let bx=16;let by=3;let bw=48;let bh=18;
     s.fill(bx,by,bw,bh,b' ',0x30);
     box_draw(s,bx,by,bw,bh,0x3F);
     s.print(bx+1,by," ZiqaOS Desktop Help ",0x3F);
@@ -862,20 +1034,22 @@ fn draw_help(s:&mut Screen){
         " Arrow keys Move focused window",
         " +/-        Resize window width",
         " m          Minimize/restore window",
+        " f          Maximize/restore window",
         " x          Close focused window",
-        " 1-6        Launch app directly",
+        " 1-8        Launch app directly",
         " h          Toggle this help",
         " q / ESC    Quit desktop",
         "",
-        " In Terminal:",
-        "  Type + Enter to run command",
-        "  Backspace to delete",
-        " In Editor:",
-        "  Type to edit, s to save",
+        " Mouse Controls:",
+        "  Drag title to move (drop top to max)",
+        "  Double-click title to maximize/restore",
+        "  Drag desktop to select icons",
+        "  Double-click icon to launch app",
     ];
     for (i,&l) in lines.iter().enumerate().take(bh.saturating_sub(2)){
         s.print(bx+1,by+1+i,l,0x30);
     }
+    s.print(bx+1,by+bh-2," (Click anywhere to close) ",0x38);
 }
 
 // ── Right-click context menu ──────────────────────────────────────────────────
@@ -893,6 +1067,7 @@ const CTX_ITEMS: &[&str] = &[
     "Open Network",
     "Open Editor",
     "Open About",
+    "Open Snake",
     "-------------",
     "Help",
 ];
@@ -933,9 +1108,37 @@ fn hit_ctxmenu(m: &CtxMenu, cx: usize, cy: usize) -> Option<usize> {
     }
 }
 
-fn read_key()->Option<u8>{
-    let mut b=[0u8;1];
-    if crate::drivers::keyboard::read_stdin(&mut b)>0{Some(b[0])}else{None}
+fn read_key() -> Option<u8> {
+    let mut b = [0u8; 1];
+    if crate::drivers::keyboard::read_stdin(&mut b) > 0 {
+        if b[0] == 0x1B {
+            crate::timer::sleep_ms(crate::process::Pid(0), 2);
+            let mut next1 = [0u8; 1];
+            if crate::drivers::keyboard::read_stdin(&mut next1) > 0 {
+                if next1[0] == b'[' {
+                    let mut next2 = [0u8; 1];
+                    if crate::drivers::keyboard::read_stdin(&mut next2) > 0 {
+                        match next2[0] {
+                            b'A' => return Some(0x80), // Arrow Up
+                            b'B' => return Some(0x81), // Arrow Down
+                            b'D' => return Some(0x82), // Arrow Left
+                            b'C' => return Some(0x83), // Arrow Right
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        Some(b[0])
+    } else {
+        None
+    }
+}
+fn frame_delay(ms: u64) {
+    let deadline = crate::timer::uptime_ms().wrapping_add(ms);
+    while crate::timer::uptime_ms().wrapping_sub(deadline) > u64::MAX / 2 {
+        spin_loop();
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -954,6 +1157,10 @@ pub fn run(){
     let mut ed=EdBuf::new();
     let mut mouse=Mouse::new();
     let mut ctx=CtxMenu::new();
+    let mut snake = Snake::new();
+    let mut selected_icon: Option<usize> = None;
+    let mut last_click_tick = 0u32;
+    let mut last_click_pos = (0usize, 0usize);
 
     for &(at,line) in &[
         (0x0A,"ZiqaOS v0.1 (x86_64)"),
@@ -1020,8 +1227,12 @@ pub fn run(){
         let (mcx, mcy) = (mouse.cx, mouse.cy);
 
         if mouse.just_pressed() {
-            // Close context menu on any click
+            let is_double_click = tick.wrapping_sub(last_click_tick) < 15 && last_click_pos == (mcx, mcy);
+            last_click_tick = tick;
+            last_click_pos = (mcx, mcy);
+
             if ctx.open {
+                selected_icon = None;
                 if let Some(item)=hit_ctxmenu(&ctx,mcx,mcy){
                     ctx.open=false;
                     match item {
@@ -1031,40 +1242,102 @@ pub fn run(){
                         3 => launch!(App::Network),
                         4 => launch!(App::Editor),
                         5 => launch!(App::About),
-                        7 => { show_help=!show_help; }
+                        6 => launch!(App::Snake),
+                        8 => { show_help=!show_help; }
                         _ => {}
                     }
                 } else { ctx.open=false; }
             } else if menu_open {
-                // click outside menu closes it
+                selected_icon = None;
                 menu_open=false;
             } else {
-                // Hit test windows (front to back)
+                selected_icon = None;
                 match hit_window(&wins,&zorder,zlen,mcx,mcy){
                     Some((slot,1)) => { close_slot!(slot); }   // [X]
                     Some((slot,2)) => {                         // [_]
                         if let Some(w)=&mut wins[slot]{w.minimized=!w.minimized;}
                         bring_front!(slot);
                     }
+                    Some((slot,5)) => {                         // [-] Maximize/Restore
+                        if let Some(w)=&mut wins[slot]{w.toggle_maximize();}
+                        bring_front!(slot);
+                    }
                     Some((slot,4)) => {                         // Resize corner
                         bring_front!(slot);
-                        mouse.resize_slot = Some(slot);
+                        if let Some(w)=&wins[slot] {
+                            if !w.maximized {
+                                mouse.resize_slot = Some(slot);
+                            }
+                        }
                     }
                     Some((slot,0)) => {                         // title bar drag
                         bring_front!(slot);
-                        if let Some(w)=&wins[slot]{
-                            mouse.drag_slot=Some(slot);
-                            mouse.drag_ox=mcx.saturating_sub(w.x);
-                            mouse.drag_oy=mcy.saturating_sub(w.y);
+                        if is_double_click {
+                            if let Some(w)=&mut wins[slot]{
+                                w.toggle_maximize();
+                            }
+                            last_click_tick = 0;
+                        } else {
+                            if let Some(w)=&wins[slot]{
+                                mouse.drag_slot=Some(slot);
+                                mouse.drag_ox=mcx.saturating_sub(w.x);
+                                mouse.drag_oy=mcy.saturating_sub(w.y);
+                            }
                         }
                     }
                     Some((slot,_)) => { bring_front!(slot); }  // content click
                     None => {
-                        // Click on desktop icon?
-                        if let Some(idx)=hit_icon(mcx,mcy){
-                            launch!(MENU_APPS[idx].0);
+                        // Click on taskbar
+                        if mcy == H - 1 {
+                            if mcx < 11 {
+                                // ZiqaOS start button
+                                menu_open = true;
+                                menu_sel = 0;
+                            } else {
+                                // Hit-test taskbar window buttons
+                                let mut bx = 12usize;
+                                for i in 0..zlen {
+                                    let slot = zorder[i];
+                                    if let Some(w) = &wins[slot] {
+                                        if w.minimized { continue; }
+                                        let tlen = w.app.title().len().min(12);
+                                        if mcx >= bx && mcx < bx + tlen + 2 {
+                                            bring_front!(slot);
+                                            break;
+                                        }
+                                        bx += tlen + 2;
+                                    }
+                                }
+                            }
+                        }
+                        // Click on minimized strip (H-2)
+                        else if mcy == H - 2 {
+                            let mut tx = 0usize;
+                            for i in 0..6 {
+                                if let Some(w) = &wins[i] {
+                                    if w.minimized {
+                                        let tl = w.app.title().len().min(12);
+                                        if mcx >= tx && mcx < tx + tl + 3 {
+                                            if let Some(w) = &mut wins[i] { w.minimized = false; }
+                                            bring_front!(i);
+                                            break;
+                                        }
+                                        tx += tl + 3;
+                                    }
+                                }
+                            }
+                        }
+                        // Click on desktop icon
+                        else if let Some(idx) = hit_icon(mcx, mcy) {
+                            if selected_icon == Some(idx) && is_double_click {
+                                launch!(MENU_APPS[idx].0);
+                                selected_icon = None;
+                                last_click_tick = 0;
+                            } else {
+                                selected_icon = Some(idx);
+                            }
                         } else {
-                            // Desktop click -> start selection box
+                            selected_icon = None;
                             mouse.select_start = Some((mcx, mcy));
                         }
                     }
@@ -1072,26 +1345,41 @@ pub fn run(){
             }
         }
 
-        // Drag window
         if mouse.btn {
             if let Some(slot)=mouse.drag_slot{
                 if let Some(w)=&mut wins[slot]{
+                    if w.maximized {
+                        w.toggle_maximize();
+                        w.x = mcx.saturating_sub(w.w / 2);
+                        mouse.drag_ox = mcx.saturating_sub(w.x);
+                        mouse.drag_oy = 0;
+                    }
                     w.x=mcx.saturating_sub(mouse.drag_ox);
                     w.y=mcy.saturating_sub(mouse.drag_oy);
                     w.clamp();
                 }
             }
-            // Resize window
             if let Some(slot) = mouse.resize_slot {
                 if let Some(w) = &mut wins[slot] {
-                    let nw = mcx.saturating_sub(w.x).max(12);
-                    let nh = mcy.saturating_sub(w.y).max(5);
-                    w.w = nw.min(W - w.x);
-                    w.h = nh.min(H - w.y);
+                    if !w.maximized {
+                        let nw = mcx.saturating_sub(w.x).max(12);
+                        let nh = mcy.saturating_sub(w.y).max(5);
+                        w.w = nw.min(W - w.x);
+                        w.h = nh.min(H - w.y);
+                    }
                 }
             }
         }
         if mouse.just_released() { 
+            if let Some(slot) = mouse.drag_slot {
+                if mcy == DESK_TOP {
+                    if let Some(w) = &mut wins[slot] {
+                        if !w.maximized {
+                            w.toggle_maximize();
+                        }
+                    }
+                }
+            }
             mouse.drag_slot=None; 
             mouse.resize_slot=None;
             mouse.select_start=None;
@@ -1104,11 +1392,13 @@ pub fn run(){
 
         // ── Keyboard ──────────────────────────────────────────────────────────
         if let Some(key)=read_key(){
-            if ctx.open { ctx.open=false; }
+            if show_help { show_help=false; }
+            else if ctx.open { ctx.open=false; }
             else if menu_open {
                 match key {
-                    b'1'..=b'7' => { let idx=(key-b'1')as usize; if idx<MENU_APPS.len(){launch!(MENU_APPS[idx].0);} menu_open=false; }
-                    b'k'|b'A' => { menu_sel=menu_sel.saturating_sub(1); }
+                    b'1'..=b'8' => { let idx=(key-b'1')as usize; if idx<MENU_APPS.len(){launch!(MENU_APPS[idx].0);} menu_open=false; }
+                    b'k'|b'A'|0x80 => { menu_sel=menu_sel.saturating_sub(1); }
+                    b'j'|b'B'|0x81 => { menu_sel=(menu_sel+1).min(MENU_APPS.len()-1); }
                     b'\r'|b'\n' => { launch!(MENU_APPS[menu_sel].0); menu_open=false; }
                     b' '|0x1B  => { menu_open=false; }
                     _ => {}
@@ -1129,16 +1419,22 @@ pub fn run(){
                         }
                     }
                     b'm' => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.minimized=!w.minimized;}}}
+                    b'f' => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.toggle_maximize();}}}
                     b'x' => { if let Some(i)=act{ close_slot!(i); }}
-                    b'1'..=b'7' => { launch!(MENU_APPS[(key-b'1')as usize].0); }
-                    b'A' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y>DESK_TOP{w.y-=1;}}}}
-                    b'B' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y+w.h<=DESK_BOT{w.y+=1;}}}}
-                    b'C' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x+w.w<W{w.x+=1;}}}}
-                    b'D' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x>0{w.x-=1;}}}}
+                    b'1'..=b'8' => { launch!(MENU_APPS[(key-b'1')as usize].0); }
+                    b'r' if act_app == Some(App::Snake) => { snake.reset(); }
+                    b'w'|b'A'|0x80 if act_app == Some(App::Snake) => { if snake.dir.1 != 1 { snake.dir = (0, -1); } }
+                    b's'|b'B'|0x81 if act_app == Some(App::Snake) => { if snake.dir.1 != -1 { snake.dir = (0, 1); } }
+                    b'a'|b'D'|0x82 if act_app == Some(App::Snake) => { if snake.dir.0 != 1 { snake.dir = (-1, 0); } }
+                    b'd'|b'C'|0x83 if act_app == Some(App::Snake) => { if snake.dir.0 != -1 { snake.dir = (1, 0); } }
+                    b'A'|0x80 if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y>DESK_TOP{w.y-=1;}}}}
+                    b'B'|0x81 if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.y+w.h<=DESK_BOT{w.y+=1;}}}}
+                    b'C'|0x83 if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x+w.w<W{w.x+=1;}}}}
+                    b'D'|0x82 if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x>0{w.x-=1;}}}}
                     b'+' => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.x+w.w+1<W{w.w+=1;}}}}
                     b'-' => { if let Some(i)=act{if let Some(w)=&mut wins[i]{if w.w>10{w.w-=1;}}}}
-                    b'j' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.scroll+=1;}}}
-                    b'k' if act_app!=Some(App::Editor) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.scroll=w.scroll.saturating_sub(1);}}}
+                    b'j' if act_app!=Some(App::Editor) && act_app!=Some(App::Snake) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.scroll+=1;}}}
+                    b'k' if act_app!=Some(App::Editor) && act_app!=Some(App::Snake) => { if let Some(i)=act{if let Some(w)=&mut wins[i]{w.scroll=w.scroll.saturating_sub(1);}}}
                     // Terminal
                     b'\r'|b'\n' if act_app==Some(App::Terminal) => {
                         let mut echo=[b' ';48]; echo[0]=b'$'; echo[1]=b' ';
@@ -1146,7 +1442,7 @@ pub fn run(){
                         echo[2..2+n].copy_from_slice(&cb[..n]);
                         tout.push(core::str::from_utf8(&echo[..2+n]).unwrap_or("$ "),0x07);
                         match tinp.as_str().trim(){
-                            "help"  =>{ tout.push("  help clear date uptime ps ls neofetch",0x07); }
+                            "help"  =>{ tout.push("  help clear date uptime ps ls neofetch zram",0x07); }
                             "clear" =>{ for _ in 0..30{tout.push("",0x07);} }
                             "date"  =>{ tout.push("  Fri May 30 00:00:00 UTC 2026",0x0B); }
                             "uptime"=>{ let u=tick; tout.push("  up 0h 0m (tick-based)",0x0B); let _=u; }
@@ -1164,6 +1460,21 @@ pub fn run(){
                                 tout.push("  ZiqaOS v0.1 | x86_64 | Rust+Zig",0x0B);
                                 tout.push("  Kernel: ziqa-0.1.0-experimental",0x0B);
                                 tout.push("  Shell:  34 cmds | FS: ZiqaFS",0x0B);
+                                let (c, _, _) = crate::memory::compression::PAGE_STORE.get_stats();
+                                let msg = alloc::format!("  ZRAM:   {} compressed pages", c);
+                                tout.push(&msg, 0x0B);
+                            }
+                            "zram" => {
+                                let (count, orig, comp) = crate::memory::compression::PAGE_STORE.get_stats();
+                                let savings = orig.saturating_sub(comp);
+                                let msg1 = alloc::format!("  Pages:           {} compressed", count);
+                                let msg2 = alloc::format!("  Original size:   {} KB", orig / 1024);
+                                let msg3 = alloc::format!("  Compressed size: {} KB", comp / 1024);
+                                let msg4 = alloc::format!("  Saved memory:    {} KB", savings / 1024);
+                                tout.push(&msg1, 0x07);
+                                tout.push(&msg2, 0x07);
+                                tout.push(&msg3, 0x07);
+                                tout.push(&msg4, 0x0A);
                             }
                             "" => {}
                             _  =>{ tout.push("  command not found",0x0C); }
@@ -1177,10 +1488,10 @@ pub fn run(){
                     b's' if act_app==Some(App::Editor) => { ed.dirty=false; }
                     b'\r'|b'\n' if act_app==Some(App::Editor) => { ed.newline(); }
                     0x7F|8 if act_app==Some(App::Editor) => { ed.backspace(); }
-                    b'A' if act_app==Some(App::Editor) => { ed.move_up(); }
-                    b'B' if act_app==Some(App::Editor) => { ed.move_down(); }
-                    b'C' if act_app==Some(App::Editor) => { ed.move_right(); }
-                    b'D' if act_app==Some(App::Editor) => { ed.move_left(); }
+                    b'A'|0x80 if act_app==Some(App::Editor) => { ed.move_up(); }
+                    b'B'|0x81 if act_app==Some(App::Editor) => { ed.move_down(); }
+                    b'C'|0x83 if act_app==Some(App::Editor) => { ed.move_right(); }
+                    b'D'|0x82 if act_app==Some(App::Editor) => { ed.move_left(); }
                     32..=126 if act_app==Some(App::Editor) => { ed.insert(key); }
                     _ => {}
                 }
@@ -1188,14 +1499,14 @@ pub fn run(){
         }
 
         // ── Render ────────────────────────────────────────────────────────────
-        draw_wallpaper(&mut s, tick, mcx, mcy);
+        draw_wallpaper(&mut s, tick, selected_icon, mcx, mcy);
         draw_menubar(&mut s, tick, zlen, mcx, mcy);
 
         for i in 0..zlen{
             let slot=zorder[i];
             let active=i==zlen-1;
             if let Some(w)=&wins[slot]{
-                draw_window(&mut s,w,active,tick,&tout,&tinp,&ed,mcx,mcy,mouse.btn);
+                draw_window(&mut s,w,active,tick,&tout,&tinp,&ed,&mut snake,mcx,mcy,mouse.btn);
             }
         }
 
@@ -1227,6 +1538,22 @@ pub fn run(){
         // Desktop selection box
         if let Some(start) = mouse.select_start {
             draw_selection(&mut s, start, (mcx, mcy));
+            
+            let sx = start.0.min(mcx);
+            let sy = start.1.min(mcy);
+            let sw = start.0.max(mcx) - sx;
+            let sh = start.1.max(mcy) - sy;
+            
+            let icon_pos = &[(2,2),(2,6),(2,10),(2,14),(2,18),(12,2),(12,6),(12,10)];
+            selected_icon = None;
+            for (i, &(ix, iy)) in icon_pos.iter().enumerate() {
+                let icon_w = 8;
+                let icon_h = 5;
+                if sx < ix + icon_w && sx + sw > ix && sy < iy + icon_h && sy + sh > iy {
+                    selected_icon = Some(i);
+                    break;
+                }
+            }
         }
 
         // Mouse cursor — drawn last so it's always on top
@@ -1234,7 +1561,7 @@ pub fn run(){
 
         s.flush();
         tick=tick.wrapping_add(1);
-        crate::timer::sleep_ms(Pid(0),16);
+        frame_delay(16);
     }
 
     for y in 0..H{s.fill(0,y,W,1,b' ',0x07);}

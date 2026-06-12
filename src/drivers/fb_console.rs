@@ -145,6 +145,37 @@ const FONT_8X16: [[u8; 16]; 256] = {
     font
 };
 
+fn vga_color(index: u8) -> u32 {
+    match index & 0x0F {
+        0x0 => 0x00000000,
+        0x1 => 0x000000AA,
+        0x2 => 0x0000AA00,
+        0x3 => 0x0000AAAA,
+        0x4 => 0x00AA0000,
+        0x5 => 0x00AA00AA,
+        0x6 => 0x00AA5500,
+        0x7 => 0x00AAAAAA,
+        0x8 => 0x00555555,
+        0x9 => 0x005555FF,
+        0xA => 0x0055FF55,
+        0xB => 0x0055FFFF,
+        0xC => 0x00FF5555,
+        0xD => 0x00FF55FF,
+        0xE => 0x00FFFF55,
+        _ => 0x00FFFFFF,
+    }
+}
+
+pub fn draw_cell(col: usize, row: usize, byte: u8, attr: u8) {
+    if let Some(console) = FB_CONSOLE.lock().as_ref() {
+        console.draw_cell(col, row, byte, attr);
+    }
+}
+
+pub fn flush() {
+    crate::drivers::virtio_gpu::flush();
+}
+
 pub fn init(fb_ptr: *mut u8, width: usize, height: usize, pitch: usize) {
     let cols = width / 8;
     let rows = height / 16;
@@ -189,6 +220,35 @@ impl FbConsole {
         self.bg_color = bg;
     }
 
+    pub fn draw_cell(&self, col: usize, row: usize, byte: u8, attr: u8) {
+        let fg = vga_color(attr & 0x0F);
+        let bg = vga_color((attr >> 4) & 0x0F);
+        self.draw_char_colored(col, row, byte, fg, bg);
+    }
+
+    fn draw_char_colored(&self, col: usize, row: usize, byte: u8, fg: u32, bg: u32) {
+        let bitmap = &FONT_8X16[byte as usize];
+        let px_x = col * 8;
+        let px_y = row * 16;
+
+        for (y, &row_bits) in bitmap.iter().enumerate() {
+            let fb_y = px_y + y;
+            if fb_y >= self.height { break; }
+
+            let row_offset = fb_y * self.pitch;
+            for x in 0..8 {
+                let fb_x = px_x + x;
+                if fb_x >= self.width { break; }
+
+                let color = if (row_bits & (1 << (7 - x))) != 0 { fg } else { bg };
+                unsafe {
+                    let ptr = self.fb_ptr.add(row_offset + fb_x * 4) as *mut u32;
+                    core::ptr::write_volatile(ptr, color);
+                }
+            }
+        }
+    }
+
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.newline(),
@@ -212,31 +272,7 @@ impl FbConsole {
     }
     
     fn draw_char(&self, col: usize, row: usize, byte: u8) {
-        let bitmap = &FONT_8X16[byte as usize];
-        let px_x = col * 8;
-        let px_y = row * 16;
-        
-        for (y, &row_bits) in bitmap.iter().enumerate() {
-            let fb_y = px_y + y;
-            if fb_y >= self.height { break; }
-            
-            let row_offset = fb_y * self.pitch;
-            for x in 0..8 {
-                let fb_x = px_x + x;
-                if fb_x >= self.width { break; }
-                
-                let color = if (row_bits & (1 << (7 - x))) != 0 {
-                    self.fg_color
-                } else {
-                    self.bg_color
-                };
-                
-                unsafe {
-                    let ptr = self.fb_ptr.add(row_offset + fb_x * 4) as *mut u32;
-                    core::ptr::write_volatile(ptr, color);
-                }
-            }
-        }
+        self.draw_char_colored(col, row, byte, self.fg_color, self.bg_color);
     }
     
     fn newline(&mut self) {

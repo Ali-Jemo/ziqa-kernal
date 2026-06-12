@@ -20,3 +20,9 @@ Messages are sent as raw bytes: `[opcode_byte][payload_bytes]`
 ## Input Forwarding (Channel 4)
 
 The compositor broadcasts input events to channel ID 4. Clients can poll this channel to receive keyboard (`kind=1`) and mouse (`kind=2`) events.
+
+## Runtime Demos
+
+`nwm-test` is the shell-facing smoke test for the native window manager path. It draws the text-mode desktop into VGA memory and mirrors changed cells into the active linear framebuffer before flushing the framebuffer driver. That keeps the demo visible in QEMU GTK even when the hardware path is BGA/LFB instead of a pure text console.
+
+The demo is intentionally foreground-driven: its frame pacing uses kernel uptime polling instead of sleeping PID 0, so it does not block the shell scheduler handoff or hide the prompt after the demo exits.

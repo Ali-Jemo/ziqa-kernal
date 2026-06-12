@@ -27,13 +27,61 @@ pub enum JobState {
 
 const COMMANDS: &[&str] = &[
     "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
-    "sleep", "meminfo", "diskinfo", "netstat", "klog", "doom", "tetris",
-    "reboot", "echo", "clear", "edit", "ls", "cd", "pwd", "mkdir",
-    "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
+    "sleep", "meminfo", "diskinfo", "netstat", "klog", "syscalls", "syscall",
+    "doom", "tetris", "reboot", "echo", "clear", "edit", "ls", "cd", "pwd",
+    "mkdir", "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
     "mv", "cp", "touch", "stat", "du",
     "dashboard", "top", "history", "alias", "export",
     "jobs", "bg", "fg", "nwm-test",
     "snap", "ls-snap", "rm-snap",
+];
+
+struct SyscallEntry {
+    nr: u64,
+    name: &'static str,
+    category: &'static str,
+    args: &'static str,
+    desc: &'static str,
+    probe: bool,
+}
+
+const SYSCALLS: &[SyscallEntry] = &[
+    SyscallEntry { nr: crate::abi::syscall::nr::GETPID, name: "getpid", category: "process", args: "", desc: "current process id", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::GETPPID, name: "getppid", category: "process", args: "", desc: "parent process id placeholder", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::SCHED_YIELD, name: "sched_yield", category: "process", args: "", desc: "yield current userspace task", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::FORK, name: "fork", category: "process", args: "", desc: "fork current process", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::EXECVE, name: "execve", category: "process", args: "path argv envp", desc: "replace current process image", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::WAITPID, name: "waitpid", category: "process", args: "pid status options", desc: "wait for child process", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::KILL, name: "kill", category: "process", args: "pid sig", desc: "send signal", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::EXIT, name: "exit", category: "process", args: "code", desc: "exit current process", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::NANOSLEEP, name: "nanosleep", category: "time", args: "ms", desc: "sleep calling process", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::CLOCK_NANOSLEEP, name: "clock_nanosleep", category: "time", args: "ms", desc: "sleep calling process", probe: false },
+    SyscallEntry { nr: 205, name: "get_ticks", category: "time", args: "", desc: "kernel uptime in ms", probe: true },
+    SyscallEntry { nr: 204, name: "fb_blit", category: "doom", args: "pixels palette w h x y", desc: "Doom framebuffer blit hook", probe: false },
+    SyscallEntry { nr: 206, name: "get_key", category: "doom", args: "", desc: "Doom key poll hook", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_REQUEST, name: "ziqa_cap_request", category: "capability", args: "kind path_ptr path_len flags", desc: "request a resource capability", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_READ, name: "ziqa_cap_read", category: "capability", args: "id buf count offset", desc: "read via capability", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_WRITE, name: "ziqa_cap_write", category: "capability", args: "id buf count offset", desc: "write via capability", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_CLOSE, name: "ziqa_cap_close", category: "capability", args: "fd", desc: "close capability fd", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_SEEK, name: "ziqa_cap_seek", category: "capability", args: "fd off whence", desc: "seek capability fd", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_REVOKE, name: "ziqa_cap_revoke", category: "capability", args: "id", desc: "revoke capability", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SHM_CREATE, name: "ziqa_shm_create", category: "ipc", args: "size", desc: "create shared-memory segment", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SHM_ATTACH, name: "ziqa_shm_attach", category: "ipc", args: "id", desc: "attach shared-memory segment", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_CREATE, name: "ziqa_ipc_create", category: "ipc", args: "", desc: "create IPC channel", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_SEND, name: "ziqa_ipc_send", category: "ipc", args: "chan ptr len", desc: "send IPC message", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_RECV, name: "ziqa_ipc_recv", category: "ipc", args: "chan ptr max", desc: "receive IPC message", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_GETMASK, name: "ziqa_sig_getmask", category: "signal", args: "", desc: "read current signal mask", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_SETMASK, name: "ziqa_sig_setmask", category: "signal", args: "mask", desc: "write current signal mask", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_KILL, name: "ziqa_sig_kill", category: "signal", args: "pid sig", desc: "send Ziqa signal", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_PAUSE, name: "ziqa_sig_pause", category: "signal", args: "", desc: "pause until signal", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_GET_GPU_CHAN, name: "ziqa_dev_get_gpu_chan", category: "device", args: "", desc: "read GPU IPC channel id", probe: true },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_FIND, name: "ziqa_dev_pci_find", category: "device", args: "vendor device class subclass", desc: "find PCI device", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_BAR, name: "ziqa_dev_pci_bar", category: "device", args: "bdf bar", desc: "read PCI BAR", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_IRQ, name: "ziqa_dev_pci_irq", category: "device", args: "bdf", desc: "read PCI IRQ line", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PORT_IN, name: "ziqa_dev_port_in", category: "device", args: "port size", desc: "read I/O port", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PORT_OUT, name: "ziqa_dev_port_out", category: "device", args: "port size value", desc: "write I/O port", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::NET_NOTIFY, name: "net_notify", category: "net", args: "queue", desc: "notify virtio-net queue", probe: false },
+    SyscallEntry { nr: crate::abi::syscall::nr::NET_ACK, name: "net_ack", category: "net", args: "", desc: "ack virtio-net interrupt", probe: false },
 ];
 
 const MAX_HISTORY: usize = 50;
@@ -280,6 +328,8 @@ impl Shell {
             #[cfg(feature = "net")]
             "netstat"   => Some(Self::cmd_netstat),
             "klog"      => Some(Self::cmd_klog),
+            "syscalls"  => Some(Self::cmd_syscalls),
+            "syscall"   => Some(Self::cmd_syscall),
             #[cfg(feature = "games")]
             "doom"      => Some(Self::cmd_doom),
             #[cfg(feature = "games")]
@@ -649,6 +699,19 @@ impl Shell {
             }).collect();
         }
 
+        if matches!(cmd, "syscall" | "syscalls") {
+            let mut out = Vec::new();
+            for entry in SYSCALLS {
+                if entry.name.starts_with(prefix) {
+                    out.push(entry.name.to_string());
+                }
+                if entry.category.starts_with(prefix) && !out.iter().any(|s| s == entry.category) {
+                    out.push(entry.category.to_string());
+                }
+            }
+            return out;
+        }
+
         if matches!(cmd, "kill" | "exec") {
             let pids = crate::process::scheduler::list_pids();
             return pids.iter().map(|p| alloc::format!("{}", p.0)).filter(|s| s.starts_with(prefix)).collect();
@@ -686,6 +749,7 @@ impl Shell {
 
     fn read_line(&mut self) {
         use crate::drivers::keyboard::read_stdin;
+        crate::process::scheduler::disable_preemption();
         let mut idx = 0;
         self.input_buf = [0; 256];
         loop {
@@ -793,8 +857,7 @@ impl Shell {
                     }
                 }
             } else {
-                crate::process::scheduler::yield_now();
-                x86_64::instructions::hlt();
+                core::hint::spin_loop();
             }
         }
     }
@@ -886,6 +949,8 @@ impl Shell {
                 #[cfg(feature = "ziqafs")]
                 ("diskinfo",         "ZiqaFS disk usage + fsck"),
                 ("klog [lvl] [-N]",  "kernel log (debug/info/error, -N last N)"),
+                ("syscalls [filter]", "list kernel syscall table"),
+                ("syscall <name|nr>", "probe a safe syscall"),
                 ("dashboard",        "real-time system dashboard"),
                 ("reboot",           "reboot the system"),
                 ("clear",            "clear screen"),
@@ -915,6 +980,99 @@ impl Shell {
             }
             println!("");
         }
+        0
+    }
+
+    fn parse_syscall_nr(text: &str) -> Option<u64> {
+        if let Some(hex) = text.strip_prefix("0x") {
+            u64::from_str_radix(hex, 16).ok()
+        } else {
+            text.parse::<u64>().ok()
+        }
+    }
+
+    fn find_syscall_entry(text: &str) -> Option<&'static SyscallEntry> {
+        if let Some(nr) = Self::parse_syscall_nr(text) {
+            SYSCALLS.iter().find(|entry| entry.nr == nr)
+        } else {
+            SYSCALLS.iter().find(|entry| entry.name == text)
+        }
+    }
+
+    fn cmd_syscalls(&mut self, args: &[String]) -> i32 {
+        let filter = args.first().map(|s| s.as_str()).unwrap_or("");
+        println!("{}{}  SYSCALLS{}", C_YELLOW, C_BOLD, C_RESET);
+        println!("  {:>5}  {:<22} {:<10} {:<22} {}", "NR", "NAME", "GROUP", "ARGS", "SAFE");
+        let mut shown = 0usize;
+        for entry in SYSCALLS {
+            let nr_text = alloc::format!("{}", entry.nr);
+            let matches = filter.is_empty()
+                || entry.name.starts_with(filter)
+                || entry.category == filter
+                || nr_text == filter;
+            if !matches {
+                continue;
+            }
+            println!("  {:>5}  {:<22} {:<10} {:<22} {}",
+                entry.nr,
+                entry.name,
+                entry.category,
+                entry.args,
+                if entry.probe { "probe" } else { "listed" });
+            shown += 1;
+        }
+        if shown == 0 {
+            println!("  no syscalls match '{}'", filter);
+            return 1;
+        }
+        println!("{}  {} syscall(s). Use: syscall <name|nr>{}", C_DIM, shown, C_RESET);
+        0
+    }
+
+    fn cmd_syscall(&mut self, args: &[String]) -> i32 {
+        let Some(name) = args.first() else {
+            println!("Usage: syscall <name|nr>");
+            println!("Try: syscalls process    or: syscall getpid");
+            return 1;
+        };
+        let Some(entry) = Self::find_syscall_entry(name) else {
+            println!("Unknown syscall '{}'. Use 'syscalls' to list supported numbers.", name);
+            return 1;
+        };
+        println!("{}{}  {} ({}){}", C_CYAN, C_BOLD, entry.name, entry.nr, C_RESET);
+        println!("  group: {}", entry.category);
+        println!("  args : {}", if entry.args.is_empty() { "(none)" } else { entry.args });
+        println!("  desc : {}", entry.desc);
+        if !entry.probe {
+            println!("  status: listed only; unsafe or requires userspace process context");
+            return 0;
+        }
+
+        let value = match entry.nr {
+            crate::abi::syscall::nr::GETPID => {
+                crate::process::scheduler::with_current_task(|p| p.pid.0).unwrap_or(0)
+            }
+            crate::abi::syscall::nr::GETPPID => {
+                crate::process::scheduler::with_current_task(|p| p.parent).unwrap_or(1)
+            }
+            205 => crate::timer::uptime_ms(),
+            206 => 0,
+            crate::abi::syscall::nr::ZIQA_IPC_CREATE => {
+                crate::ipc::create_channel().map(|id| id as u64).unwrap_or(u64::MAX)
+            }
+            crate::abi::syscall::nr::ZIQA_SIG_GETMASK => {
+                crate::process::scheduler::with_current_task(|p| p.signals.blocked as u64).unwrap_or(0)
+            }
+            crate::abi::syscall::nr::ZIQA_DEV_GET_GPU_CHAN => {
+                crate::drivers::virtio_gpu::GPU_IPC_CHANNEL.lock().as_ref().copied().unwrap_or(0) as u64
+            }
+            _ => 0,
+        };
+        if value == u64::MAX {
+            println!("  result: -1");
+            return 1;
+        }
+        println!("  result: {} (0x{:x})", value, value);
         0
     }
 
@@ -992,6 +1150,7 @@ impl Shell {
         }
         0
     }
+
 
     fn cmd_spawn(&mut self, args: &[String]) -> i32 {
         self.cmd_spawn_elf(args)

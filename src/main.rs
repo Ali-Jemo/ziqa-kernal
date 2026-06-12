@@ -89,9 +89,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // preempted by the timer into a newly-spawned process.
     run_startup();
 
-    println!("[DEBUG] About to start shell");
-    ziqa_kernel::process::scheduler::enable_preemption();
-
     ziqa_kernel::shell::start();
 }
 
@@ -364,13 +361,8 @@ fn run_startup() {
             println!(" ! Failed to spawn Doom process (games feature enabled but doom.elf may need rebuilding)");
         }
     }
-    // Yield to let compositor and demo client initialize and log
-    #[cfg(feature = "games")]
-    {
-        for _ in 0..50 {
-            ziqa_kernel::process::scheduler::yield_now();
-        }
-    }
+    // Do not yield here: preemption is intentionally gated until the shell has
+    // printed its first prompt, so user tasks cannot steal the boot handoff.
 
     // Restore any saved snapshots for instant-on resume
     let binary = include_bytes!("../assets/test_elf.bin");
