@@ -112,10 +112,33 @@ pub fn push_scancode(scancode: u8) {
     }
 }
 
+/// Poll PS/2 controller for pending keyboard scancodes.
+///
+/// This is a fallback for QEMU graphical input: if IRQ delivery/userspace
+/// keyboard service misses an event, the shell still drains the controller.
+fn poll_ps2_keyboard() {
+    unsafe {
+        use x86_64::instructions::port::Port;
+        let mut status: Port<u8> = Port::new(0x64);
+        let mut data: Port<u8> = Port::new(0x60);
+        // Bound the loop: avoid monopolizing the shell if the controller is noisy.
+        for _ in 0..16 {
+            let s = status.read();
+            if s & 1 == 0 {
+                break;
+            }
+            // Bit 5 set means AUX/mouse byte, not keyboard.
+            if s & 0x20 != 0 {
+                break;
+            }
+            push_scancode(data.read());
+        }
+    }
+}
 /// Read up to `buf.len()` bytes from the keyboard buffer.
 /// Returns number of bytes read (0 = no input available).
 pub fn read_stdin(buf: &mut [u8]) -> usize {
-    // Poll serial port (COM1) for any incoming bytes
+    // Poll serial port (COM1) for any incoming bytes.
     unsafe {
         use x86_64::instructions::port::Port;
         let mut lsr: Port<u8> = Port::new(0x3FD); // Line Status Register
@@ -129,6 +152,8 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
             }
         }
     }
+
+    poll_ps2_keyboard();
     let mut ring = INPUT_BUF.lock();
     let mut n = 0;
     while n < buf.len() {
