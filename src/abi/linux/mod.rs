@@ -137,6 +137,7 @@ mod nr {
     pub const SYS_MADVISE: u64 = 233;
     pub const SYS_PRLIMIT64: u64 = 302;
     // === Batch 3: 28 more syscalls to surpass 100+ ===
+    pub const SYS_PIPE2: u64 = 293;
     pub const SYS_NICE: u64 = 34;
     pub const SYS_MKNOD: u64 = 133;
     pub const SYS_PERSONALITY: u64 = 135;
@@ -449,6 +450,18 @@ fn sys_uname(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         .map_err(|_| AbiError::Other("EFAULT"))?;
     Ok(0)
 }
+/// sys_madvise(addr, len, advice) → 0
+fn sys_madvise(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // For now, we ignore all advice and return success.
+    // This is safe as madvise is usually an optimization hint.
+    Ok(0)
+}
+
+/// sys_msync(addr, len, flags) → 0
+fn sys_msync(_ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    Ok(0)
+}
+
 
 /// sys_mmap — handled by core dispatcher; this is a fallback
 fn sys_mmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
@@ -1005,6 +1018,14 @@ fn sys_dup2(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         Some(fd) => Ok(fd as u64),
         None => Ok((-9_i64) as u64), // -EBADF
     }
+}
+
+/// sys_pipe2(pipefd[2], flags) → 0
+fn sys_pipe2(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    // Linux pipe2(2) flags: O_CLOEXEC (0x80000), O_NONBLOCK (0x800)
+    let _flags = ctx.args[1] as i32;
+    // For now, call sys_pipe and ignore flags (proper O_CLOEXEC needs FdTable update)
+    sys_pipe(ctx)
 }
 
 /// sys_pipe(pipefd[2]) → 0
@@ -1581,15 +1602,13 @@ fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
     let len = ctx.args[2] as usize;
     let mut socks = crate::net::socket::SOCKETS.lock();
-    let entry = match socks.get_mut(fd) {
-        Some(e) if e.state != crate::net::socket::SocketState::Closed => e,
+    let (entry, copy_len) = match socks.get_mut(fd) {
+        Some(e) if e.state != crate::net::socket::SocketState::Closed => (e, len),
         _ => return Ok((-9_i64) as u64), // -EBADF
     };
-    if ctx.args[1] == 0 || len == 0 {
+    if ctx.args[1] == 0 || copy_len == 0 {
         return Ok(0);
     }
-    // Read data from userspace via UserSlice
-    let copy_len = len.min(4096);
     let mut tmp = alloc::vec![0u8; copy_len];
     UserSliceRo::ro(ctx.args[1], copy_len)
         .map_err(|_| AbiError::Other("EFAULT"))?
@@ -1603,6 +1622,65 @@ fn sys_sendto(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         }
     }
     Ok(copy_len as u64)
+}
+
+/// sys_fcntl(fd, cmd, arg) → result
+/// F_GETFD=1, F_SETFD=2, F_GETFL=3, F_SETFL=4, F_DUPFD=0, F_DUPFD_CLOEXEC=1030
+fn sys_fcntl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    let fd = ctx.args[0] as usize;
+    let cmd = ctx.args[1];
+    let arg = ctx.args[2];
+    
+    match cmd {
+        0 => { // F_DUPFD
+            match ctx.process.fds.dup(fd, None) {
+                Some(newfd) => Ok(newfd as u64),
+                None => Ok((-9_i64) as u64),
+            }
+        }
+        1 => { // F_GETFD
+            if let Some(desc) = ctx.process.fds.get(fd) {
+                Ok((desc.flags & 0x1) as u64)
+            } else {
+                Ok((-9_i64) as u64)
+            }
+        }
+        2 => { // F_SETFD
+            if let Some(desc) = ctx.process.fds.get_mut(fd) {
+                desc.flags = (desc.flags & !0x1) | (arg as u32 & 0x1);
+                Ok(0)
+            } else {
+                Ok((-9_i64) as u64)
+            }
+        }
+        3 => { // F_GETFL
+            if let Some(desc) = ctx.process.fds.get(fd) {
+                Ok(desc.flags as u64)
+            } else {
+                Ok((-9_i64) as u64)
+            }
+        }
+        4 => { // F_SETFL
+            if let Some(desc) = ctx.process.fds.get_mut(fd) {
+                desc.flags = arg as u32;
+                Ok(0)
+            } else {
+                Ok((-9_i64) as u64)
+            }
+        }
+        1030 => { // F_DUPFD_CLOEXEC
+            match ctx.process.fds.dup(fd, None) {
+                Some(newfd) => {
+                    if let Some(desc) = ctx.process.fds.get_mut(newfd) {
+                        desc.flags |= 0x1;
+                    }
+                    Ok(newfd as u64)
+                },
+                None => Ok((-9_i64) as u64),
+            }
+        }
+        _ => Ok(0),
+    }
 }
 
 /// sys_recvfrom(sockfd, buf, len, flags, src_addr, addrlen) → bytes_read
@@ -1662,39 +1740,13 @@ fn sys_readlink(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     Ok(n as u64)
 }
 
-/// sys_fcntl(fd, cmd, arg) → result
-/// F_GETFD=1, F_SETFD=2, F_GETFL=3, F_SETFL=4, F_DUPFD=0, F_DUPFD_CLOEXEC=1030
-fn sys_fcntl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let fd = ctx.args[0] as usize;
-    let cmd = ctx.args[1];
-    let _arg = ctx.args[2];
-    match cmd {
-        0 => {
-            // F_DUPFD — dup to lowest fd >= arg
-            match ctx.process.fds.dup(fd, None) {
-                Some(newfd) => Ok(newfd as u64),
-                None => Ok((-9_i64) as u64),
-            }
-        }
-        1 | 2 => Ok(0), // F_GETFD / F_SETFD — FD_CLOEXEC flag, ignore
-        3 => Ok(0),     // F_GETFL — return O_RDWR=2
-        4 => Ok(0),     // F_SETFL — accept any flags
-        1030 => {
-            // F_DUPFD_CLOEXEC
-            match ctx.process.fds.dup(fd, None) {
-                Some(newfd) => Ok(newfd as u64),
-                None => Ok((-9_i64) as u64),
-            }
-        }
-        _ => Ok((-22_i64) as u64), // -EINVAL
-    }
-}
 
 /// === NEW SYSCALLS (100+ coverage) ===
 
 /// sys_getdents64(fd, dirp, count) → bytes_written / -ENOTDIR
 fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.args[0] as usize;
+    let dirp = ctx.args[1];
     let count = ctx.args[2] as usize;
 
     let path_bytes = ctx.process.fds.path_of(fd);
@@ -1703,67 +1755,59 @@ fn sys_getdents64(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     }
     let path = core::str::from_utf8(path_bytes.unwrap()).unwrap_or("/");
 
-    if !crate::fs::vfs::VFS.read().is_dir(path) {
+    let vfs = crate::fs::vfs::VFS.read();
+    if !vfs.is_dir(path) {
         return Ok((-20_i64) as u64); // -ENOTDIR
     }
 
-    let vfs = crate::fs::vfs::VFS.read();
     let entries = vfs.list_dir(path);
     
     const DT_REG: u8 = 8;
     const DT_DIR: u8 = 4;
     
-    // Build all directory entries into a Vec<u8>
     let mut out = alloc::vec::Vec::new();
     
-    // Always emit "." and ".." first (both are directories)
-    for name_bytes in [b".".as_slice(), b"..".as_slice()].iter().copied() {
-        let name_len = name_bytes.len();
-        let reclen = (19 + name_len + 7) & !7;
-        if out.len() + reclen > count {
-            break;
-        }
+    // "." and ".."
+    for name in [".", ".."].iter() {
+        let name_bytes = name.as_bytes();
+        let reclen = (19 + name_bytes.len() + 8) & !7;
+        if out.len() + reclen > count { break; }
+        
         let pos = out.len();
         out.resize(out.len() + reclen, 0);
         let slot = &mut out[pos..pos + reclen];
-        slot[..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
-        slot[8..16].copy_from_slice(&(reclen as i64).to_ne_bytes()); // d_off
+        slot[0..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
+        slot[8..16].copy_from_slice(&(reclen as u64).to_ne_bytes()); // d_off
         slot[16..18].copy_from_slice(&(reclen as u16).to_ne_bytes()); // d_reclen
         slot[18] = DT_DIR;
-        slot[19..19 + name_len].copy_from_slice(name_bytes);
-        slot[19 + name_len] = 0;
+        slot[19..19 + name_bytes.len()].copy_from_slice(name_bytes);
     }
-    
-    // Emit regular entries with correct d_type
+
     for entry_path in entries.iter() {
         let name = entry_path.rsplit('/').next().unwrap_or(entry_path);
         let name_bytes = name.as_bytes();
-        let name_len = name_bytes.len();
-        let reclen = (19 + name_len + 7) & !7;
-        if out.len() + reclen > count {
-            break;
-        }
+        let reclen = (19 + name_bytes.len() + 8) & !7;
+        if out.len() + reclen > count { break; }
+
         let d_type = if vfs.is_dir(entry_path) { DT_DIR } else { DT_REG };
         let pos = out.len();
         out.resize(out.len() + reclen, 0);
         let slot = &mut out[pos..pos + reclen];
-        slot[..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
-        slot[8..16].copy_from_slice(&(reclen as i64).to_ne_bytes()); // d_off
+        slot[0..8].copy_from_slice(&1u64.to_ne_bytes()); // d_ino
+        slot[8..16].copy_from_slice(&(reclen as u64).to_ne_bytes()); // d_off
         slot[16..18].copy_from_slice(&(reclen as u16).to_ne_bytes()); // d_reclen
         slot[18] = d_type;
-        slot[19..19 + name_len].copy_from_slice(name_bytes);
-        slot[19 + name_len] = 0;
+        slot[19..19 + name_bytes.len()].copy_from_slice(name_bytes);
     }
-    
-    // Write to user memory
-    let written = out.len();
-    if written > 0 {
-        UserSliceWo::wo(ctx.args[1], written)
+
+    if !out.is_empty() {
+        UserSliceWo::wo(dirp, out.len())
             .map_err(|_| AbiError::Other("EFAULT"))?
             .copy_from_slice(&out)
             .map_err(|_| AbiError::Other("EFAULT"))?;
     }
-    Ok(written as u64)
+    
+    Ok(out.len() as u64)
 }
 
 /// sys_mkdir(pathname, mode) → 0 / -EINVAL
@@ -2050,8 +2094,6 @@ fn sys_eventfd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let fd = ctx.process.fds.alloc_file(b"eventfd:", 0).ok_or(AbiError::Other("EMFILE"))?;
     Ok(fd as u64)
 }
-
-
 /// sys_signalfd(fd, mask, flags) → fd
 fn sys_signalfd(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let _fd = ctx.args[0] as i32;

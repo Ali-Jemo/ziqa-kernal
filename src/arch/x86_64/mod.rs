@@ -5,6 +5,7 @@ pub mod interrupts;
 pub mod per_cpu;
 pub mod smp;
 pub mod switch;
+use x86_64::structures::paging::Translate;
 
 pub use switch::{TrapFrame, switch_context, jump_to_user_stub};
 pub use per_cpu::{current_pid, set_current_pid};
@@ -63,39 +64,92 @@ pub fn yield_now() {
 pub fn init_process_stack(proc: &mut crate::process::Process) {
     use crate::memory::VirtAddr;
     use x86_64::structures::paging::FrameAllocator;
+    
     let stack_top = proc.stack_top.as_u64();
-    if stack_top != 0 {
-        let page_addr = (stack_top - 4096) & !0xFFF;
-        let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
-        let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
-        let fa = fa_guard.as_mut().unwrap();
-        let flags = x86_64::structures::paging::PageTableFlags::PRESENT | x86_64::structures::paging::PageTableFlags::WRITABLE | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
-        if let Some(frame) = fa.allocate_frame() {
-            unsafe {
-                use x86_64::structures::paging::Mapper;
-                if let Some(pt_frame) = proc.page_table_frame {
-                    let po = crate::memory::paging::phys_offset();
-                    let l4_virt = po + pt_frame.start_address().as_u64();
-                    let l4 = &mut *(l4_virt.as_mut_ptr());
-                    let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
-                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
-                } else {
-                    let mut mapper = crate::memory::paging::current_mapper();
-                    let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
-                }
+    if stack_top == 0 { return; }
+
+    // 1. Allocate and map the top page of the stack if not already mapped.
+    let page_addr = (stack_top - 4096) & !0xFFF;
+    let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
+    let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+    let fa = fa_guard.as_mut().unwrap();
+    let flags = x86_64::structures::paging::PageTableFlags::PRESENT 
+              | x86_64::structures::paging::PageTableFlags::WRITABLE 
+              | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+
+    if let Some(frame) = fa.allocate_frame() {
+        unsafe {
+            use x86_64::structures::paging::Mapper;
+            if let Some(pt_frame) = proc.page_table_frame {
+                let po = crate::memory::paging::phys_offset();
+                let l4_virt = po + pt_frame.start_address().as_u64();
+                let l4 = &mut *(l4_virt.as_mut_ptr());
+                let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
+                let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+            } else {
+                let mut mapper = crate::memory::paging::current_mapper();
+                let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
             }
         }
     }
+    
+    // 2. ABI-specific stack initialization (argc, argv, envp, auxv).
+    // In standard Linux x86_64 ABI:
+    // [RSP]      = argc
+    // [RSP+8]    = argv[0]
+    // ...
+    // [RSP+N*8]  = NULL
+    // [RSP+(N+1)*8] = envp[0]
+    // ...
+    // [RSP+M*8]  = NULL
+    // [RSP+(M+1)*8] = auxv[0].type
+    // [RSP+(M+2)*8] = auxv[0].value
+    // ...
+    // [RSP+K*8]  = 0 (AT_NULL)
+    
+    // Simplified for now: just argc=0, NULL argv, NULL envp, NULL auxv
+    // Total size: 1 (argc) + 1 (argv null) + 1 (envp null) + 1 (auxv null type) + 1 (auxv null val) = 5 * 8 = 40 bytes
+    let abi_stack_size = 40;
+    let user_rsp = stack_top - abi_stack_size;
+    
+    unsafe {
+        let po = crate::memory::paging::phys_offset();
+        let mapper = crate::memory::paging::current_mapper();
+        let paddr = mapper.translate_addr(VirtAddr::new(user_rsp)).unwrap();
+        let ptr = (po + paddr.as_u64()).as_mut_ptr::<u64>();
+        
+        ptr.write(0);        // argc = 0
+        ptr.add(1).write(0); // argv[0] = NULL
+        ptr.add(2).write(0); // envp[0] = NULL
+        ptr.add(3).write(0); // AT_NULL type
+        ptr.add(4).write(0); // AT_NULL value
+    }
+
+    // 3. Initialize kernel stack with CpuState for jump_to_user_stub
     if proc.kernel_stack_top != 0 {
         unsafe {
             let kstack_top = proc.kernel_stack_top;
-            let cpu_state_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64) as *mut crate::process::CpuState;
-            cpu_state_ptr.write(crate::process::CpuState { r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rdi: 0, rsi: 0, rbp: 0, rbx: 0, rdx: 0, rcx: 0, rax: 0, rip: proc.entry_point.as_u64(), cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64, rflags: 0x202, rsp: stack_top, ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64, });
-            let ret_addr_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8) as *mut u64;
+            let cpu_state_size = core::mem::size_of::<crate::process::CpuState>() as u64;
+            let cpu_state_ptr = (kstack_top - cpu_state_size) as *mut crate::process::CpuState;
+            
+            cpu_state_ptr.write(crate::process::CpuState { 
+                r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, 
+                rdi: 0, rsi: 0, rbp: 0, rbx: 0, rdx: 0, rcx: 0, rax: 0, 
+                rip: proc.entry_point.as_u64(), 
+                cs: crate::arch::x86_64::gdt::user_code_selector().0 as u64, 
+                rflags: 0x202, 
+                rsp: user_rsp, // USE THE NEW USER RSP
+                ss: crate::arch::x86_64::gdt::user_data_selector().0 as u64, 
+            });
+            
+            let ret_addr_ptr = (kstack_top - cpu_state_size - 8) as *mut u64;
             ret_addr_ptr.write(jump_to_user_stub as *const () as u64);
-            let context_ptr = (kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48) as *mut u64;
+            
+            // Context for switch_context (pushes rbx, rbp, r12, r13, r14, r15 = 6 regs = 48 bytes)
+            let context_ptr = (kstack_top - cpu_state_size - 8 - 48) as *mut u64;
             for i in 0..6 { context_ptr.add(i).write(0); }
-            proc.kernel_stack_ptr = kstack_top - core::mem::size_of::<crate::process::CpuState>() as u64 - 8 - 48;
+            
+            proc.kernel_stack_ptr = kstack_top - cpu_state_size - 8 - 48;
         }
     }
 }

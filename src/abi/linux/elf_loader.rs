@@ -109,23 +109,26 @@ fn parse_phdr(b: &ElfBytes, offset: usize) -> Result<Elf64Phdr, AbiError> {
 
 /// Load an ELF64 binary into a process.
 ///
-/// Logging is confined to this function; the parsers above are pure.
 pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     let b = ElfBytes::new(binary);
     let hdr = parse_header(&b)?;
 
+    let is_dyn = hdr.e_type == ET_DYN;
+    // Simple heuristic: if ET_DYN and entry is 0-based, pick a high base.
+    // Dynamic linkers and PIEs need a base.
+    let load_base = if is_dyn { 0x40_0000_0000 } else { 0 };
+
     crate::println!(
-        "[ELF] entry=0x{:x} phdrs={} type={}",
-        hdr.e_entry, hdr.e_phnum,
+        "[ELF] entry=0x{:x} (base=0x{:x}) phdrs={} type={}",
+        hdr.e_entry + load_base, load_base, hdr.e_phnum,
         if hdr.e_type == ET_EXEC { "EXEC" } else { "DYN" }
     );
 
-    process.entry_point = VirtAddr::new(hdr.e_entry);
-    process.cpu_state.rip = hdr.e_entry;
+    process.entry_point = VirtAddr::new(hdr.e_entry + load_base);
+    process.cpu_state.rip = hdr.e_entry + load_base;
 
     let mut load_count = 0u32;
     let mut max_vaddr: u64 = 0;
-    let mut has_interp = false;
 
     for i in 0..hdr.e_phnum as usize {
         let ph_off = hdr.e_phoff as usize + i * hdr.e_phentsize as usize;
@@ -133,7 +136,8 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
 
         match phdr.p_type {
             PT_LOAD => {
-                let end_vaddr = phdr.p_vaddr + phdr.p_memsz;
+                let vaddr = phdr.p_vaddr + load_base;
+                let end_vaddr = vaddr + phdr.p_memsz;
                 if end_vaddr > 0x0000_7FFF_FFFF_FFFF {
                     return Err(AbiError::Other("ELF segment overlaps kernel space"));
                 }
@@ -145,7 +149,7 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                     copy_on_write:  false,
                 };
                 let region = MemoryRegion {
-                    start: VirtAddr::new(phdr.p_vaddr),
+                    start: VirtAddr::new(vaddr),
                     size: phdr.p_memsz as usize,
                     flags,
                     is_file_backed: false,
@@ -159,13 +163,23 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                 if end_vaddr > max_vaddr { max_vaddr = end_vaddr; }
                 load_count += 1;
             }
-            PT_INTERP => { has_interp = true; }
+            PT_INTERP => { 
+                let offset = phdr.p_offset as usize;
+                let size = phdr.p_filesz as usize;
+                if offset + size <= b.len() {
+                    let path_bytes = &b.data[offset..offset+size];
+                    let path_len = path_bytes.iter().position(|&b| b == 0).unwrap_or(size);
+                    if let Ok(path) = core::str::from_utf8(&path_bytes[..path_len]) {
+                        process.interpreter = Some(alloc::string::String::from(path));
+                    }
+                }
+            }
             _ => {}
         }
     }
 
-    if has_interp {
-        crate::println!("[ELF] WARNING: dynamic linker required (not supported)");
+    if let Some(ref interp) = process.interpreter {
+        crate::println!("[ELF] dynamic linker required: {}", interp);
     }
 
     process.brk = (max_vaddr + 0xFFF) & !0xFFF;

@@ -12,8 +12,8 @@
 pub mod linux;
 pub mod syscall;
 pub mod usercopy;
-#[cfg(feature = "wasm")]
 pub mod wasm;
+pub mod redox;
 pub mod handler;
 
 use crate::process::Process;

@@ -14,6 +14,7 @@ pub fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
         nr::SYS_DUP => Some(super::sys_dup(ctx)),
         nr::SYS_DUP2 => Some(super::sys_dup2(ctx)),
         nr::SYS_PIPE => Some(super::sys_pipe(ctx)),
+        nr::SYS_PIPE2 => Some(super::sys_pipe2(ctx)),
         nr::SYS_GETCWD => Some(super::sys_getcwd(ctx)),
         nr::SYS_CHDIR => Some(super::sys_chdir(ctx)),
         nr::SYS_RENAME => Some(super::sys_rename(ctx)),

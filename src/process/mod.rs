@@ -25,6 +25,7 @@ pub enum AbiKind {
     LinuxElf,
     Wasm,
     ZiqaNative,
+    RedoxElf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,8 +322,9 @@ pub struct Process {
     pub gs_base: u64,
     /// Whether the last block operation timed out
     pub timed_out: bool,
+    /// Path to the ELF interpreter (PT_INTERP)
+    pub interpreter: Option<alloc::string::String>,
 }
-
 impl Process {
     pub fn new(pid: Pid, abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Self {
         let mut cpu = CpuState::zero();
@@ -375,6 +377,7 @@ impl Process {
             fs_base: 0,
             gs_base: 0,
             timed_out: false,
+            interpreter: None,
         }
     }
 

@@ -295,6 +295,7 @@ impl Snapshotable for Process {
             AbiKind::LinuxElf => 0,
             AbiKind::Wasm => 1,
             AbiKind::ZiqaNative => 2,
+            AbiKind::RedoxElf => 3,
         });
         push_u64(&mut buf, self.priority as u64);
         push_u64(&mut buf, self.brk);
