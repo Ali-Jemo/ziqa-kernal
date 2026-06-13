@@ -74,7 +74,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         } else {
             crate::println!(" ~ BGA Display .......................... ready");
         }
-        crate::println!(" ~ Compositor kernel thread ............ deferred");
+        // Spawn compositor kernel thread for window management
+        ziqa_kernel::process::scheduler::spawn_kthread(
+            ziqa_kernel::userspace::compositor::compositor_main,
+            core::ptr::null(),
+        );
     } else {
         crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
     }

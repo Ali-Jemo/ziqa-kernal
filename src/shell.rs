@@ -916,7 +916,7 @@ impl Shell {
             ("Filesystem", &[
                 ("ls [path]",        "list directory contents"),
                 ("dir [path]",       "detailed listing with sizes"),
-                ("cd [path]",        "change directory (.. / - for previous)"),
+                ("cd [path]",        "change directory (.. / - for previous). Use -v to print new cwd"),
                 ("pwd",              "print working directory"),
                 ("mkdir <path>",     "create a directory"),
                 ("rm <path>",        "remove a file"),
@@ -954,7 +954,7 @@ impl Shell {
                 ("dashboard",        "real-time system dashboard"),
                 ("reboot",           "reboot the system"),
                 ("clear",            "clear screen"),
-                ("echo <text>",      "print text"),
+                ("echo <text>",      "print text. Use -N for null-terminated output"),
                 ("history",          "show command history"),
                 ("alias [n=v]",      "define or list aliases"),
                 ("export N=V",       "set environment variable"),
@@ -1228,6 +1228,7 @@ impl Shell {
                 crate::process::AbiKind::LinuxElf   => "Linux/ELF ",
                 crate::process::AbiKind::Wasm        => "WASM      ",
                 crate::process::AbiKind::ZiqaNative  => "ZiqaNative",
+                crate::process::AbiKind::RedoxElf    => "Redox/ELF ",
             };
             println!("  │ {:>4} │ {}{}{} │ {:>4} │ {:>6} │ {} │ 0x{:012x} │",
                 pid, sc, ss, C_RESET, pri, parent, abi_s, entry);
@@ -1937,7 +1938,17 @@ impl Shell {
     }
 
     fn cmd_cd(&mut self, args: &[String]) -> i32 {
-        let raw = args.first().map(|s| s.as_str()).unwrap_or("/");
+        // Flag handling: '-v' prints the new cwd after changing directory.
+        let mut verbose = false;
+        let mut path_opt: Option<String> = None;
+        for arg in args {
+            if arg == "-v" {
+                verbose = true;
+            } else if path_opt.is_none() {
+                path_opt = Some(arg.clone());
+            }
+        }
+        let raw = path_opt.as_deref().unwrap_or("/");
         let resolved = if raw == "-" {
             if self.prev_cwd.is_empty() {
                 println!("{}cd{}: {}no previous directory{}", C_RED, C_RESET, C_DIM, C_RESET);
@@ -1954,7 +1965,12 @@ impl Shell {
         }
         self.prev_cwd = self.cwd.clone();
         self.cwd = resolved;
+        // Default feedback (arrow). Keep for compatibility.
         println!("{}▸ {}{}", C_GREEN, self.cwd_str(), C_RESET);
+        if verbose {
+            // Additional explicit cwd output (same as `pwd`).
+            println!("{}", self.cwd_str());
+        }
         0
     }
 

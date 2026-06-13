@@ -35,7 +35,7 @@ $PRODUCES echo.c
 $BUILTIN echo
 $FUNCTION echo_builtin
 $DEPENDS_ON V9_ECHO
-$SHORT_DOC echo [-neE] [arg ...]
+ $SHORT_DOC echo [-neE] [-N] [arg ...]
 Write arguments to the standard output.
 
 Display the ARGs, separated by a single space character and followed by a
@@ -44,7 +44,8 @@ newline, on the standard output.
 Options:
   -n	do not append a newline
   -e	enable interpretation of the following backslash escapes
-  -E	explicitly suppress interpretation of backslash escapes
+   -E	explicitly suppress interpretation of backslash escapes
+   -N	output arguments separated by null bytes (\\0)
 
 `echo' interprets the following backslash-escaped characters:
   \a	alert (bell)
@@ -74,22 +75,23 @@ $END
 $BUILTIN echo
 $FUNCTION echo_builtin
 $DEPENDS_ON !V9_ECHO
-$SHORT_DOC echo [-n] [arg ...]
+ $SHORT_DOC echo [-n] [-N] [arg ...]
 Write arguments to the standard output.
 
 Display the ARGs on the standard output followed by a newline.
 
 Options:
-  -n	do not append a newline
+   -n	do not append a newline
+   -N	output arguments separated by null bytes (\\0)
 
 Exit Status:
 Returns success unless a write error occurs.
 $END
 
 #if defined (V9_ECHO)
-#  define VALID_ECHO_OPTIONS "neE"
+#  define VALID_ECHO_OPTIONS "neEN"
 #else /* !V9_ECHO */
-#  define VALID_ECHO_OPTIONS "n"
+#  define VALID_ECHO_OPTIONS "nN"
 #endif /* !V9_ECHO */
 
 /* System V machines already have a /bin/sh with a v9 behaviour.  We
@@ -110,8 +112,10 @@ int
 echo_builtin (list)
      WORD_LIST *list;
 {
-  int display_return, do_v9, i, len;
+  int display_return, do_v9, i, len, use_null;
   char *temp, *s;
+
+  use_null = 0;
 
   do_v9 = xpg_echo;
   display_return = 1;
@@ -152,6 +156,9 @@ echo_builtin (list)
 	    case 'E':
 	      do_v9 = 0;
 	      break;
+	    case 'N':
+	      use_null = 1;
+	      break;
 #endif /* V9_ECHO */
 	    default:
 	      goto just_echo;	/* XXX */
@@ -191,7 +198,7 @@ just_echo:
 	  break;
 	}
       if (list)
-	putchar(' ');
+	putchar (use_null ? '\0' : ' ');
       QUIT;
     }
 

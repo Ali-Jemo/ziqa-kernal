@@ -268,7 +268,7 @@ cd_builtin (list)
      WORD_LIST *list;
 {
   char *dirname, *cdpath, *path, *temp;
-  int path_index, no_symlinks, opt, lflag, e;
+  int path_index, no_symlinks, opt, lflag, e, vflag;
 
 #if defined (RESTRICTED_SHELL)
   if (restricted)
@@ -282,10 +282,11 @@ cd_builtin (list)
   no_symlinks = no_symbolic_links;
   xattrflag = 0;
   reset_internal_getopt ();
+  vflag = 0;
 #if defined (O_XATTR)
-  while ((opt = internal_getopt (list, "eLP@")) != -1)
+  while ((opt = internal_getopt (list, "eLP@v")) != -1)
 #else
-  while ((opt = internal_getopt (list, "eLP")) != -1)
+  while ((opt = internal_getopt (list, "eLPv")) != -1)
 #endif
     {
       switch (opt)
@@ -304,6 +305,9 @@ cd_builtin (list)
 	  xattrflag = 1;
 	  break;
 #endif
+	case 'v':
+	  vflag = 1;
+	  break;
 	CASE_HELPOPT;
 	default:
 	  builtin_usage ();
@@ -382,6 +386,8 @@ cd_builtin (list)
 		 the shell is interactive. */
 	      if (opt && (path = no_symlinks ? temp : the_current_working_directory))
 		printf ("%s\n", path);
+	      if (vflag)
+		printf ("%s\n", the_current_working_directory);
 
 	      free (temp);
 #if 0
@@ -419,6 +425,8 @@ cd_builtin (list)
     {
       if (lflag & LCD_PRINTPATH)
 	printf ("%s\n", dirname);
+      if (vflag)
+	printf ("%s\n", the_current_working_directory);
       return (bindpwd (no_symlinks));
     }
 
@@ -431,6 +439,8 @@ cd_builtin (list)
       if (temp && change_to_directory (temp, no_symlinks, xattrflag))
 	{
 	  printf ("%s\n", temp);
+	  if (vflag)
+	    printf ("%s\n", the_current_working_directory);
 	  return (bindpwd (no_symlinks));
 	}
     }
@@ -445,6 +455,8 @@ cd_builtin (list)
 	{
 	  printf ("%s\n", temp);
 	  free (temp);
+	  if (vflag)
+	    printf ("%s\n", the_current_working_directory);
 	  return (bindpwd (no_symlinks));
 	}
       else

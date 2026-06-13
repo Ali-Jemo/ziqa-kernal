@@ -22,6 +22,7 @@ pub mod serio;
 pub mod memory;
 pub mod event;
 pub mod sys;
+pub mod orbital_bridge;
 
 use self::debug::DebugScheme;
 use self::pipe::PipeScheme;
@@ -47,12 +48,12 @@ pub trait Scheme: Send + Sync {
     fn read(&self, id: usize, buf: &mut [u8]) -> SchemeResult<usize>;
     
     /// Write to a resource
+    fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize>;
     
     /// Check for readiness events. Used by the event scheme.
     fn fevent(&self, _id: usize, _flags: usize) -> SchemeResult<usize> {
         Ok(0) // Default: not ready
     }
-    fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize>;
     
     /// Close a resource
     fn close(&self, id: usize) -> SchemeResult<()>;
@@ -83,6 +84,7 @@ impl SchemeRegistry {
 }
 
 pub static SCHEME_REGISTRY: Mutex<SchemeRegistry> = Mutex::new(SchemeRegistry::new());
+
 pub fn init() {
     let mut registry = SCHEME_REGISTRY.lock();
     registry.register("debug", Box::new(DebugScheme::new()));
