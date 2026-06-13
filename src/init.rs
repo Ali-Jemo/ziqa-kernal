@@ -115,8 +115,10 @@ pub fn init(boot_info: &'static bootloader::BootInfo) {
 pub fn init_abi_registry() -> abi::AbiRegistry {
     let mut registry = abi::AbiRegistry::new();
 
-    registry.register(&abi::linux::LINUX_PLUGIN).ok();
+    // Redox must be registered before Linux — both check ELF magic only,
+    // and orbital (a Redox compositor) needs Redox syscall dispatching.
     registry.register(&abi::redox::REDOX_PLUGIN).ok();
+    registry.register(&abi::linux::LINUX_PLUGIN).ok();
     #[cfg(feature = "wasm")]
     registry.register(&abi::wasm::WASM_PLUGIN).ok();
 

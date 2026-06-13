@@ -759,15 +759,22 @@ impl Shell {
 
     fn read_line(&mut self) {
         use crate::drivers::keyboard::read_stdin;
-        crate::process::scheduler::disable_preemption();
         let mut idx = 0;
         self.input_buf = [0; 256];
+        self.cursor = 0;
         loop {
+            // Re-enable pre-emption so other processes can run while we wait for input
+            if !crate::process::scheduler::preemption_enabled() {
+                crate::process::scheduler::enable_preemption();
+            }
+
             let mut byte = [0u8; 1];
             if read_stdin(&mut byte) > 0 {
                 let b = byte[0];
+                // Disable pre-emption temporarily during character processing
+                crate::process::scheduler::disable_preemption();
                 match b {
-                    0x80 => {
+                    0x80 => { // Up arrow — history back
                         if !self.history.is_empty() {
                             if self.history_pos < 0 {
                                 self.history_pos = self.history.len() as isize - 1;
@@ -777,7 +784,7 @@ impl Shell {
                             self.load_history(&mut idx);
                         }
                     }
-                    0x81 => {
+                    0x81 => { // Down arrow — history forward
                         if self.history_pos >= 0 {
                             self.history_pos += 1;
                             if self.history_pos as usize >= self.history.len() {
@@ -804,39 +811,39 @@ impl Shell {
                     }
                     8 | 127 => { // Backspace
                         if idx > 0 {
-                            // Shift remaining characters left
                             let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
                             for i in idx-1..len-1 {
                                 self.input_buf[i] = self.input_buf[i+1];
                             }
                             self.input_buf[len-1] = 0;
                             idx -= 1;
-                            self.refresh_line(idx); // Redraw
+                            self.refresh_line(idx);
                         }
                     }
-                    0x09 => {
+                    0x09 => { // Tab
                         self.autocomplete(&mut idx);
                     }
                     0x88 => { // Delete
                         if idx < 255 && self.input_buf[idx] != 0 {
-                            // Shift remaining characters left starting from current index
                             let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
                             for i in idx..len-1 {
                                 self.input_buf[i] = self.input_buf[i+1];
                             }
                             self.input_buf[len-1] = 0;
-                            self.refresh_line(idx); // Redraw
+                            self.refresh_line(idx);
                         }
                     }
                     b'\n' | b'\r' => {
+                        crate::process::scheduler::enable_preemption();
                         self.cursor = idx;
                         if crate::drivers::vga::is_scrolled() {
                             crate::drivers::vga::restore_terminal();
                         }
                         println!("");
-                        break;
+                        return;
                     }
                     0x03 => {
+                        crate::process::scheduler::enable_preemption();
                         self.cursor = idx;
                         println!("^C");
                         self.input_buf = [0; 256];
@@ -848,14 +855,12 @@ impl Shell {
                         self.refresh_line(idx);
                     }
                     0x04 => {
+                        crate::process::scheduler::enable_preemption();
                         println!("^D - Exiting shell");
-                        // In a real shell this might exit the process or logout
-                        // For now we just break the current input loop
-                        break;
+                        return;
                     }
                     _ => {
                         if idx < 255 {
-                            // Shift remaining characters right to make space
                             let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
                             for i in (idx..len.min(254)).rev() {
                                 self.input_buf[i + 1] = self.input_buf[i];
@@ -866,8 +871,10 @@ impl Shell {
                         }
                     }
                 }
+                crate::process::scheduler::enable_preemption();
             } else {
-                core::hint::spin_loop();
+                // No input available — yield CPU to other processes
+                crate::process::scheduler::yield_now();
             }
         }
     }
