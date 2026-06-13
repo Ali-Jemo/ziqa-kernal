@@ -1179,11 +1179,19 @@ impl Shell {
             None => { println!("Usage: spawnelf <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
+        let is_orbital = resolved.ends_with("orbital.elf");
         match crate::fs::vfs::VFS.read().read_raw_all(&resolved) {
-            Ok(data) => match crate::process::scheduler::spawn_elf_from_vec(data) {
-                Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
-                None => println!("spawnelf: failed to spawn from '{}'", resolved),
-            },
+            Ok(data) => {
+                let pid = if is_orbital {
+                    crate::process::scheduler::spawn_redox_elf_from_vec(data)
+                } else {
+                    crate::process::scheduler::spawn_elf_from_vec(data)
+                };
+                match pid {
+                    Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
+                    None => println!("spawnelf: failed to spawn from '{}'", resolved),
+                }
+            }
             Err(e) => println!("spawnelf: failed to read '{}': {:?}", resolved, e),
         }
         0
