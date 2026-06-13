@@ -1173,7 +1173,7 @@ impl Shell {
         };
         let resolved = self.resolve_path(p);
         match crate::fs::vfs::VFS.read().read_raw_all(&resolved) {
-            Ok(data) => match crate::process::scheduler::spawn_elf(&data) {
+            Ok(data) => match crate::process::scheduler::spawn_elf_from_vec(data) {
                 Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
                 None => println!("spawnelf: failed to spawn from '{}'", resolved),
             },
