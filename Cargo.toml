@@ -20,6 +20,8 @@ wasm = []
 zig-hotpaths = []
 userspace-drivers-test = []
 perf-benchmarks = []
+orbital = []
+skip-self-tests = []
 
 [dependencies]
 bootloader = { version = "0.9.23", features = ["map_physical_memory"], optional = true }

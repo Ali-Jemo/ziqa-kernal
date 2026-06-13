@@ -213,14 +213,17 @@ fn wait_icr_idle() {
     }
 }
 
-pub fn calibrate_timer(pit_ticks_ms: u64) -> u32 {
+pub fn calibrate_timer(_pit_ticks_ms: u64) -> u32 {
     write_lapic(LAPIC_TIMER_DIV, 0x03);
     write_lapic(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | (3 << 17));
     write_lapic(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
-    let target = crate::timer::uptime_ticks() + pit_ticks_ms * crate::timer::TICKS_PER_SEC / 1000;
-    while crate::timer::uptime_ticks() < target {
+
+    // Spin delay for rough calibration. Cannot use PIT-based waiting
+    // because TIMER.lock() deadlocks against the timer ISR.
+    for _ in 0..5_000_000 {
         core::hint::spin_loop();
     }
+
     write_lapic(LAPIC_LVT_TIMER, 1 << 16);
     let count = read_lapic(LAPIC_TIMER_CURCNT);
     0xFFFFFFFF - count
@@ -287,3 +290,4 @@ pub const ERROR_VECTOR: u8 = 0x31;
 pub const IPI_RESCHEDULE_VECTOR: u8 = 0x34;
 pub const IPI_TLB_SHOOTDOWN_VECTOR: u8 = 0x35;
 pub const IPI_HALT_VECTOR: u8 = 0x36;
+

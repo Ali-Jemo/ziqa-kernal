@@ -7,7 +7,7 @@ use crate::ebpf::map::{BPF_MAPS, BpfMap, BpfMapType};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
-pub(super) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
+pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     Some(match ctx.number {
         nr::SYS_BPF => sys_bpf(ctx),
         _ => return None,

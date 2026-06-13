@@ -114,13 +114,12 @@ pub fn class_name(class: u8) -> &'static str {
 }
 
 pub fn init() {
-    crate::println!("[pci] Initializing PCI Subsystem...");
     let access = PciAccess;
     let mut devices = Vec::new();
+    let mut count = 0u32;
 
     for bus in 0..=255 {
         for device in 0..=31 {
-            // Check function 0 first
             let addr = PciAddress::new(0, bus, device, 0);
             let header = PciHeader::new(addr);
             let (vendor_id, _device_id) = header.id(&access);
@@ -138,10 +137,9 @@ pub fn init() {
                 if vid == 0xFFFF {
                     continue;
                 }
+                count += 1;
 
                 let (revision, class, subclass, prog_if) = func_header.revision_and_class(&access);
-                
-                // Read raw interrupt pin and line directly from 0x3C
                 let intr_data = unsafe { access.read(func_addr, 0x3C) };
                 let line = (intr_data & 0xFF) as u8;
                 let pin = ((intr_data >> 8) & 0xFF) as u8;
@@ -151,11 +149,9 @@ pub fn init() {
                     let offset = 0x10 + slot as u16 * 4;
                     bars[slot] = unsafe { access.read(func_addr, offset) };
                 }
-
-                // Read raw header type value (offset 0x0C, bits 16..24)
                 let header_type = unsafe { (access.read(func_addr, 0x0C) >> 16) as u8 };
 
-                let dev = PciDevice {
+                devices.push(PciDevice {
                     address: func_addr,
                     bus,
                     dev: device,
@@ -170,25 +166,11 @@ pub fn init() {
                     interrupt_line: line,
                     interrupt_pin: pin,
                     bars,
-                };
-
-                crate::println!(
-                    "[pci] Found device: {:04X}:{:04X} at {:02X}:{:02X}.{} (Class {}/{} [{}])",
-                    vid,
-                    did,
-                    bus,
-                    device,
-                    func,
-                    class,
-                    subclass,
-                    class_name(class)
-                );
-
-                devices.push(dev);
+                });
             }
         }
     }
 
     *PCI_DEVICES.lock() = devices;
-    crate::println!("[pci] PCI Subsystem initialized. {} device(s) found.", device_count());
+    crate::println!("[pci] {} device(s) found", count);
 }

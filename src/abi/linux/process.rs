@@ -2,7 +2,7 @@
 
 use super::{nr, SyscallContext, AbiError};
 
-pub(super) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
+pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     Some(match ctx.number {
         nr::SYS_EXIT | nr::SYS_EXIT_GROUP => super::sys_exit(ctx),
         nr::SYS_EXECVE => super::sys_execve(ctx),

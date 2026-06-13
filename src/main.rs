@@ -10,6 +10,7 @@ use ziqa_kernel::drivers::vga;
 use ziqa_kernel::drivers::vga::Color;
 use ziqa_kernel::fs::ramfs::RamFile;
 use ziqa_kernel::fs::vfs::VFS;
+#[cfg(not(feature = "skip-self-tests"))]
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::println;
@@ -61,26 +62,29 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // 3. Service/FS Setup
     init_services();
 
-    // ── GPU Display / Compositor Init ───────────────────────────────────
+// ── GPU Display / Compositor Init ───────────────────────────────────
     section("Display");
-    if ziqa_kernel::drivers::virtio_gpu::is_available() {
-        if !ziqa_kernel::drivers::framebuffer::is_bga_available() {
-            ziqa_kernel::drivers::virtio_gpu::init_display();
-            ziqa_kernel::process::scheduler::spawn_kthread(
-                ziqa_kernel::drivers::virtio_gpu::gpu_ipc_listener,
-                core::ptr::null(),
-            );
-            crate::println!(" ~ VirtIO GPU display ................... ready");
-        } else {
-            crate::println!(" ~ BGA Display .......................... ready");
-        }
+    let display_ok = if ziqa_kernel::drivers::virtio_gpu::is_available() {
+        ziqa_kernel::drivers::virtio_gpu::init_display();
+        ziqa_kernel::process::scheduler::spawn_kthread(
+            ziqa_kernel::drivers::virtio_gpu::gpu_ipc_listener,
+            core::ptr::null(),
+        );
+        crate::println!(" ~ VirtIO GPU display ................... ready");
+        true
+    } else if ziqa_kernel::drivers::framebuffer::init_bga() {
+        crate::println!(" ~ BGA Display .......................... ready");
+        true
+    } else {
+        crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
+        false
+    };
+    if display_ok {
         // Spawn compositor kernel thread for window management
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::userspace::compositor::compositor_main,
             core::ptr::null(),
         );
-    } else {
-        crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
     }
     set_fg(Color::White);
 
@@ -115,8 +119,16 @@ fn init_subsystems() {
     // Initialize VFS before running tests (tests may need filesystem access)
     ziqa_kernel::fs::vfs::VFS.write().init();
     set_fg(Color::White);
-    section("Self-tests");
-    ziqa_kernel::tests::run_all();
+    #[cfg(not(feature = "skip-self-tests"))]
+    {
+        section("Self-tests");
+        ziqa_kernel::tests::run_all();
+    }
+    #[cfg(feature = "skip-self-tests")]
+    {
+        section("Self-tests");
+        println!(" ~ skipped for GUI boot");
+    }
 }
 
 fn init_services() {
@@ -143,8 +155,13 @@ fn init_services() {
                 ziqa_kernel::abi::wasm::TEST_WASM,
             ))),
         );
-
-        // Busybox binary
+        #[cfg(feature = "orbital")]
+        vfs.mount(
+            "/bin/orbital",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../assets/orbital.elf"
+            )))),
+        );
         vfs.mount(
             "/bin/busybox",
             Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
@@ -177,6 +194,12 @@ fn init_services() {
     }
 
     // Disk filesystems
+    #[cfg(feature = "skip-self-tests")]
+    {
+        block_registry::print_devices();
+        println!(" ~ disk filesystems .................... skipped for GUI boot");
+    }
+    #[cfg(not(feature = "skip-self-tests"))]
     {
         block_registry::print_devices();
 
@@ -285,45 +308,23 @@ fn run_startup() {
     section("Startup");
     set_fg(Color::LightGreen);
 
-    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_kthread(
+    ziqa_kernel::process::scheduler::spawn_kthread(
         |_| ziqa_kernel::drivers::mouse_server::run_mouse_server(1),
         core::ptr::null(),
-    ) {
-        println!(
-            " ✓ PS/2 Mouse IPC Server ............... spawned: {:?}",
-            pid
-        );
-    } else {
-        println!(" ! Failed to spawn PS/2 Mouse IPC Server");
-    }
+    );
 
-    // Spawn the built-in test ELF as a user process (DEFERRED)
-    println!(" ~ Deferred user process spawn");
-    /*
+    // Spawn the built-in test ELF as a user process
     let binary = include_bytes!("../assets/test_elf.bin");
-    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(binary) {
-        println!(
-            " ✓ Spawned user process pid={} ............ from test_elf.bin",
-            pid.0
-        );
-    } else {
-        println!(" ! Failed to spawn user process");
-    }
-    */
+    ziqa_kernel::process::scheduler::spawn_elf(binary);
 
     // Spawn built-in compositor demo client (kernel thread)
-    println!(" ~ Deferred compositor demo client spawn");
-    /*
     #[cfg(feature = "games")]
     {
-        println!(" ~ Spawning compositor demo client...");
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::userspace::demo_client::demo_client_main,
             core::ptr::null(),
         );
-        println!(" ✓ Demo compositor client ................ spawned");
     }
-    */
 
     // Spawn verification log dumper
     #[cfg(feature = "games")]
@@ -331,11 +332,9 @@ fn run_startup() {
         ziqa_kernel::process::scheduler::spawn_kthread(verify_logger, core::ptr::null());
     }
 
-    // Spawn the userspace keyboard driver
-    println!(" ~ Spawning keyboard driver...");
+    // Spawn the userspace keyboard driver (preemption stays disabled until all spawns complete)
     let kb_driver_bin = include_bytes!("../userspace/keyboard_driver.elf");
     if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(kb_driver_bin) {
-        println!("[DEBUG startup] spawn_elf returned pid={}", pid.0);
         ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
             proc.capabilities.grant(
                 ziqa_kernel::capability::ResourceKind::DeviceIo,
@@ -344,32 +343,27 @@ fn run_startup() {
                 None,
             );
         });
-        println!("[DEBUG startup] with_process_mut done");
-        println!(
-            " ✓ Spawned Userspace Keyboard Driver pid={} .... from userspace/keyboard_driver.elf",
-            pid.0
-        );
-    } else {
-        println!(" ! Failed to spawn Userspace Keyboard Driver");
     }
     // Spawn Doom as a user-space process
     #[cfg(feature = "games")]
     {
         let doom_binary = include_bytes!("../zig-out/bin/doom");
-        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(doom_binary) {
-            println!(
-                " ✓ Spawned Doom pid={} ..................... from zig-out/bin/doom",
-                pid.0
-            );
-        } else {
-            println!(" ! Failed to spawn Doom process (games feature enabled but doom.elf may need rebuilding)");
+        ziqa_kernel::process::scheduler::spawn_elf(doom_binary);
+    }
+
+    #[cfg(feature = "orbital")]
+    {
+        let orbital_binary = include_bytes!("../assets/orbital.elf");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf(orbital_binary) {
+            ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                let full = ziqa_kernel::capability::Permissions::full();
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
+            });
         }
     }
-    // Do not yield here: preemption is intentionally gated until the shell has
-    // printed its first prompt, so user tasks cannot steal the boot handoff.
-
-    // Restore any saved snapshots for instant-on resume
-    let binary = include_bytes!("../assets/test_elf.bin");
     let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(binary);
     if restored > 0 {
         set_fg(Color::LightGreen);
@@ -382,14 +376,12 @@ fn run_startup() {
 
     println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");
     set_fg(Color::White);
-
-    // Dump boot logs for verification
     #[cfg(feature = "games")]
     {
-        println!("\n── Boot log dump ──");
         ziqa_kernel::klog::KLOG.lock().dump();
-        println!("───────────────────\n");
     }
+    // Preemption will be enabled when the shell run loop starts.
+
     ziqa_kernel::boot_screen::show_boot_screen();
 }
 #[panic_handler]

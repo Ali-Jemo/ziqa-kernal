@@ -2,7 +2,7 @@ use super::{nr, SyscallContext, AbiError};
 #[cfg(feature = "net")]
 use crate::net::socket::{SOCKETS, SocketState, SockAddrInet, SockDomain, SockType};
 
-pub(super) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
+pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     Some(match ctx.number {
         nr::SYS_SOCKET => super::sys_socket(ctx),
         nr::SYS_BIND => sys_bind(ctx),

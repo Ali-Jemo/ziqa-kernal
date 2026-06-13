@@ -54,6 +54,10 @@ inc:
 	cargo build --bin ziqa-kernel --incremental
 
 # Boot image
+boot-gui:
+	cargo build --bin ziqa-kernel --features skip-self-tests
+	cargo bootimage --features skip-self-tests
+
 boot: build
 	cargo bootimage
 
@@ -75,5 +79,5 @@ zig-check:
 	zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector -femit-bin=/dev/null 2>&1 || zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector
 
 # Run on QEMU with graphical display (for DOOM fire visual)
-run-gui: boot
+run-gui: boot-gui
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0

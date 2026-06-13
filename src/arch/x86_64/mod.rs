@@ -5,7 +5,6 @@ pub mod interrupts;
 pub mod per_cpu;
 pub mod smp;
 pub mod switch;
-use x86_64::structures::paging::Translate;
 
 pub use switch::{TrapFrame, switch_context, jump_to_user_stub};
 pub use per_cpu::{current_pid, set_current_pid};
@@ -72,6 +71,7 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
     let page_addr = (stack_top - 4096) & !0xFFF;
     let page = x86_64::structures::paging::Page::containing_address(VirtAddr::new(page_addr));
     let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+    let mut stack_frame_phys = None;
     let fa = fa_guard.as_mut().unwrap();
     let flags = x86_64::structures::paging::PageTableFlags::PRESENT 
               | x86_64::structures::paging::PageTableFlags::WRITABLE 
@@ -86,9 +86,11 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
                 let l4 = &mut *(l4_virt.as_mut_ptr());
                 let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
                 let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                stack_frame_phys = Some(frame.start_address().as_u64());
             } else {
                 let mut mapper = crate::memory::paging::current_mapper();
                 let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                stack_frame_phys = Some(frame.start_address().as_u64());
             }
         }
     }
@@ -112,17 +114,18 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
     let abi_stack_size = 40;
     let user_rsp = stack_top - abi_stack_size;
     
-    unsafe {
-        let po = crate::memory::paging::phys_offset();
-        let mapper = crate::memory::paging::current_mapper();
-        let paddr = mapper.translate_addr(VirtAddr::new(user_rsp)).unwrap();
-        let ptr = (po + paddr.as_u64()).as_mut_ptr::<u64>();
-        
-        ptr.write(0);        // argc = 0
-        ptr.add(1).write(0); // argv[0] = NULL
-        ptr.add(2).write(0); // envp[0] = NULL
-        ptr.add(3).write(0); // AT_NULL type
-        ptr.add(4).write(0); // AT_NULL value
+    if let Some(stack_frame_phys) = stack_frame_phys {
+        unsafe {
+            let po = crate::memory::paging::phys_offset();
+            let offset = user_rsp - page_addr;
+            let ptr = (po + stack_frame_phys + offset).as_mut_ptr::<u64>();
+            
+            ptr.write(0);        // argc = 0
+            ptr.add(1).write(0); // argv[0] = NULL
+            ptr.add(2).write(0); // envp[0] = NULL
+            ptr.add(3).write(0); // AT_NULL type
+            ptr.add(4).write(0); // AT_NULL value
+        }
     }
 
     // 3. Initialize kernel stack with CpuState for jump_to_user_stub

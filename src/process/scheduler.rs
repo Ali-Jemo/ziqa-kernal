@@ -8,6 +8,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
+use crate::abi::AbiPlugin;
 
 /// The global process table, allowing concurrent access to different processes.
 pub struct GlobalProcessTable {
@@ -177,25 +178,61 @@ impl Scheduler {
             bco_hook: None,
         }));
 
-        crate::println!("[DEBUG spawn_elf] starting plugin.load");
         match plugin.load(binary, &mut proc) {
             Ok(()) => {
-                crate::println!("[DEBUG spawn_elf] plugin.load ok, starting init_process_stack");
                 init_process_stack(&mut proc);
-                crate::println!("[DEBUG spawn_elf] init_process_stack ok, pushing to ready queue");
                 proc.set_state_ready();
                 let mut table = self.process_table.write();
                 table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
                 self.ready_queues.lock().push(pid, 0);
-                crate::println!("[DEBUG spawn_elf] returning Some(pid={:?})", pid);
                 Some(pid)
             }
-            Err(e) => {
-                crate::println!("[DEBUG spawn_elf] plugin.load failed: {:?}", e);
-                None
-            }
+            Err(_) => None,
         }
     }
+    pub fn spawn_redox_elf(&self, binary: &[u8]) -> Option<Pid> {
+        let plugin = &crate::abi::redox::REDOX_PLUGIN;
+        let pid = self.pid_allocator.lock().alloc_pid();
+        let entry = VirtAddr::new(0x1000000);
+        let stack = VirtAddr::new(0x7FFF_FFFF_000);
+        let mut proc = Process::new(pid, AbiKind::RedoxElf, entry, stack);
+        proc.binary_data = binary.to_vec();
+
+        let kstack = alloc::vec![0u8; 65536];
+        let top = kstack.as_ptr() as u64 + 65536;
+        proc.kernel_stack = Some(kstack);
+        proc.kernel_stack_top = top;
+
+        if let Some(frame) = crate::memory::paging::create_process_page_table() {
+            proc.page_table_frame = Some(frame);
+        }
+
+        let stack_size = 256 * 1024;
+        let stack_start = stack.as_u64().checked_sub(stack_size as u64).unwrap_or(0);
+        proc.add_region(Vma::from(crate::memory::MemoryRegion {
+            start: VirtAddr::new(stack_start),
+            size: stack_size as usize,
+            flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+            is_file_backed: false,
+            file_path: None,
+            file_offset: 0,
+            file_size: 0,
+            bco_hook: None,
+        }));
+
+        match plugin.load(binary, &mut proc) {
+            Ok(()) => {
+                init_process_stack(&mut proc);
+                proc.set_state_ready();
+                let mut table = self.process_table.write();
+                table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
+                self.ready_queues.lock().push(pid, 0);
+                Some(pid)
+            }
+            Err(_) => None,
+        }
+    }
+
 
     pub fn ptrace_read_mem(&self, pid: Pid, _addr: u64, _buf: &mut [u8]) -> bool {
         let proc_arc = match self.get_process(pid) {
@@ -633,6 +670,7 @@ pub fn tick() { SCHEDULER.tick(); }
 pub fn spawn(abi: AbiKind, entry: VirtAddr, stack: VirtAddr) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn(abi, entry, stack)) }
 pub fn spawn_kthread(entry: fn(*const ()), arg: *const ()) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn_kthread(entry, arg)) }
 pub fn spawn_elf(binary: &[u8]) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn_elf(binary)) }
+pub fn spawn_redox_elf(binary: &[u8]) -> Option<Pid> { crate::arch::without_interrupts(|| SCHEDULER.spawn_redox_elf(binary)) }
 pub fn with_process<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&Process) -> R, { crate::arch::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&p.lock()))) }
 pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut Process) -> R, { crate::arch::without_interrupts(|| SCHEDULER.get_process(pid).map(|p| f(&mut p.lock()))) }
 pub fn wake_sleeping(woken_mask: u64) { crate::arch::without_interrupts(|| SCHEDULER.wake_sleeping_mask(woken_mask)); }

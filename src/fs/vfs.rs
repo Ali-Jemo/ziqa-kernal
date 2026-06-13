@@ -61,9 +61,17 @@ impl Vfs {
     pub fn handle_scheme(&self, path: &str, flags: usize) -> Option<Result<usize, AbiError>> {
         if let Some(pos) = path.find(':') {
             let scheme_name = &path[..pos];
+            crate::println!("[VFS::handle_scheme] path='{}' -> scheme='{}'", path, scheme_name);
             let registry = crate::scheme::SCHEME_REGISTRY.lock();
-            registry.get(scheme_name).map(|scheme| scheme.open(path, flags))
+            let result = registry.get(scheme_name).map(|scheme| scheme.open(path, flags));
+            if result.is_some() {
+                crate::println!("[VFS::handle_scheme] scheme '{}' handled OK", scheme_name);
+            } else {
+                crate::println!("[VFS::handle_scheme] scheme '{}' NOT FOUND in registry", scheme_name);
+            }
+            result
         } else {
+            crate::println!("[VFS::handle_scheme] path='{}' has no colon, not a scheme path", path);
             None
         }
     }

@@ -36,6 +36,7 @@ use self::acpi::AcpiScheme;
 use self::memory::MemoryScheme;
 use self::event::EventScheme;
 use self::user::UserScheme;
+use self::orbital_bridge::OrbitalBridge;
 use self::sys::SysScheme;
 
 pub type SchemeResult<T> = Result<T, crate::abi::AbiError>;
@@ -100,6 +101,8 @@ pub fn init() {
     registry.register("serio", Box::new(SerioScheme::new()));
     registry.register("user", Box::new(UserScheme::new()));
     registry.register("sys", Box::new(SysScheme::new()));
+    registry.register("display_v2", Box::new(OrbitalBridge::new()));
+    registry.register("input", Box::new(OrbitalBridge::new()));
     // Log registered schemes
     crate::klog!(crate::klog::Level::Info, "init: ZiqaScheme registry initialized");
     crate::klog!(crate::klog::Level::Info, "Scheme: acpi, dtb, memory, event, serio, user, sys registered");

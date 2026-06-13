@@ -145,7 +145,7 @@ pub fn boot_aps(acpi_info: &crate::drivers::acpi::AcpiInfo) {
     }
 
     let total_aps = apic_ids.len() as u32;
-    for _ in 0..1000000 {
+    for _ in 0..100000 {
         if APS_READY.load(Ordering::Acquire) >= total_aps {
             break;
         }
@@ -364,7 +364,7 @@ pub extern "C" fn ap_entry() -> ! {
     crate::arch::x86_64::gdt::init_ap();
 
     apic::enable();
-    let _ = apic::calibrate_timer(5);
+    let _ = apic::calibrate_timer(10);
     apic::start_periodic_timer(apic::read_lapic(apic::LAPIC_TIMER_CURCNT));
 
     APS_READY.fetch_add(1, Ordering::Release);

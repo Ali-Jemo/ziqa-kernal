@@ -20,15 +20,15 @@
 ///   - sys_uname (63)   — system identification
 pub mod elf_loader;
 
-mod fs;
-mod memory;
-mod misc;
+pub(crate) mod fs;
+pub(crate) mod memory;
+pub(crate) mod misc;
 #[cfg(feature = "net")]
-mod net;
-mod ebpf;
-mod process;
-mod time;
-mod signal;
+pub(crate) mod net;
+pub(crate) mod ebpf;
+pub(crate) mod process;
+pub(crate) mod time;
+pub(crate) mod signal;
 
 use crate::abi::syscall::SyscallContext;
 use crate::abi::usercopy::{UserSliceRo, UserSliceWo};
@@ -39,7 +39,7 @@ use crate::process::vma::Vma;
 use crate::process::{AbiKind, Process};
 
 /// Linux x86_64 syscall numbers
-mod nr {
+pub(crate) mod nr {
     pub const SYS_READ: u64 = 0;
     pub const SYS_WRITE: u64 = 1;
     pub const SYS_OPEN: u64 = 2;

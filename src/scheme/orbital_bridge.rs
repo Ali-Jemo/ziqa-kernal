@@ -12,6 +12,7 @@
 //!   - "Y,x,y,w,h" = damage/flush (damage sync)
 
 use crate::scheme::{Scheme, SchemeResult};
+
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicUsize, Ordering};
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -120,8 +121,7 @@ impl Scheme for OrbitalBridge {
                 }
             }
         }
-        
-        crate::klog!(crate::klog::Level::Debug, "[OrbitalBridge] open {} -> {}", path, handle);
+        crate::println!("[OrbitalBridge] open '{}' -> handle={}", path, handle);
         Ok(handle)
     }
 

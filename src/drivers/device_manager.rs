@@ -26,26 +26,16 @@ impl DeviceManager {
     }
 
     pub fn register_driver(&mut self, driver: Box<dyn Driver>) {
-        crate::println!("[DevMgr] Registered driver: {}", driver.name());
         self.drivers.push(driver);
     }
 
     pub fn scan_and_match(&self) {
         let devices = PCI_DEVICES.lock();
-        crate::println!("[DevMgr] Scanning {} PCI devices against {} drivers", devices.len(), self.drivers.len());
         for device in devices.iter() {
             for driver in self.drivers.iter() {
-                let matched = driver.pci_match(device);
-                crate::println!("[DevMgr]   Try {} vs {}: {}", driver.name(), device.vendor_id, matched);
-                if matched {
-                    crate::println!("[DevMgr] Matching {} ({:04X}:{:04X}) with driver {}", 
-                        driver.name(), device.vendor_id, device.device_id, driver.name());
-                    if driver.init(device).is_ok() {
-                        crate::println!("[DevMgr] Driver {} initialized successfully", driver.name());
-                        break;
-                    } else {
-                        crate::println!("[DevMgr] Driver {} failed to initialize; checking fallback", driver.name());
-                    }
+                if driver.pci_match(device) {
+                    let _ = driver.init(device);
+                    break;
                 }
             }
         }
@@ -53,8 +43,7 @@ impl DeviceManager {
 }
 
 pub fn init() {
-    crate::println!("Initializing Device Manager...");
-    // Drivers are registered later; scan is called separately.
+    // Device manager initialized via DEVICE_MANAGER lazy_static.
 }
 
 /// Match registered drivers against discovered PCI devices.

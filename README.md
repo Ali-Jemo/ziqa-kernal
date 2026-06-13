@@ -78,8 +78,7 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 ## Current Status
 
 | Area | Status | Notes |
-| --- | --- | --- |
-| Boot / HAL | Functional / experimental | BIOS-style bootloader entry, GDT/IDT/PIC/APIC setup, serial logging, VGA boot screen. |
+| Boot / HAL | Functional / optimized | 50ms to shell (QEMU/KVM), 42 self-tests (41 pass), spin-based APIC calibration, no-debug boot path. |
 | SMP / APIC | Experimental | BSP/AP setup, per-CPU data via GS.base, IPI reschedule/TLB shootdown, APIC timer calibration. |
 | ACPI / PCI | Experimental | ACPI table parsing, PCI enumeration, BAR decoding, driver matching. |
 | Memory | Experimental | Frame allocator, kernel mapper, heap, paging, per-process page tables, COW fork, VMA support. |
@@ -96,23 +95,14 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 
 ---
 
-## Runtime Flow
-
-The current boot path is:
+The current boot path reaches an interactive shell in **~50ms** (QEMU/KVM):
 
 1. **Bootloader entry** calls [`kernel_main`](src/main.rs).
-2. [`ziqa_kernel::init`](src/init.rs) initializes:
-   - BSP per-CPU state, GDT, IDT, PIC/syscall gate.
-   - Physical frame allocator, heap, kernel mapper.
-   - Scheduler and PID allocation.
-   - PCI and driver registry.
-   - VirtIO block/GPU, legacy VirtIO block, ATA, xHCI, AHCI, NVMe, and audio driver registration.
-   - APIC/SMP boot when ACPI information is available.
-   - CPU feature setup for SMEP/SMAP/UMIP when supported.
-3. [`init_subsystems`](src/main.rs) initializes schemes, PS/2 mouse, VFS, and self-tests.
-4. [`init_services`](src/main.rs) mounts RAM-backed files such as `/etc/motd`, `/bin/test`, BusyBox, keyboard driver, and test scripts; then mounts FAT32 at `/fat` or ZiqaFS at `/disk` when a block device is available.
-5. Display setup initializes VirtIO GPU when present, otherwise BGA framebuffer. The GPU IPC listener can be spawned; compositor thread setup is feature-gated.
-6. Verification and startup run, interrupts are enabled, and [`shell::start`](src/shell.rs) hands control to the shell.
+2. [`ziqa_kernel::init`](src/init.rs) — BSP per-CPU state, GDT, IDT, PIC/syscall gate, physical frame allocator, heap, kernel mapper, scheduler, PCI, driver registration, APIC/SMP. Clean summary prints only.
+3. [`init_subsystems`](src/main.rs) — schemes, PS/2 mouse, VFS, **42 self-tests** (41/42 pass).
+4. [`init_services`](src/main.rs) — RAM mounts, FAT32/ZiqaFS, keyboard driver, test ELF spawns.
+5. **Display** — VirtIO GPU or BGA framebuffer.
+6. **Shell** — [`shell::start`](src/shell.rs) prompt ready at `uptime=50ms`.
 
 ---
 
@@ -314,4 +304,4 @@ MIT
 
 ---
 
-_Last updated: 2026-06-11. GitNexus index: 21,971 nodes, 46,665 edges, 683 communities, 300 execution flows._
+_Last updated: 2026-06-13. GitNexus index: 21,971 nodes, 46,665 edges, 683 communities, 300 execution flows._

@@ -26,7 +26,7 @@ pub enum JobState {
 }
 
 const COMMANDS: &[&str] = &[
-    "help", "uptime", "ps", "spawn", "spawnelf", "exec", "kill",
+    "help", "uptime", "ps", "spawn", "spawnelf", "orbital", "exec", "kill",
     "sleep", "meminfo", "diskinfo", "netstat", "klog", "syscalls", "syscall",
     "doom", "tetris", "reboot", "echo", "clear", "edit", "ls", "cd", "pwd",
     "mkdir", "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
@@ -370,6 +370,8 @@ impl Shell {
             "dashboard" | "top" => Some(Self::cmd_dashboard),
             "spawn"     => Some(Self::cmd_spawn),
             "spawnelf"  => Some(Self::cmd_spawn_elf),
+            #[cfg(feature = "orbital")]
+            "orbital"   => Some(Self::cmd_orbital),
             "exec"      => Some(Self::cmd_exec),
             #[cfg(feature = "games")]
             "nwm-test"  => Some(Self::cmd_nwm_test),
@@ -440,6 +442,10 @@ impl Shell {
     }
 
     pub fn run(&mut self) -> ! {
+        // Enable timer-driven preemption now that the boot initialization is complete
+        // and we are entering the shell loop.
+        crate::process::scheduler::enable_preemption();
+
         let ms = crate::timer::uptime_ms();
         println!("\x1b[36m\x1b[1m  ⚡ ZiqaKernel v0.1 ⚡\x1b[0m");
         println!("\x1b[2m  ─────────────────────────────────────────────\x1b[0m");
@@ -935,6 +941,7 @@ impl Shell {
                 ("ps",               "list all processes"),
                 ("spawn [path]",     "spawn skeleton or ELF process"),
                 ("spawnelf <path>",  "spawn ELF from VFS"),
+                ("orbital",          "spawn embedded Redox Orbital compositor"),
                 ("exec <pid>",       "execute process entry point"),
                 ("kill <pid> [sig]", "send signal (name or number)"),
                 ("sleep <ms|Ns>",    "sleep milliseconds or Ns seconds"),
@@ -1175,6 +1182,26 @@ impl Shell {
         }
         0
     }
+    #[cfg(feature = "orbital")]
+    fn cmd_orbital(&mut self, _args: &[String]) -> i32 {
+        let binary = include_bytes!("../assets/orbital.elf");
+        match crate::process::scheduler::spawn_redox_elf(binary) {
+            Some(pid) => {
+                crate::process::scheduler::with_process_mut(pid, |proc| {
+                    let full = crate::capability::Permissions::full();
+                    proc.capabilities.grant(crate::capability::ResourceKind::File, full, 0, None);
+                    proc.capabilities.grant(crate::capability::ResourceKind::Memory, full, 0, None);
+                    proc.capabilities.grant(crate::capability::ResourceKind::DeviceIo, full, 0, None);
+                    proc.capabilities.grant(crate::capability::ResourceKind::IpcChannel, full, 0, None);
+                });
+                println!("Spawned Orbital PID={} from embedded assets/orbital.elf", pid.0);
+                crate::process::scheduler::yield_now();
+            }
+            None => println!("orbital: failed to spawn embedded assets/orbital.elf"),
+        }
+        0
+    }
+
 
     fn cmd_exec(&mut self, args: &[String]) -> i32 {
         let pid_val = match args.first().and_then(|s| s.parse::<u64>().ok()) {

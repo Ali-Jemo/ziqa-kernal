@@ -2,7 +2,7 @@
 
 use super::{nr, SyscallContext, AbiError};
 
-pub(super) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
+pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
     Some(match ctx.number {
         nr::SYS_UNAME => super::sys_uname(ctx),
         nr::SYS_IOCTL => super::sys_ioctl(ctx),

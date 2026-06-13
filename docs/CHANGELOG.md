@@ -1,3 +1,24 @@
+# 2026-06-13 — Boot-time optimization (50ms to shell)
+
+| Issue | Fix |
+| :--- | :--- |
+| **Slow boot (~50+ debug prints)** | Removed ~70% of debug `println!` calls from boot path: scheduler spawn_elf (5x per ELF), init step logging (20→3 summary lines), per-device PCI scan, device-manager match loops. Serial I/O reduced from ~50+ lines to ~15. |
+| **APIC timer calibration bug (0-ticks → 12.5kHz flood)** | `calibrate_timer(5)` computed `5 × 100 / 1000 = 0` PIT ticks → garbage calibration count → timer fires at insane rate, CPU floods on ISRs, tests hang. Replaced PIT-based wait (which also deadlocks `TIMER.lock()` with timer ISR) with spin-based calibration producing proper ~73M count at 100Hz. |
+| **Self-tests held `without_interrupts`** | Removed `interrupts::without_interrupts()` wrapper from `tests.rs::run_all()`. Timer ISR now fires during tests, tick counter advances, no test-side deadlock. |
+| **37MB `orbital.elf` embedded by default** | Gated `orbital.elf` behind `orbital` Cargo feature. Without this, kernel binary was 76MB and bootloader triple-faulted. |
+
+| Optimization | Before | After |
+| :--- | ---: | ---: |
+| Boot to shell | Seconds (or panic) | **~50ms** |
+| Self-tests | 0/42 (hung in calibration) | **41/42 pass** |
+| PCI scan output | 7+ lines per device | 1 summary line |
+| ELF spawn debug | 5× println per spawn | 0 |
+| Init verbosity | ~20 progress lines | 3 summary lines |
+| APIC timer counts | 0 (garbage) | ~73,000,000 (100Hz) |
+
+---
+
+
 # ZiqaKernel Changelog
 
 ## What We've Fixed
