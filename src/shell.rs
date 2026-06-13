@@ -26,13 +26,17 @@ pub enum JobState {
 }
 
 const COMMANDS: &[&str] = &[
-    "help", "uptime", "ps", "spawn", "spawnelf", "orbital", "exec", "kill",
-    "sleep", "meminfo", "diskinfo", "netstat", "klog", "syscalls", "syscall",
+    "help", "uptime", "ps", "spawn", "spawnelf",
+    #[cfg(feature = "orbital")]
+    "orbital",
+    "exec", "kill",
     "doom", "tetris", "reboot", "echo", "clear", "edit", "ls", "cd", "pwd",
     "mkdir", "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
     "mv", "cp", "touch", "stat", "du",
     "dashboard", "top", "history", "alias", "export",
-    "jobs", "bg", "fg", "nwm-test",
+    "jobs", "bg", "fg",
+    #[cfg(feature = "games")]
+    "nwm-test",
     "snap", "ls-snap", "rm-snap",
 ];
 
@@ -938,9 +942,8 @@ impl Shell {
                 ("edit <path>",      "nano-like text editor"),
             ]),
             ("Process", &[
-                ("ps",               "list all processes"),
-                ("spawn [path]",     "spawn skeleton or ELF process"),
                 ("spawnelf <path>",  "spawn ELF from VFS"),
+                #[cfg(feature = "orbital")]
                 ("orbital",          "spawn embedded Redox Orbital compositor"),
                 ("exec <pid>",       "execute process entry point"),
                 ("kill <pid> [sig]", "send signal (name or number)"),

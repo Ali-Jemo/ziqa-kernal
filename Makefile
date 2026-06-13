@@ -6,9 +6,10 @@ SHELL := /bin/zsh
 
 # Build targets
 TARGET := x86_64-unknown-none
+BIN_RELEASE := target/$(TARGET)/release/ziqa-kernel
+BOOT_IMAGE_RELEASE := target/$(TARGET)/release/bootimage-ziqa-kernel.bin
 BIN := target/$(TARGET)/debug/ziqa-kernel
 BOOT_IMAGE := target/$(TARGET)/debug/bootimage-ziqa-kernel.bin
-
 # Default build
 default: build
 
@@ -55,8 +56,8 @@ inc:
 
 # Boot image
 boot-gui:
-	cargo build --bin ziqa-kernel --features skip-self-tests
-	cargo bootimage --features skip-self-tests
+	cargo build --release --bin ziqa-kernel --features skip-self-tests
+	cargo bootimage --release --features skip-self-tests
 
 boot: build
 	cargo bootimage
@@ -77,7 +78,6 @@ update:
 # Check Zig code compiles independently
 zig-check:
 	zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector -femit-bin=/dev/null 2>&1 || zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector
-
-# Run on QEMU with graphical display (for DOOM fire visual)
+# Run on QEMU with graphical display (for DOOM fire visual / compositor)
 run-gui: boot-gui
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
