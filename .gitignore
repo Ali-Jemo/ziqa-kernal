@@ -62,3 +62,6 @@ serial.log
 local_qemu.log
 high_half_boot2.log
 low_half_boot.log
+
+# Build artifacts from make fat-disk
+/fat-root

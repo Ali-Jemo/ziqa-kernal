@@ -640,13 +640,10 @@ fn walk_and_mount(
     dir_cluster: u32,
     vfs_prefix: &str,
 ) {
-    crate::println!("DEBUG walk_and_mount: dir_cluster={}, vfs_prefix={}", dir_cluster, vfs_prefix);
     let entries = read_directory(&**disk, bpb, dir_cluster);
-    crate::println!("DEBUG walk_and_mount: found {} entries in cluster {}", entries.len(), dir_cluster);
     let mut vfs = VFS.write();
 
     for entry in &entries {
-        crate::println!("DEBUG walk_and_mount: entry={}, is_dir={}, cluster={}", entry.name, entry.is_dir, entry.first_cluster);
         // Skip the `.` and `..` directory entries to avoid infinite recursion
         if entry.name == "." || entry.name == ".." {
             continue;
@@ -659,14 +656,11 @@ fn walk_and_mount(
         };
 
         if entry.is_dir {
-            // Create a directory marker in the VFS
             vfs.mkdir(&path);
-            // Release VFS lock before recursing to avoid deadlock
             drop(vfs);
             walk_and_mount(disk, bpb, entry.first_cluster, &path);
             vfs = VFS.write();
         } else {
-            // Mount the file in VFS (even if it's 0-sized)
             let fat_file = Fat32File::new(
                 disk.clone(),
                 entry.first_cluster,
@@ -678,7 +672,6 @@ fn walk_and_mount(
             vfs.mount(&path, Arc::new(Mutex::new(fat_file)));
         }
     }
-    crate::println!("DEBUG walk_and_mount finished: dir_cluster={}", dir_cluster);
 }
 
 // ─── Public Mount Entry Point ────────────────────────────────────────────────

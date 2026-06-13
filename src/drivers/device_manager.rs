@@ -33,8 +33,7 @@ impl DeviceManager {
         let devices = PCI_DEVICES.lock();
         for device in devices.iter() {
             for driver in self.drivers.iter() {
-                if driver.pci_match(device) {
-                    let _ = driver.init(device);
+                if driver.pci_match(device) && driver.init(device).is_ok() {
                     break;
                 }
             }

@@ -25,18 +25,17 @@ release:
 run: boot disk.img
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
-# Create a host-editable FAT32 development disk as disk.img.
-# Requires: parted, mkfs.vfat/mkfs.fat, mcopy (mtools, optional for files).
+# Uses mtools with offset syntax; no sudo needed.
 fat-disk:
 	rm -f disk.img
 	truncate -s 64M disk.img
 	parted -s disk.img mklabel msdos mkpart primary fat32 1MiB 100% set 1 lba on
-	LOOP=$$(sudo losetup --find --show --partscan disk.img); \
-	trap 'sudo losetup -d '$$LOOP EXIT; \
-	(sudo mkfs.vfat -F 32 $${LOOP}p1 || sudo mkfs.fat -F 32 $${LOOP}p1); \
-	mkdir -p fat-root/bin; \
-	echo 'Hello from host FAT32 disk' > fat-root/README.TXT; \
-	sudo mcopy -i $${LOOP}p1 -s fat-root/* ::/ 2>/dev/null || true
+	mkfs.vfat --offset=2048 -F 32 disk.img
+	mkdir -p fat-root/bin
+	cp assets/orbital.elf fat-root/bin/ 2>/dev/null || true
+	echo 'Hello from host FAT32 disk' > fat-root/README.TXT
+	mcopy -i disk.img@@1M -s fat-root/* ::/ 2>/dev/null || true
+	rm -rf fat-root
 
 # Clean build artifacts
 clean:

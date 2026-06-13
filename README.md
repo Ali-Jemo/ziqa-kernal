@@ -93,18 +93,19 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 | Snapshots | Experimental | Process snapshot save/load/resume experiments through FAT32-backed snapshot storage. |
 | Shell / demos | Functional / experimental | Foreground-safe shell, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. |
 
----
-
 The current boot path reaches an interactive shell in **~50ms** (QEMU/KVM):
 
 1. **Bootloader entry** calls [`kernel_main`](src/main.rs).
-2. [`ziqa_kernel::init`](src/init.rs) — BSP per-CPU state, GDT, IDT, PIC/syscall gate, physical frame allocator, heap, kernel mapper, scheduler, PCI, driver registration, APIC/SMP. Clean summary prints only.
+2. [`ziqa_kernel::init`](src/init.rs) — memory, scheduler, PCI, drivers, APIC/SMP. Clean summary prints.
 3. [`init_subsystems`](src/main.rs) — schemes, PS/2 mouse, VFS, **42 self-tests** (41/42 pass).
-4. [`init_services`](src/main.rs) — RAM mounts, FAT32/ZiqaFS, keyboard driver, test ELF spawns.
+4. [`init_services`](src/main.rs) — RAM mounts, FAT32/ZiqaFS disk mount at `/fat`, keyboard driver.
 5. **Display** — VirtIO GPU or BGA framebuffer.
-6. **Shell** — [`shell::start`](src/shell.rs) prompt ready at `uptime=50ms`.
+6. **Shell** — prompt ready at `uptime=60ms`.
 
----
+When a FAT32 disk is attached as virtio-blk, the kernel mounts it at `/fat` and
+exposes files via VFS. Use `spawnelf /fat/bin/orbital.elf` to launch the embedded
+Orbital compositor from disk (the 37MB `orbital.elf` is NOT embedded in the kernel
+binary to avoid bootloader overflow).
 
 ## Feature Map
 

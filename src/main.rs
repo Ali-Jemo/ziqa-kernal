@@ -193,24 +193,12 @@ fn init_services() {
         );
     }
 
-    // Disk filesystems
-    #[cfg(feature = "skip-self-tests")]
+    // Disk filesystems — always mounted
     {
         block_registry::print_devices();
-        println!(" ~ disk filesystems .................... skipped for GUI boot");
-    }
-    #[cfg(not(feature = "skip-self-tests"))]
-    {
-        block_registry::print_devices();
-
         if let Some(entry) = block_registry::first() {
             let disk = entry.device.clone();
-            println!(
-                " ~ root disk .......................... /dev/{} ({})",
-                entry.name, entry.driver
-            );
-
-            // 1. Try to mount FAT32 (host-editable)
+            println!(" ~ root disk .......................... /dev/{} ({})", entry.name, entry.driver);
             #[cfg(feature = "fat32")]
             let fat32_mounted = {
                 use ziqa_kernel::fs::fat32;
@@ -218,46 +206,25 @@ fn init_services() {
                     println!(" ~ FAT32 partition found at sector {}", start);
                     match fat32::mount_fat32(disk.clone(), start, "/fat") {
                         Ok(()) => {
-                            ziqa_kernel::fs::vfs::register_mount(
-                                &alloc::format!("/dev/{}", entry.name),
-                                "/fat",
-                                "fat32",
-                            );
+                            ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/fat", "fat32");
                             println!(" ~ FAT32 ............................. mounted at /fat");
                             true
                         }
-                        Err(e) => {
-                            println!(" ~ FAT32 mount failed: {}", e);
-                            false
-                        }
+                        Err(e) => { println!(" ~ FAT32 mount failed: {}", e); false }
                     }
-                } else {
-                    false
-                }
+                } else { false }
             };
             #[cfg(not(feature = "fat32"))]
             let fat32_mounted = false;
-
-            // 2. Try to mount ZiqaFS
             let ziqafs_result = ZiqaFs::mount(disk.clone());
-
             if let Ok(ziqafs) = ziqafs_result {
                 ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(
-                    &alloc::format!("/dev/{}", entry.name),
-                    "/disk",
-                    "ziqafs",
-                );
+                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
                 println!(" ~ ZiqaFS ............................. mounted at /disk");
             } else if !fat32_mounted {
-                // Disk is blank or unrecognized, and no FAT32 data to protect. Safe to format.
                 let ziqafs = ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS");
                 ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(
-                    &alloc::format!("/dev/{}", entry.name),
-                    "/disk",
-                    "ziqafs",
-                );
+                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
                 println!(" ~ ZiqaFS ............................. formatted and mounted at /disk");
             } else {
                 println!(" ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)");
