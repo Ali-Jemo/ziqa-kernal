@@ -21,11 +21,17 @@ build:
 release:
 	cargo build --release --bin ziqa-kernel
 
-# Run on QEMU
+# Run on QEMU (headless)
 run: boot disk.img
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
+# Run on QEMU with graphical display (for DOOM / compositor / orbital)
+run-gui: boot-gui disk.img
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+
+# Build the FAT32 disk image with orbital.elf and development files.
 # Uses mtools with offset syntax; no sudo needed.
+disk.img: fat-disk
 fat-disk:
 	rm -f disk.img
 	truncate -s 64M disk.img
@@ -36,7 +42,6 @@ fat-disk:
 	echo 'Hello from host FAT32 disk' > fat-root/README.TXT
 	mcopy -i disk.img@@1M -s fat-root/* ::/ 2>/dev/null || true
 	rm -rf fat-root
-
 # Clean build artifacts
 clean:
 	rm -rf target
@@ -77,6 +82,3 @@ update:
 # Check Zig code compiles independently
 zig-check:
 	zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector -femit-bin=/dev/null 2>&1 || zig build-obj src/zig/blitter.zig -O ReleaseFast -target x86_64-freestanding-none -fPIC -fno-stack-protector
-# Run on QEMU with graphical display (for DOOM fire visual / compositor)
-run-gui: boot-gui
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0

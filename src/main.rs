@@ -10,7 +10,6 @@ use ziqa_kernel::drivers::vga;
 use ziqa_kernel::drivers::vga::Color;
 use ziqa_kernel::fs::ramfs::RamFile;
 use ziqa_kernel::fs::vfs::VFS;
-#[cfg(not(feature = "skip-self-tests"))]
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::println;
