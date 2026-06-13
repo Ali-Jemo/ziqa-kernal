@@ -1172,16 +1172,12 @@ impl Shell {
             None => { println!("Usage: spawnelf <path>"); return 1; }
         };
         let resolved = self.resolve_path(p);
-        let mut buf = [0u8; 65536];
-        match crate::fs::vfs::VFS.read().read_raw(&resolved, &mut buf, 0) {
-            Ok(n) if n > 0 => {
-                let data = &buf[..n];
-                match crate::process::scheduler::spawn_elf(data) {
-                    Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
-                    None => println!("spawnelf: failed to spawn from '{}'", resolved),
-                }
-            }
-            _ => println!("spawnelf: file '{}' not found in VFS", resolved),
+        match crate::fs::vfs::VFS.read().read_raw_all(&resolved) {
+            Ok(data) => match crate::process::scheduler::spawn_elf(&data) {
+                Some(pid) => println!("Spawned PID={} from '{}'", pid.0, resolved),
+                None => println!("spawnelf: failed to spawn from '{}'", resolved),
+            },
+            Err(e) => println!("spawnelf: failed to read '{}': {:?}", resolved, e),
         }
         0
     }
