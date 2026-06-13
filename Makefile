@@ -27,7 +27,7 @@ run: boot disk.img
 
 # Run on QEMU with graphical display and interactive serial terminal.
 run-gui: boot-gui disk.img
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial mon:stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -monitor none -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
 # Run headless with terminal-only I/O.
 run-headless: boot-gui disk.img
@@ -35,7 +35,7 @@ run-headless: boot-gui disk.img
 
 # Run with terminal I/O AND graphical display via VNC (connect with 'vncviewer :0')
 run-vnc: boot-gui disk.img
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial mon:stdio -vnc :0 -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -monitor none -serial stdio -vnc :0 -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
 # Build the FAT32 disk image with orbital.elf and development files.
 # Uses mtools with offset syntax; no sudo needed.

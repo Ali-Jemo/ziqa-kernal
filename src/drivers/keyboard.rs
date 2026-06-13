@@ -122,16 +122,20 @@ fn poll_ps2_keyboard() {
         let mut status: Port<u8> = Port::new(0x64);
         let mut data: Port<u8> = Port::new(0x60);
         // Bound the loop: avoid monopolizing the shell if the controller is noisy.
-        for _ in 0..16 {
+        for _ in 0..32 {
             let s = status.read();
             if s & 1 == 0 {
                 break;
             }
-            // Bit 5 set means AUX/mouse byte, not keyboard.
+
+            let byte = data.read();
+            // Bit 5 set means AUX/mouse byte. Drain it so it cannot block
+            // later keyboard scancodes; the mouse IRQ path handles motion.
             if s & 0x20 != 0 {
-                break;
+                continue;
             }
-            push_scancode(data.read());
+
+            push_scancode(byte);
         }
     }
 }
