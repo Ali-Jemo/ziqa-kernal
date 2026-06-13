@@ -873,8 +873,9 @@ impl Shell {
                 }
                 crate::process::scheduler::enable_preemption();
             } else {
-                // No input available — yield CPU to other processes
-                crate::process::scheduler::yield_now();
+                // Keep polling COM1/keyboard here. Timer pre-emption remains enabled,
+                // so background tasks still run without stealing the shell forever.
+                core::hint::spin_loop();
             }
         }
     }

@@ -24,9 +24,6 @@ impl DriverServer for Ps2MouseServer {
 pub fn run_mouse_server(channel_id: usize) {
     let channel = crate::ipc::get_channel(channel_id).expect("Mouse channel not registered");
     let mut server = Ps2MouseServer;
-
-    crate::println!(" ~ PS/2 Mouse IPC Server starting on channel {}", channel_id);
-
     loop {
         if let Ok(msg) = channel.recv() {
             let req = Serializable::deserialize(&msg.data[..msg.len]);
