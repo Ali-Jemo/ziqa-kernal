@@ -19,9 +19,10 @@ lazy_static! {
 use alloc::collections::BTreeMap;
 
 fn notify_irq(vector: u8) {
-    // FIXME: We need actual data from the device to pass here.
-    // For now, pass an empty slice to indicate an interrupt happened.
-    crate::scheme::irq::irq_trigger(vector, &[]);
+    let count: u64 = 1;
+    crate::scheme::irq::irq_trigger(vector, unsafe {
+        core::slice::from_raw_parts(&count as *const u64 as *const u8, 8)
+    });
     let mut waiters = IRQ_WAITERS.lock();
     if let Some(pid) = waiters.remove(&vector) {
         crate::process::scheduler::wake_sleeping(1 << pid.0);

@@ -210,8 +210,8 @@ pub fn init_bga() -> bool {
             crate::println!("[BGA] Warning: BAR0 address {:#X} is very low, possible clobber risk!", phys_addr);
         }
         
-        let width = 1024u32;
-        let height = 768u32;
+        let width = 800u32;
+        let height = 600u32;
         let bpp = 32u32;
         
         vbe_write(0, 0xB0C0);

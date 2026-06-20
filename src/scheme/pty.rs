@@ -1,11 +1,12 @@
+// ponytail: PTY scaffold kept as a starting point, not a full TTY layer.
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use spin::Mutex;
-use crate::sync::WaitCondition;
 use crate::scheme::{Scheme, SchemeResult};
-use crate::process::Pid;
 use crate::abi::AbiError;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::process::Pid;
+use crate::sync::WaitCondition;
 
 const PTY_BUF_CAP: usize = 4096;
 
@@ -137,14 +138,6 @@ impl PtyScheme {
     }
 }
 
-// IOCTL commands
-const TIOCGWINSZ: usize = 0x5413;
-const TIOCSWINSZ: usize = 0x5414;
-const TCGETS: usize     = 0x5401;
-const TCSETS: usize     = 0x5402;
-const TIOCGPGRP: usize  = 0x540F;
-const TIOCSPGRP: usize  = 0x5410;
-const TIOCSCTTY: usize  = 0x540E;
 
 impl Scheme for PtyScheme {
     fn open(&self, path: &str, _flags: usize) -> SchemeResult<usize> {
@@ -267,9 +260,8 @@ impl Scheme for PtyScheme {
                 if isig {
                     if b == intr_char {
                         if let Some(pgid) = *pair.fg_pgid.lock() {
-                            crate::process::scheduler::SCHEDULER.send_signal_to_process_group(
-                                pgid, crate::process::signal::sig::SIGINT,
-                            );
+                            crate::process::scheduler::SCHEDULER
+                                .send_signal(pgid, crate::process::signal::sig::SIGINT);
                         }
                         if echo {
                             slave_to_master.push(b'^');
@@ -280,9 +272,8 @@ impl Scheme for PtyScheme {
                     }
                     if b == quit_char {
                         if let Some(pgid) = *pair.fg_pgid.lock() {
-                            crate::process::scheduler::SCHEDULER.send_signal_to_process_group(
-                                pgid, crate::process::signal::sig::SIGQUIT,
-                            );
+                            crate::process::scheduler::SCHEDULER
+                                .send_signal(pgid, crate::process::signal::sig::SIGQUIT);
                         }
                         if echo {
                             slave_to_master.push(b'^');
@@ -293,9 +284,8 @@ impl Scheme for PtyScheme {
                     }
                     if b == susp_char {
                         if let Some(pgid) = *pair.fg_pgid.lock() {
-                            crate::process::scheduler::SCHEDULER.send_signal_to_process_group(
-                                pgid, crate::process::signal::sig::SIGTSTP,
-                            );
+                            crate::process::scheduler::SCHEDULER
+                                .send_signal(pgid, crate::process::signal::sig::SIGSTOP);
                         }
                         if echo {
                             slave_to_master.push(b'^');
@@ -338,84 +328,4 @@ impl Scheme for PtyScheme {
         Ok(())
     }
 
-    fn ioctl(&self, id: usize, request: usize, arg: usize) -> SchemeResult<usize> {
-        let is_slave = (id & 1) == 1;
-        let pair_id = id >> 1;
-        let pair = self.pairs.lock().get(&pair_id).cloned().ok_or(AbiError::Other("Bad FD"))?;
-        
-        match request {
-            TIOCGWINSZ => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let state = pair.winsize.lock();
-                core::ptr::copy_nonoverlapping(
-                    & *state as *const Winsize as *const u8,
-                    arg as *mut u8,
-                    core::mem::size_of::<Winsize>(),
-                );
-                Ok(0)
-            },
-            TIOCSWINSZ => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let mut state = pair.winsize.lock();
-                core::ptr::copy_nonoverlapping(
-                    arg as *const u8,
-                    &mut *state as *mut Winsize as *mut u8,
-                    core::mem::size_of::<Winsize>(),
-                );
-                Ok(0)
-            },
-            TCGETS => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let state = pair.termios.lock();
-                core::ptr::copy_nonoverlapping(
-                    & *state as *const Termios as *const u8,
-                    arg as *mut u8,
-                    core::mem::size_of::<Termios>(),
-                );
-                Ok(0)
-            },
-            TCSETS => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let mut state = pair.termios.lock();
-                core::ptr::copy_nonoverlapping(
-                    arg as *const u8,
-                    &mut *state as *mut Termios as *mut u8,
-                    core::mem::size_of::<Termios>(),
-                );
-                Ok(0)
-            },
-            TIOCGPGRP => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let pgid = pair.fg_pgid.lock().unwrap_or(Pid(0)).0 as u32;
-                *(arg as *mut u32) = pgid;
-                Ok(0)
-            },
-            TIOCSPGRP => unsafe {
-                if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                let pgid = Pid(*(arg as *const u32) as u64);
-                *pair.fg_pgid.lock() = Some(pgid);
-                Ok(0)
-            },
-            TIOCSCTTY => {
-                if is_slave {
-                    crate::process::scheduler::with_current_task_mut(|p| p.ctty = Some(pair_id));
-                }
-                Ok(0)
-            },
-            0x80045430 => unsafe { // TIOCGPTN
-                if !is_slave {
-                    if arg == 0 { return Err(AbiError::Other("Invalid argument")); }
-                    *(arg as *mut u32) = pair_id as u32;
-                    Ok(0)
-                } else {
-                    Err(AbiError::Other("Not a master PTY"))
-                }
-            },
-            0x40045431 => { // TIOCSPTLCK
-                // Just pretend we unlocked it
-                Ok(0)
-            },
-            _ => Err(AbiError::Other("Unsupported ioctl")),
-        }
-    }
 }

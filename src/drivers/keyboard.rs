@@ -150,7 +150,7 @@ pub fn init() {
     } else {
         0
     };
-    config &= !0x01; // IRQ1 disabled; shell/readers poll the controller directly.
+    config |= 0x01; // IRQ1 enabled.
     config |= 0x40; // Translate device scancodes to set 1 for pc-keyboard.
     config &= !0x10; // First PS/2 port clock enabled.
 
@@ -259,6 +259,7 @@ fn poll_ps2_keyboard() {
 /// Read up to `buf.len()` bytes from the keyboard buffer.
 /// Returns number of bytes read (0 = no input available).
 pub fn read_stdin(buf: &mut [u8]) -> usize {
+    let mut n = 0;
     x86_64::instructions::interrupts::without_interrupts(|| {
         // Poll serial port (COM1) for any incoming bytes using the global Mutex to avoid conflicts.
         {
@@ -280,33 +281,34 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
         }
 
         poll_ps2_keyboard();
-    });
 
-    let mut ring = INPUT_BUF.lock();
-    let mut n = 0;
-    while n < buf.len() {
-        match ring.pop() {
-            Some(b) => {
-                buf[n] = b;
-                n += 1;
+        let mut ring = INPUT_BUF.lock();
+        while n < buf.len() {
+            match ring.pop() {
+                Some(b) => {
+                    buf[n] = b;
+                    n += 1;
+                }
+                None => break,
             }
-            None => break,
         }
-    }
+    });
     n
 }
 
-/// Clear all pending input in the keyboard buffer.
 pub fn clear_stdin() {
-    let mut ring = INPUT_BUF.lock();
-    ring.head = 0;
-    ring.tail = 0;
-    ring.count = 0;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut ring = INPUT_BUF.lock();
+        ring.head = 0;
+        ring.tail = 0;
+        ring.count = 0;
+    });
 }
 
-/// Returns true if there is pending keyboard input.
 pub fn has_input() -> bool {
-    !INPUT_BUF.lock().is_empty()
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        !INPUT_BUF.lock().is_empty()
+    })
 }
 
 /// Check and clear the global Ctrl+C interrupt flag.
@@ -316,26 +318,29 @@ pub fn check_and_clear_interrupt() -> bool {
 
 /// Read a byte from the editor input buffer
 pub fn read_editor_byte(buf: &mut [u8]) -> usize {
-    let mut ring = EDITOR_BUF.lock();
     let mut n = 0;
-    while n < buf.len() {
-        match ring.pop() {
-            Some(b) => {
-                buf[n] = b;
-                n += 1;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut ring = EDITOR_BUF.lock();
+        while n < buf.len() {
+            match ring.pop() {
+                Some(b) => {
+                    buf[n] = b;
+                    n += 1;
+                }
+                None => break,
             }
-            None => break,
         }
-    }
+    });
     n
 }
 
-/// Clear all pending editor input
 pub fn clear_editor_buf() {
-    let mut ring = EDITOR_BUF.lock();
-    ring.head = 0;
-    ring.tail = 0;
-    ring.count = 0;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut ring = EDITOR_BUF.lock();
+        ring.head = 0;
+        ring.tail = 0;
+        ring.count = 0;
+    });
 }
 
 /// Enable or disable character echo (used by editor)
@@ -343,15 +348,16 @@ pub fn set_echo(enabled: bool) {
     *ECHO_ENABLED.lock() = enabled;
 }
 
-/// Push a raw byte into the input buffers (used by userspace keyboard driver)
 pub fn push_raw_byte(b: u8) {
     if *ECHO_ENABLED.lock() {
         if (b >= b' ' && b <= 126) || b == b'\n' || b == b'\r' {
             crate::print!("{}", b as char);
         }
     }
-    INPUT_BUF.lock().push(b);
-    EDITOR_BUF.lock().push(b);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        INPUT_BUF.lock().push(b);
+        EDITOR_BUF.lock().push(b);
+    });
 }
 
 /// Read and clear the last compositor-relevant key event.

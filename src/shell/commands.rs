@@ -10,871 +10,11 @@ use crate::fs::vfs::VFS;
 #[cfg(feature = "ziqafs")]
 use crate::fs::ziqafs::{ZIQAFS, ZiqaFs, ROOT_INODE, BLOCK_SIZE};
 
-/// Represents a background job
-#[derive(Debug)]
-pub struct Job {
-    pub pid: Pid,
-    pub command: String,
-    pub state: JobState,
-}
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum JobState {
-    Running,
-    Stopped,
-    Done,
-}
-
-const COMMANDS: &[&str] = &[
-    "help", "uptime", "ps", "spawn", "spawnelf",
-    #[cfg(feature = "orbital")]
-    "orbital",
-    "exec", "kill",
-    "doom", "tetris", "reboot", "echo", "clear", "edit", "ls", "cd", "pwd",
-    "mkdir", "dir", "rm", "rmdir", "cat", "ping", "wget", "ifconfig",
-    "mv", "cp", "touch", "stat", "du",
-    "dashboard", "top", "history", "alias", "export",
-    "jobs", "bg", "fg",
-    #[cfg(feature = "games")]
-    "nwm-test",
-    "snap", "ls-snap", "rm-snap",
-];
-
-struct SyscallEntry {
-    nr: u64,
-    name: &'static str,
-    category: &'static str,
-    args: &'static str,
-    desc: &'static str,
-    probe: bool,
-}
-
-const SYSCALLS: &[SyscallEntry] = &[
-    SyscallEntry { nr: crate::abi::syscall::nr::GETPID, name: "getpid", category: "process", args: "", desc: "current process id", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::GETPPID, name: "getppid", category: "process", args: "", desc: "parent process id placeholder", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::SCHED_YIELD, name: "sched_yield", category: "process", args: "", desc: "yield current userspace task", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::FORK, name: "fork", category: "process", args: "", desc: "fork current process", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::EXECVE, name: "execve", category: "process", args: "path argv envp", desc: "replace current process image", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::WAITPID, name: "waitpid", category: "process", args: "pid status options", desc: "wait for child process", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::KILL, name: "kill", category: "process", args: "pid sig", desc: "send signal", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::EXIT, name: "exit", category: "process", args: "code", desc: "exit current process", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::NANOSLEEP, name: "nanosleep", category: "time", args: "ms", desc: "sleep calling process", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::CLOCK_NANOSLEEP, name: "clock_nanosleep", category: "time", args: "ms", desc: "sleep calling process", probe: false },
-    SyscallEntry { nr: 205, name: "get_ticks", category: "time", args: "", desc: "kernel uptime in ms", probe: true },
-    SyscallEntry { nr: 204, name: "fb_blit", category: "doom", args: "pixels palette w h x y", desc: "Doom framebuffer blit hook", probe: false },
-    SyscallEntry { nr: 206, name: "get_key", category: "doom", args: "", desc: "Doom key poll hook", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_REQUEST, name: "ziqa_cap_request", category: "capability", args: "kind path_ptr path_len flags", desc: "request a resource capability", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_READ, name: "ziqa_cap_read", category: "capability", args: "id buf count offset", desc: "read via capability", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_WRITE, name: "ziqa_cap_write", category: "capability", args: "id buf count offset", desc: "write via capability", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_CLOSE, name: "ziqa_cap_close", category: "capability", args: "fd", desc: "close capability fd", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_SEEK, name: "ziqa_cap_seek", category: "capability", args: "fd off whence", desc: "seek capability fd", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_CAP_REVOKE, name: "ziqa_cap_revoke", category: "capability", args: "id", desc: "revoke capability", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SHM_CREATE, name: "ziqa_shm_create", category: "ipc", args: "size", desc: "create shared-memory segment", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SHM_ATTACH, name: "ziqa_shm_attach", category: "ipc", args: "id", desc: "attach shared-memory segment", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_CREATE, name: "ziqa_ipc_create", category: "ipc", args: "", desc: "create IPC channel", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_SEND, name: "ziqa_ipc_send", category: "ipc", args: "chan ptr len", desc: "send IPC message", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_IPC_RECV, name: "ziqa_ipc_recv", category: "ipc", args: "chan ptr max", desc: "receive IPC message", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_GETMASK, name: "ziqa_sig_getmask", category: "signal", args: "", desc: "read current signal mask", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_SETMASK, name: "ziqa_sig_setmask", category: "signal", args: "mask", desc: "write current signal mask", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_KILL, name: "ziqa_sig_kill", category: "signal", args: "pid sig", desc: "send Ziqa signal", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_SIG_PAUSE, name: "ziqa_sig_pause", category: "signal", args: "", desc: "pause until signal", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_GET_GPU_CHAN, name: "ziqa_dev_get_gpu_chan", category: "device", args: "", desc: "read GPU IPC channel id", probe: true },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_FIND, name: "ziqa_dev_pci_find", category: "device", args: "vendor device class subclass", desc: "find PCI device", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_BAR, name: "ziqa_dev_pci_bar", category: "device", args: "bdf bar", desc: "read PCI BAR", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PCI_IRQ, name: "ziqa_dev_pci_irq", category: "device", args: "bdf", desc: "read PCI IRQ line", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PORT_IN, name: "ziqa_dev_port_in", category: "device", args: "port size", desc: "read I/O port", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::ZIQA_DEV_PORT_OUT, name: "ziqa_dev_port_out", category: "device", args: "port size value", desc: "write I/O port", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::NET_NOTIFY, name: "net_notify", category: "net", args: "queue", desc: "notify virtio-net queue", probe: false },
-    SyscallEntry { nr: crate::abi::syscall::nr::NET_ACK, name: "net_ack", category: "net", args: "", desc: "ack virtio-net interrupt", probe: false },
-];
-
-const MAX_HISTORY: usize = 50;
-
-// ANSI escape sequences for terminal colors
-const C_RESET: &str = "\x1b[0m";
-const C_BOLD: &str = "\x1b[1m";
-const C_DIM: &str = "\x1b[2m";
-const C_RED: &str = "\x1b[31m";
-const C_GREEN: &str = "\x1b[32m";
-const C_YELLOW: &str = "\x1b[33m";
-const C_BLUE: &str = "\x1b[34m";
-const C_MAGENTA: &str = "\x1b[35m";
-const C_CYAN: &str = "\x1b[36m";
-#[allow(dead_code)]
-const C_WHITE: &str = "\x1b[37m";
-
-/// A parsed command with redirection and background info
-#[derive(Clone)]
-pub struct ParsedCmd {
-    pub args: Vec<String>,
-    pub stdin_file: Option<String>,
-    pub stdout_file: Option<String>,
-    pub stdout_append: bool,
-    pub background: bool,
-}
-
-/// Signature for all builtin commands
-pub type BuiltinFn = fn(&mut Shell, &[String]) -> i32;
-
-pub struct Shell {
-    input_buf: [u8; 256],
-    cursor: usize,
-    history: Vec<String>,
-    history_pos: isize,
-    cwd: String,
-    prev_cwd: String,
-    last_exit_status: i32,
-    aliases: BTreeMap<String, String>,
-    env: BTreeMap<String, String>,
-    jobs: Vec<Job>,
-    fg_job: Option<usize>,
-    last_daemon_ms: u64,
-}
-
-impl Default for Shell {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+use super::*;
 
 impl Shell {
-    pub fn new() -> Self {
-        Self {
-            input_buf: [0; 256],
-            cursor: 0,
-            history: Vec::new(),
-            history_pos: -1,
-            cwd: String::new(),
-            prev_cwd: String::new(),
-            last_exit_status: 0,
-            aliases: BTreeMap::new(),
-            env: BTreeMap::new(),
-            jobs: Vec::new(),
-            fg_job: None,
-            last_daemon_ms: 0,
-        }
-    }
-
-    fn cwd_str(&self) -> &str {
-        if self.cwd.is_empty() { "/" } else { &self.cwd }
-    }
-
-    fn resolve_path(&self, path: &str) -> String {
-        if path.is_empty() {
-            return self.cwd_str().to_string();
-        }
-        let cwd_bytes = self.cwd_str().as_bytes();
-        crate::fs::resolve_path(cwd_bytes, cwd_bytes.len(), path)
-    }
-
-    fn normalize(path: &str) -> String {
-        crate::fs::normalize_path(path)
-    }
-
-    fn skip_ws(input: &str, pos: &mut usize) {
-        while *pos < input.len() && input.as_bytes()[*pos].is_ascii_whitespace() {
-            *pos += 1;
-        }
-    }
-
-    fn read_word<'a>(input: &'a str, pos: &mut usize) -> Result<String, &'a str> {
-        let mut word = String::new();
-        let bytes = input.as_bytes();
-        while *pos < bytes.len() {
-            let b = bytes[*pos];
-            if b == b' ' || b == b'\t' {
-                break;
-            }
-            if b == b'\\' && *pos + 1 < bytes.len() {
-                *pos += 1;
-                word.push(bytes[*pos] as char);
-                *pos += 1;
-                continue;
-            }
-            if b == b'"' || b == b'\'' {
-                let quote = b;
-                *pos += 1;
-                loop {
-                    if *pos >= bytes.len() {
-                        return Err("unclosed quote");
-                    }
-                    if bytes[*pos] == quote {
-                        break;
-                    }
-                    if quote == b'"' && bytes[*pos] == b'\\' && *pos + 1 < bytes.len() {
-                        *pos += 1;
-                        word.push(bytes[*pos] as char);
-                        *pos += 1;
-                        continue;
-                    }
-                    word.push(bytes[*pos] as char);
-                    *pos += 1;
-                }
-                *pos += 1;
-                continue;
-            }
-            if b == b'|' || b == b'>' || b == b'<' || b == b'&' {
-                if !word.is_empty() {
-                    break;
-                }
-                word.push(b as char);
-                *pos += 1;
-                if (b == b'>' || b == b'&') && *pos < bytes.len() && bytes[*pos] == b {
-                    word.push(b as char);
-                    *pos += 1;
-                }
-                break;
-            }
-            word.push(b as char);
-            *pos += 1;
-        }
-        if word.is_empty() {
-            return Err("empty word");
-        }
-        Ok(word)
-    }
-
-    fn expand_vars(s: &str, env: &BTreeMap<String, String>, last_exit: i32, shell_pid: u64) -> String {
-        let mut out = String::new();
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'$' && i + 1 < bytes.len() {
-                match bytes[i + 1] {
-                    b'$' => { write!(out, "{}", shell_pid).ok(); i += 2; continue; }
-                    b'?' => { write!(out, "{}", last_exit).ok(); i += 2; continue; }
-                    b'{' => {
-                        if let Some(end) = s[i+2..].find('}').map(|p| i + 2 + p) {
-                            let var = &s[i+2..end];
-                            let val = env.get(var).map(|s| s.as_str()).unwrap_or("");
-                            out.push_str(val);
-                            i = end + 1;
-                            continue;
-                        }
-                    }
-                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                        let start = i + 1;
-                        let mut end = start;
-                        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
-                            end += 1;
-                        }
-                        let var = &s[start..end];
-                        let val = env.get(var).map(|s| s.as_str()).unwrap_or("");
-                        out.push_str(val);
-                        i = end;
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-        out
-    }
-
-    fn parse_line(input: &str) -> Result<ParsedCmd, &str> {
-        let input = input.trim();
-        let mut pos = 0;
-        Self::skip_ws(input, &mut pos);
-
-        let mut args = Vec::new();
-        let mut stdin_file = None;
-        let mut stdout_file = None;
-        let mut stdout_append = false;
-        let mut background = false;
-
-        while pos < input.len() {
-            let word = Self::read_word(input, &mut pos)?;
-            match word.as_str() {
-                "<" => {
-                    Self::skip_ws(input, &mut pos);
-                    stdin_file = Some(Self::read_word(input, &mut pos)?);
-                }
-                ">" => {
-                    Self::skip_ws(input, &mut pos);
-                    stdout_file = Some(Self::read_word(input, &mut pos)?);
-                    stdout_append = false;
-                }
-                ">>" => {
-                    Self::skip_ws(input, &mut pos);
-                    stdout_file = Some(Self::read_word(input, &mut pos)?);
-                    stdout_append = true;
-                }
-                "&" => {
-                    background = true;
-                }
-                _ => args.push(word),
-            }
-            Self::skip_ws(input, &mut pos);
-        }
-
-        if args.is_empty() {
-            return Err("empty command");
-        }
-
-        Ok(ParsedCmd { args, stdin_file, stdout_file, stdout_append, background })
-    }
-
-    fn find_builtin(name: &str) -> Option<BuiltinFn> {
-        match name {
-            "help"      => Some(Self::cmd_help),
-            "uptime"    => Some(Self::cmd_uptime),
-            "ps"        => Some(Self::cmd_ps),
-            "kill"      => Some(Self::cmd_kill),
-            "sleep"     => Some(Self::cmd_sleep),
-            "meminfo"   => Some(Self::cmd_meminfo),
-            "lsblk"     => Some(Self::cmd_lsblk),
-            "blkinfo"   => Some(Self::cmd_blkinfo),
-            "mount"     => Some(Self::cmd_mount),
-            #[cfg(feature = "ziqafs")]
-            "diskinfo"  => Some(Self::cmd_diskinfo),
-            #[cfg(feature = "net")]
-            "netstat"   => Some(Self::cmd_netstat),
-            "klog"      => Some(Self::cmd_klog),
-            "syscalls"  => Some(Self::cmd_syscalls),
-            "syscall"   => Some(Self::cmd_syscall),
-            #[cfg(feature = "games")]
-            "doom"      => Some(Self::cmd_doom),
-            #[cfg(feature = "games")]
-            "tetris"    => Some(Self::cmd_tetris),
-            "reboot"    => Some(Self::cmd_reboot),
-            "echo"      => Some(Self::cmd_echo),
-            "clear"     => Some(Self::cmd_clear),
-            "edit"      => Some(Self::cmd_edit),
-            "ls"        => Some(Self::cmd_ls),
-            "cd"        => Some(Self::cmd_cd),
-            "pwd"       => Some(Self::cmd_pwd),
-            "mkdir"     => Some(Self::cmd_mkdir),
-            "dir"       => Some(Self::cmd_dir),
-            "rm"        => Some(Self::cmd_rm),
-            "rmdir"     => Some(Self::cmd_rmdir),
-            "cat"       => Some(Self::cmd_cat),
-            #[cfg(feature = "net")]
-            "ping"      => Some(Self::cmd_ping),
-            #[cfg(feature = "net")]
-            "wget"      => Some(Self::cmd_wget),
-            #[cfg(feature = "net")]
-            "ifconfig"  => Some(Self::cmd_ifconfig),
-            "mv"        => Some(Self::cmd_mv),
-            #[cfg(feature = "ziqafs")]
-            "cp"        => Some(Self::cmd_cp),
-            "touch"     => Some(Self::cmd_touch),
-            "writefile" => Some(Self::cmd_writefile),
-            #[cfg(feature = "ziqafs")]
-            "stat"      => Some(Self::cmd_stat),
-            #[cfg(feature = "ziqafs")]
-            "du"        => Some(Self::cmd_du),
-            "history"   => Some(Self::cmd_history),
-            "alias"     => Some(Self::cmd_alias),
-            "export"    => Some(Self::cmd_export),
-            "jobs"      => Some(Self::cmd_jobs),
-            "bg"        => Some(Self::cmd_bg),
-            "fg"        => Some(Self::cmd_fg),
-            "dashboard" | "top" => Some(Self::cmd_dashboard),
-            "spawn"     => Some(Self::cmd_spawn),
-            "spawnelf"  => Some(Self::cmd_spawn_elf),
-            #[cfg(feature = "orbital")]
-            "orbital"   => Some(Self::cmd_orbital),
-            "exec"      => Some(Self::cmd_exec),
-            #[cfg(feature = "games")]
-            "nwm-test"  => Some(Self::cmd_nwm_test),
-            "bench"     => Some(Self::cmd_bench),
-            "test"      => Some(Self::cmd_test),
-            "compress"  => Some(Self::cmd_compress),
-            "snap"      => Some(Self::cmd_snap),
-            "ls-snap"   => Some(Self::cmd_ls_snap),
-            "rm-snap"   => Some(Self::cmd_rm_snap),
-            _ => None,
-        }
-    }
-
-    fn poll_jobs(&mut self) {
-        let pids = crate::process::scheduler::list_pids();
-        let mut i = 0;
-        while i < self.jobs.len() {
-            if !pids.contains(&self.jobs[i].pid) {
-                let done = self.jobs.remove(i);
-                println!("[{}] Done  {}", i + 1, done.command);
-                continue;
-            }
-            i += 1;
-        }
-    }
-
-    fn execute_cmd(&mut self, parsed: &ParsedCmd) -> i32 {
-        if parsed.args.is_empty() {
-            return 0;
-        }
-        let name = &parsed.args[0];
-        let args = &parsed.args[1..];
-
-        if let Some(func) = Self::find_builtin(name) {
-            func(self, args)
-        } else {
-            // Try spawning as ELF
-            let resolved = self.resolve_path(name);
-            let mut buf = [0u8; 65536];
-            match VFS.read().read_raw(&resolved, &mut buf, 0) {
-                Ok(n) if n > 0 => {
-                    match crate::process::scheduler::spawn_elf(&buf[..n]) {
-                        Some(pid) => {
-                            println!("Spawned PID={} from '{}'", pid.0, resolved);
-                            if parsed.background {
-                                self.jobs.push(Job {
-                                    pid,
-                                    command: parsed.args.join(" "),
-                                    state: JobState::Running,
-                                });
-                            }
-                            0
-                        }
-                        None => { println!("Failed to spawn '{}'", resolved); 1 }
-                    }
-                }
-                _ => {
-                    let suggestion = self.find_similar_command(name);
-                    if let Some(s) = suggestion {
-                        println!("Unknown command: {}. Did you mean '{}'?", name, s);
-                    } else {
-                        println!("Unknown command: {}. Type 'help'.", name);
-                    }
-                    1
-                }
-            }
-        }
-    }
-
-    pub fn run(&mut self) -> ! {
-        // Keep timer-driven preemption disabled while the in-kernel shell owns
-        // the console.  The current scheduler can switch the shell away to
-        // boot-spawned demos/drivers for long stretches, which makes keyboard
-        // input look frozen after the first timer slice.
-        crate::process::scheduler::disable_preemption();
-
-        let ms = crate::timer::uptime_ms();
-        println!("\x1b[36m\x1b[1m  ⚡ ZiqaKernel v0.1 ⚡\x1b[0m");
-        println!("\x1b[2m  ─────────────────────────────────────────────\x1b[0m");
-        println!("\x1b[32m  System ready\x1b[0m  uptime={}ms  cpu=x86_64  mem={}MiB",
-            ms, crate::memory::heap::HEAP_SIZE / (1024 * 1024));
-        println!("\x1b[2m  Type 'help' for available commands\x1b[0m");
-        println!("");
-
-        self.update_status_bar();
-
-        loop {
-            crate::net::stack::poll_network();
-            self.poll_jobs();
-
-            // Background compression daemon (every 5 s, up to 64 pages)
-            let now = crate::timer::uptime_ms();
-            if now.wrapping_sub(self.last_daemon_ms) > 5000 {
-                self.last_daemon_ms = now;
-                crate::memory::compression::daemon::run_daemon_cycle(64);
-            }
-
-            // ── Zero-alloc prompt ──
-            let cwd = self.cwd_str();
-            let time = crate::timer::uptime_ms() / 1000;
-            let mut buf = [0u8; 128];
-            let mut pos = 0;
-
-            let header = "\x1b[36mziqa\x1b[0m\x1b[33m[\x1b[0m";
-            let hb = header.as_bytes();
-            buf[pos..pos + hb.len()].copy_from_slice(hb);
-            pos += hb.len();
-
-            if self.last_exit_status != 0 {
-                let mut tmp = [0u8; 12];
-                let mut tp = 0;
-                let mut n = self.last_exit_status;
-                if n < 0 { tmp[tp] = b'-'; tp += 1; n = -n; }
-                let start = tp;
-                loop {
-                    tmp[tp] = b'0' + (n % 10) as u8;
-                    tp += 1;
-                    n /= 10;
-                    if n == 0 { break; }
-                }
-                tmp[start..tp].reverse();
-                buf[pos..pos + (tp - start)].copy_from_slice(&tmp[start..tp]);
-                pos += tp - start;
-            }
-
-            let time_str = alloc::format!("{}", time);
-            let tb = time_str.as_bytes();
-            let remaining = buf.len() - pos;
-            let tc = tb.len().min(remaining);
-            buf[pos..pos + tc].copy_from_slice(&tb[..tc]);
-            pos += tc;
-
-            if cwd != "/" {
-                let space = b" ";
-                buf[pos] = space[0]; pos += 1;
-                let cb = cwd.as_bytes();
-                let remaining = buf.len() - pos;
-                let cc = cb.len().min(remaining);
-                buf[pos..pos + cc].copy_from_slice(&cb[..cc]);
-                pos += cc;
-            }
-
-            let tail = "\x1b[33m]\x1b[0m \x1b[32m>\x1b[0m ";
-            let tl = tail.as_bytes();
-            let remaining = buf.len() - pos;
-            let tc2 = tl.len().min(remaining);
-            buf[pos..pos + tc2].copy_from_slice(&tl[..tc2]);
-            pos += tc2;
-
-            let prompt = core::str::from_utf8(&buf[..pos]).unwrap_or("> ");
-            print!("{}", prompt);
-
-            self.read_line();
-
-            let has_input = self.input_buf[..self.cursor].iter().any(|&b| b != b' ' && b != b'\t' && b != b'\r' && b != b'\n');
-            if has_input {
-                self.push_history();
-                let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
-                let trimmed = input.trim();
-
-                // Alias expansion
-                let expanded_input = if let Some(idx) = trimmed.find(char::is_whitespace) {
-                    let first = &trimmed[..idx];
-                    let rest = &trimmed[idx..];
-                    if let Some(alias) = self.aliases.get(first) {
-                        let mut s = alias.clone();
-                        s.push_str(rest);
-                        s
-                    } else {
-                        trimmed.to_string()
-                    }
-                } else if let Some(alias) = self.aliases.get(trimmed) {
-                    alias.clone()
-                } else {
-                    trimmed.to_string()
-                };
-
-                // Environment variable expansion
-                let expanded = Self::expand_vars(&expanded_input, &self.env, self.last_exit_status, 0);
-
-                match Self::parse_line(&expanded) {
-                    Ok(cmd) => {
-                        self.last_exit_status = self.execute_cmd(&cmd);
-                    }
-                    Err(e) => {
-                        println!("{}", e);
-                        self.last_exit_status = 1;
-                    }
-                }
-            }
-            self.update_status_bar();
-            println!("\x1b[2m──────────────────────────────────────────────────────────────────────\x1b[0m");
-            self.history_pos = -1;
-            self.cursor = 0;
-        }
-    }
-
-    fn push_history(&mut self) {
-        let input = core::str::from_utf8(&self.input_buf[..self.cursor]).unwrap_or("");
-        if input.is_empty() { return; }
-        let last = self.history.last().map(|e| e.as_str() == input).unwrap_or(false);
-        if !last {
-            if self.history.len() >= MAX_HISTORY {
-                self.history.remove(0);
-            }
-            self.history.push(input.to_string());
-        }
-    }
-
-    fn prompt_len(&self) -> usize {
-        let cwd = self.cwd_str();
-        if cwd == "/" {
-            "ziqa > ".chars().count()
-        } else {
-            ("ziqa ".to_string() + cwd + " > ").chars().count()
-        }
-    }
-
-    fn refresh_line(&self, idx: usize) {
-        let cwd = self.cwd_str();
-        let prompt = if cwd == "/" {
-            "ziqa > ".to_string()
-        } else {
-            "ziqa ".to_string() + cwd + " > "
-        };
-        print!("\r");
-        for _ in 0..79 {
-            print!(" ");
-        }
-        print!("\r");
-        print!("{}", prompt);
-        let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
-        if let Ok(s) = core::str::from_utf8(&self.input_buf[..len]) {
-            print!("{}", s);
-        }
-        let prompt_len = prompt.chars().count();
-        crate::drivers::vga::set_cursor_pos(24, prompt_len + idx);
-    }
-
-    fn load_history(&mut self, idx: &mut usize) {
-        let entry = &self.history[self.history_pos as usize];
-        let bytes = entry.as_bytes();
-        let len = bytes.len().min(255);
-        self.input_buf[..len].copy_from_slice(&bytes[..len]);
-        if len < 256 { self.input_buf[len] = 0; }
-        *idx = len;
-        self.refresh_line(*idx);
-    }
-
-    fn autocomplete(&mut self, idx: &mut usize) {
-        let input = core::str::from_utf8(&self.input_buf[..*idx]).unwrap_or("");
-        let last_space = input.rfind(' ').map(|i| i + 1).unwrap_or(0);
-        let prefix = &input[last_space..];
-
-        let is_first_word = last_space == 0;
-
-        let candidates: Vec<String> = if is_first_word {
-            COMMANDS.iter().filter(|c| c.starts_with(prefix)).map(|s| s.to_string()).collect()
-        } else if !prefix.is_empty() {
-            let cmd_end = input.find(' ').unwrap_or(input.len());
-            let cmd = &input[..cmd_end];
-            self.complete_arg(cmd, prefix)
-        } else {
-            Vec::new()
-        };
-
-        if candidates.is_empty() {
-            return;
-        }
-
-        if candidates.len() == 1 {
-            let completion = &candidates[0];
-            let bytes = completion.as_bytes();
-            let new_end = last_space + bytes.len();
-            self.input_buf[last_space..new_end].copy_from_slice(bytes);
-            for i in new_end..*idx {
-                self.input_buf[i] = 0;
-            }
-            *idx = new_end;
-            self.refresh_line(*idx);
-        } else {
-            let common = Self::longest_common_prefix(&candidates);
-            if common.len() > prefix.len() {
-                let bytes = common.as_bytes();
-                let new_end = last_space + common.len();
-                self.input_buf[last_space..new_end].copy_from_slice(bytes);
-                for i in new_end..*idx {
-                    self.input_buf[i] = 0;
-                }
-                *idx = new_end;
-                self.refresh_line(*idx);
-            } else {
-                println!("");
-                for c in &candidates {
-                    if is_first_word {
-                        print!("{}{}{}  ", C_GREEN, c, C_RESET);
-                    } else if c.parse::<u64>().is_ok() {
-                        print!("{}{}{}  ", C_YELLOW, c, C_RESET);
-                    } else if VFS.read().is_dir(c) {
-                        print!("{}{}{}  ", C_BLUE, c, C_RESET);
-                    } else {
-                        print!("{}  ", c);
-                    }
-                }
-                println!("");
-                self.refresh_line(*idx);
-            }
-        }
-    }
-
-    fn complete_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
-        if matches!(cmd, "ls" | "cd" | "edit" | "rm" | "cat" | "mkdir" | "dir" | "spawnelf" | "spawn") {
-            let vfs = VFS.read();
-            let all = vfs.list();
-            let cwd = self.cwd_str();
-            let search_prefix = if prefix.starts_with('/') {
-                prefix.to_string()
-            } else if cwd == "/" {
-                alloc::format!("/{}", prefix)
-            } else {
-                alloc::format!("{}/{}", cwd, prefix)
-            };
-            let matched: Vec<String> = all.into_iter().filter(|p| p.starts_with(&search_prefix)).collect();
-            if matched.is_empty() {
-                return Vec::new();
-            }
-            if prefix.starts_with('/') {
-                return matched;
-            }
-            let cwd_prefix: String = if cwd == "/" { "/".to_string() } else { alloc::format!("{}/", cwd) };
-            return matched.into_iter().map(|p| {
-                p.strip_prefix(&cwd_prefix).unwrap_or(&p).to_string()
-            }).collect();
-        }
-
-        if matches!(cmd, "syscall" | "syscalls") {
-            let mut out = Vec::new();
-            for entry in SYSCALLS {
-                if entry.name.starts_with(prefix) {
-                    out.push(entry.name.to_string());
-                }
-                if entry.category.starts_with(prefix) && !out.iter().any(|s| s == entry.category) {
-                    out.push(entry.category.to_string());
-                }
-            }
-            return out;
-        }
-
-        if matches!(cmd, "kill" | "exec") {
-            let pids = crate::process::scheduler::list_pids();
-            return pids.iter().map(|p| alloc::format!("{}", p.0)).filter(|s| s.starts_with(prefix)).collect();
-        }
-
-        Vec::new()
-    }
-
-    fn find_similar_command(&self, cmd: &str) -> Option<&'static str> {
-        let mut best: Option<&'static str> = None;
-        let mut best_dist = 4;
-        for &c in COMMANDS {
-            let d = Self::levenshtein_distance(cmd, c);
-            if d < best_dist {
-                best_dist = d;
-                best = Some(c);
-            }
-        }
-        best
-    }
-
-    fn update_status_bar(&self) {
-        let ms = crate::timer::uptime_ms();
-        let secs = ms / 1000;
-        let hours = secs / 3600;
-        let minutes = (secs % 3600) / 60;
-        let seconds = secs % 60;
-        let mem_usage = crate::memory::heapstats::get_stats().current_usage_bytes() / 1024;
-        let pcount = crate::process::scheduler::list_pids().len();
-        crate::drivers::vga::set_status_text(
-            &alloc::format!(" \x1b[30;47m \x1b[36mZIQA\x1b[0m v0.1 | \x1b[33m{:02}:{:02}:{:02}\x1b[0m | \x1b[32mMem: {}K\x1b[0m | \x1b[35mProcs: {}\x1b[0m | \x1b[33mPress PgUp/PgDn for scrollback\x1b[0m ",
-                hours, minutes, seconds, mem_usage, pcount)
-        );
-    }
-
-    fn read_line(&mut self) {
-        use crate::drivers::keyboard::read_stdin;
-        let mut idx = 0;
-        self.input_buf = [0; 256];
-        self.cursor = 0;
-        loop {
-            // Stay on the shell context while waiting for input.  Hardware
-            // interrupts still run; only timer-driven task switching is gated.
-
-            let mut byte = [0u8; 1];
-            if read_stdin(&mut byte) > 0 {
-                let b = byte[0];
-                match b {
-                    0x80 => { // Up arrow — history back
-                        if !self.history.is_empty() {
-                            if self.history_pos < 0 {
-                                self.history_pos = self.history.len() as isize - 1;
-                            } else if self.history_pos > 0 {
-                                self.history_pos -= 1;
-                            }
-                            self.load_history(&mut idx);
-                        }
-                    }
-                    0x81 => { // Down arrow — history forward
-                        if self.history_pos >= 0 {
-                            self.history_pos += 1;
-                            if self.history_pos as usize >= self.history.len() {
-                                self.history_pos = -1;
-                                self.input_buf = [0; 256];
-                                idx = 0;
-                                self.refresh_line(idx);
-                            } else {
-                                self.load_history(&mut idx);
-                            }
-                        }
-                    }
-                    0x82 => { // Left Arrow
-                        if idx > 0 {
-                            idx -= 1;
-                            crate::drivers::vga::set_cursor_pos(24, idx + self.prompt_len());
-                        }
-                    }
-                    0x83 => { // Right Arrow
-                        if idx < 255 && self.input_buf[idx] != 0 {
-                            idx += 1;
-                            crate::drivers::vga::set_cursor_pos(24, idx + self.prompt_len());
-                        }
-                    }
-                    8 | 127 => { // Backspace
-                        if idx > 0 {
-                            let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                            for i in idx-1..len-1 {
-                                self.input_buf[i] = self.input_buf[i+1];
-                            }
-                            self.input_buf[len-1] = 0;
-                            idx -= 1;
-                            self.refresh_line(idx);
-                        }
-                    }
-                    0x09 => { // Tab
-                        self.autocomplete(&mut idx);
-                    }
-                    0x88 => { // Delete
-                        if idx < 255 && self.input_buf[idx] != 0 {
-                            let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                            for i in idx..len-1 {
-                                self.input_buf[i] = self.input_buf[i+1];
-                            }
-                            self.input_buf[len-1] = 0;
-                            self.refresh_line(idx);
-                        }
-                    }
-                    b'\n' | b'\r' => {
-                        self.cursor = idx;
-                        if crate::drivers::vga::is_scrolled() {
-                            crate::drivers::vga::restore_terminal();
-                        }
-                        println!("");
-                        return;
-                    }
-                    0x03 => {
-                        self.cursor = idx;
-                        println!("^C");
-                        self.input_buf = [0; 256];
-                        idx = 0;
-                        self.refresh_line(idx);
-                    }
-                    0x0C => {
-                        self.cmd_clear(&[]);
-                        self.refresh_line(idx);
-                    }
-                    0x04 => {
-                        println!("^D - Exiting shell");
-                        return;
-                    }
-                    _ => {
-                        if idx < 255 {
-                            let len = self.input_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                            for i in (idx..len.min(254)).rev() {
-                                self.input_buf[i + 1] = self.input_buf[i];
-                            }
-                            self.input_buf[idx] = b;
-                            idx += 1;
-                            self.refresh_line(idx);
-                        }
-                    }
-                }
-            } else {
-                // Keep polling COM1 and the PS/2 controller.  Interrupts still
-                // fire, but the shell is not preempted away from its input loop.
-                core::hint::spin_loop();
-            }
-        }
-    }
-
-    fn cmd_alias(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_alias(&mut self, args: &[String]) -> i32 {
         let arg1 = args.first().map(|s| s.as_str());
         let arg2 = args.get(1).map(|s| s.as_str());
         match (arg1, arg2) {
@@ -899,7 +39,7 @@ impl Shell {
         0
     }
 
-    fn cmd_export(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_export(&mut self, args: &[String]) -> i32 {
         match args.first().map(|s| s.as_str()) {
             Some(arg) => {
                 if let Some((name, value)) = arg.split_once('=') {
@@ -919,7 +59,7 @@ impl Shell {
         0
     }
 
-    fn cmd_help(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_help(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  ⚡ ZiqaKernel Shell ⚡{}", C_CYAN, C_BOLD, C_RESET);
         println!("{}  ─────────────────────────────────────{}", C_DIM, C_RESET);
         println!("");
@@ -995,7 +135,7 @@ impl Shell {
         0
     }
 
-    fn parse_syscall_nr(text: &str) -> Option<u64> {
+    pub(crate) fn parse_syscall_nr(text: &str) -> Option<u64> {
         if let Some(hex) = text.strip_prefix("0x") {
             u64::from_str_radix(hex, 16).ok()
         } else {
@@ -1003,7 +143,7 @@ impl Shell {
         }
     }
 
-    fn find_syscall_entry(text: &str) -> Option<&'static SyscallEntry> {
+    pub(crate) fn find_syscall_entry(text: &str) -> Option<&'static SyscallEntry> {
         if let Some(nr) = Self::parse_syscall_nr(text) {
             SYSCALLS.iter().find(|entry| entry.nr == nr)
         } else {
@@ -1011,7 +151,7 @@ impl Shell {
         }
     }
 
-    fn cmd_syscalls(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_syscalls(&mut self, args: &[String]) -> i32 {
         let filter = args.first().map(|s| s.as_str()).unwrap_or("");
         println!("{}{}  SYSCALLS{}", C_YELLOW, C_BOLD, C_RESET);
         println!("  {:>5}  {:<22} {:<10} {:<22} {}", "NR", "NAME", "GROUP", "ARGS", "SAFE");
@@ -1041,7 +181,7 @@ impl Shell {
         0
     }
 
-    fn cmd_syscall(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_syscall(&mut self, args: &[String]) -> i32 {
         let Some(name) = args.first() else {
             println!("Usage: syscall <name|nr>");
             println!("Try: syscalls process    or: syscall getpid");
@@ -1088,7 +228,7 @@ impl Shell {
         0
     }
 
-    fn cmd_history(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_history(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  HISTORY {} {}", C_YELLOW, C_BOLD, C_RESET, C_DIM);
         for (i, entry) in self.history.iter().enumerate() {
             println!("  {:>3}: {}", i, entry);
@@ -1096,7 +236,7 @@ impl Shell {
         0
     }
 
-    fn cmd_uptime(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_uptime(&mut self, _args: &[String]) -> i32 {
         let ms = crate::timer::uptime_ms();
         let secs = ms / 1000;
         let mins = secs / 60;
@@ -1117,7 +257,7 @@ impl Shell {
         0
     }
 
-    fn cmd_klog(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_klog(&mut self, args: &[String]) -> i32 {
         let level_str = args.join(" ");
         use crate::klog::Level;
         // Parse: klog [level] [-n count]
@@ -1164,11 +304,11 @@ impl Shell {
     }
 
 
-    fn cmd_spawn(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_spawn(&mut self, args: &[String]) -> i32 {
         self.cmd_spawn_elf(args)
     }
 
-    fn cmd_spawn_elf(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_spawn_elf(&mut self, args: &[String]) -> i32 {
         let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
             None => { println!("Usage: spawnelf <path>"); return 1; }
@@ -1192,8 +332,8 @@ impl Shell {
         0
     }
     #[cfg(feature = "orbital")]
-    fn cmd_orbital(&mut self, _args: &[String]) -> i32 {
-        let binary = include_bytes!("../assets/orbital.elf");
+    pub(crate) fn cmd_orbital(&mut self, _args: &[String]) -> i32 {
+        let binary = include_bytes!("../../assets/orbital.elf");
         match crate::process::scheduler::spawn_redox_elf(binary) {
             Some(pid) => {
                 crate::process::scheduler::with_process_mut(pid, |proc| {
@@ -1212,7 +352,7 @@ impl Shell {
     }
 
 
-    fn cmd_exec(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_exec(&mut self, args: &[String]) -> i32 {
         let pid_val = match args.first().and_then(|s| s.parse::<u64>().ok()) {
             Some(v) => v,
             None => { println!("Usage: exec <pid>"); return 1; }
@@ -1237,7 +377,7 @@ impl Shell {
         0
     }
 
-    fn cmd_ps(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_ps(&mut self, _args: &[String]) -> i32 {
         let pids = crate::process::scheduler::list_pids();
         let mut rows = alloc::vec::Vec::new();
         for pid in pids {
@@ -1273,7 +413,7 @@ impl Shell {
         0
     }
 
-    fn cmd_kill(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_kill(&mut self, args: &[String]) -> i32 {
         let pid_str = args.first().map(|s| s.as_str());
         let sig_str = args.get(1).map(|s| s.as_str());
         let pid_val = match pid_str.and_then(|s| s.parse::<u64>().ok()) {
@@ -1308,7 +448,7 @@ impl Shell {
         0
     }
 
-    fn cmd_sleep(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_sleep(&mut self, args: &[String]) -> i32 {
         let arg = match args.first().map(|s| s.as_str()) {
             Some(v) => v,
             None => { println!("Usage: sleep <ms>  or  sleep <N>s"); return 1; }
@@ -1325,7 +465,7 @@ impl Shell {
         0
     }
 
-    fn cmd_meminfo(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_meminfo(&mut self, _args: &[String]) -> i32 {
         let stats = crate::memory::heapstats::get_stats();
         let heap_size = crate::memory::heap::HEAP_SIZE;
         let heap_kib = heap_size / 1024;
@@ -1364,7 +504,7 @@ impl Shell {
         0
     }
 
-    fn cmd_bench(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_bench(&mut self, _args: &[String]) -> i32 {
         use crate::memory::heapstats::get_stats;
         use core::arch::x86_64::_rdtsc;
 
@@ -1510,7 +650,7 @@ impl Shell {
         0
     }
 
-    fn cmd_test(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_test(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  SHELL UNIT TESTS{}", C_YELLOW, C_BOLD, C_RESET);
         let mut passed = 0u32;
         let mut failed = 0u32;
@@ -1595,7 +735,7 @@ impl Shell {
     }
 
     #[cfg(feature = "ziqafs")]
-    fn cmd_diskinfo(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_diskinfo(&mut self, _args: &[String]) -> i32 {
         let guard = ZIQAFS.lock();
         if let Some(fs_arc) = guard.as_ref() {
             let mut fs = fs_arc.lock();
@@ -1637,7 +777,7 @@ impl Shell {
         0
     }
 
-    fn cmd_lsblk(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_lsblk(&mut self, _args: &[String]) -> i32 {
         let devices = crate::drivers::block_registry::BLOCK_DEVICES.lock();
         if devices.is_empty() {
             println!("No block devices found.");
@@ -1657,7 +797,7 @@ impl Shell {
         0
     }
 
-    fn cmd_blkinfo(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_blkinfo(&mut self, args: &[String]) -> i32 {
         if args.is_empty() {
             println!("Usage: blkinfo <device_name> (e.g. vda)");
             return 1;
@@ -1722,7 +862,7 @@ impl Shell {
         0
     }
 
-    fn cmd_mount(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_mount(&mut self, _args: &[String]) -> i32 {
         let mounts = crate::fs::vfs::MOUNT_REGISTRY.lock();
         if mounts.is_empty() {
             println!("No filesystems mounted.");
@@ -1740,7 +880,7 @@ impl Shell {
     }
 
     #[cfg(feature = "net")]
-    fn cmd_netstat(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_netstat(&mut self, _args: &[String]) -> i32 {
         println!("{}{}  NETWORK INTERFACES {}", C_YELLOW, C_BOLD, C_RESET);
         println!("  ┌──────┬──────────────┬──────────────┬──────────────┬──────────────┐");
         println!("  │ {}Dev  │ {}TX pkts     │ {}RX pkts     │ {}TX bytes    │ {}RX bytes    {}│", C_CYAN, C_GREEN, C_CYAN, C_GREEN, C_CYAN, C_RESET);
@@ -1765,7 +905,7 @@ impl Shell {
         0
     }
 
-    fn cmd_reboot(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_reboot(&mut self, _args: &[String]) -> i32 {
         println!("Rebooting...");
         unsafe {
             use x86_64::instructions::port::Port;
@@ -1775,7 +915,7 @@ impl Shell {
         loop { x86_64::instructions::hlt(); }
     }
 
-    fn cmd_dashboard(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_dashboard(&mut self, _args: &[String]) -> i32 {
         crate::drivers::vga::clear_screen();
         let ms = crate::timer::uptime_ms();
         let secs = ms / 1000;
@@ -1889,21 +1029,21 @@ impl Shell {
     }
 
     #[cfg(feature = "games")]
-    fn cmd_doom(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_doom(&mut self, args: &[String]) -> i32 {
         let steps: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(60);
         crate::doom::run(steps);
         0
     }
 
     #[cfg(feature = "games")]
-    fn cmd_nwm_test(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_nwm_test(&mut self, _args: &[String]) -> i32 {
         println!("{}  Launching NWM desktop demo...{}", C_CYAN, C_RESET);
         crate::userspace::nwm_demo::run();
         println!("{}  NWM desktop exited.{}", C_GREEN, C_RESET);
         0
     }
 
-    fn cmd_clear(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_clear(&mut self, _args: &[String]) -> i32 {
         crate::drivers::vga::clear_screen();
         if crate::drivers::vga::is_scrolled() {
             crate::drivers::vga::restore_terminal();
@@ -1916,12 +1056,12 @@ impl Shell {
     }
 
     #[cfg(feature = "games")]
-    fn cmd_tetris(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_tetris(&mut self, _args: &[String]) -> i32 {
         crate::tetris::run();
         0
     }
 
-    fn cmd_edit(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_edit(&mut self, args: &[String]) -> i32 {
         let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
             None => { println!("Usage: edit <path>"); return 1; }
@@ -1931,7 +1071,7 @@ impl Shell {
         0
     }
 
-    fn cmd_ls(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_ls(&mut self, args: &[String]) -> i32 {
         let target = args.first().map(|s| s.as_str());
         let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
         let vfs = VFS.read();
@@ -1973,7 +1113,7 @@ impl Shell {
         0
     }
 
-    fn cmd_cd(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_cd(&mut self, args: &[String]) -> i32 {
         // Flag handling: '-v' prints the new cwd after changing directory.
         let mut verbose = false;
         let mut path_opt: Option<String> = None;
@@ -2010,12 +1150,12 @@ impl Shell {
         0
     }
 
-    fn cmd_pwd(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_pwd(&mut self, _args: &[String]) -> i32 {
         println!("{}", self.cwd_str());
         0
     }
 
-    fn cmd_mkdir(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_mkdir(&mut self, args: &[String]) -> i32 {
         let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
             None => { println!("Usage: mkdir <path>"); return 1; }
@@ -2065,7 +1205,7 @@ impl Shell {
         0
     }
 
-    fn cmd_dir(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_dir(&mut self, args: &[String]) -> i32 {
         let target = args.first().map(|s| s.as_str());
         let dir = target.map(|p| self.resolve_path(p)).unwrap_or_else(|| self.cwd_str().to_string());
         let vfs = VFS.read();
@@ -2092,7 +1232,7 @@ impl Shell {
         0
     }
 
-    fn cmd_rm(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_rm(&mut self, args: &[String]) -> i32 {
         let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
             None => { println!("Usage: rm <path>"); return 1; }
@@ -2124,7 +1264,7 @@ impl Shell {
         0
     }
 
-    fn cmd_cat(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_cat(&mut self, args: &[String]) -> i32 {
         let p = match args.first().map(|s| s.as_str()) {
             Some(s) => s,
             None => { println!("Usage: cat [-n] <path>"); return 1; }
@@ -2167,7 +1307,7 @@ impl Shell {
 
     #[cfg(feature = "net")]
     #[cfg(feature = "net")]
-    fn cmd_ping(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_ping(&mut self, args: &[String]) -> i32 {
         let joined = args.join(" ");
         let mut count: usize = 4;
         let mut host = "";
@@ -2301,7 +1441,7 @@ impl Shell {
     }
 
     #[cfg(feature = "net")]
-    fn cmd_wget(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_wget(&mut self, args: &[String]) -> i32 {
         let joined = args.join(" ");
         let mut output_name: Option<&str> = None;
         let mut url_arg = "";
@@ -2432,7 +1572,7 @@ impl Shell {
     }
 
     #[cfg(feature = "net")]
-    fn cmd_ifconfig(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_ifconfig(&mut self, _args: &[String]) -> i32 {
         let stack_guard = crate::net::stack::TCPIP.lock();
         if let Some(stack) = stack_guard.as_ref() {
             let mac = stack.mac();
@@ -2459,7 +1599,7 @@ impl Shell {
         0
     }
 
-    fn cmd_mv(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_mv(&mut self, args: &[String]) -> i32 {
         let (src, dst) = match (args.first(), args.get(1)) {
             (Some(s), Some(d)) => (s.as_str(), d.as_str()),
             _ => { println!("Usage: mv <src> <dst>"); return 1; }
@@ -2474,7 +1614,7 @@ impl Shell {
     }
 
     #[cfg(feature = "ziqafs")]
-    fn cmd_cp(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_cp(&mut self, args: &[String]) -> i32 {
         let (src, dst) = match (args.first(), args.get(1)) {
             (Some(s), Some(d)) => (s.as_str(), d.as_str()),
             _ => { println!("Usage: cp <src> <dst>"); return 1; }
@@ -2499,7 +1639,7 @@ impl Shell {
         0
     }
 
-    fn cmd_touch(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_touch(&mut self, args: &[String]) -> i32 {
         let p = match args.first() {
             Some(s) => s.as_str(),
             None => { println!("Usage: touch <path>"); return 1; }
@@ -2516,7 +1656,7 @@ impl Shell {
         0
     }
 
-    fn cmd_writefile(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_writefile(&mut self, args: &[String]) -> i32 {
         let path = match args.first() {
             Some(p) => p.as_str(),
             None => { println!("Usage: writefile <path> <text>"); return 1; }
@@ -2539,7 +1679,7 @@ impl Shell {
     }
 
     #[cfg(feature = "ziqafs")]
-    fn cmd_stat(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_stat(&mut self, args: &[String]) -> i32 {
         let p = match args.first() {
             Some(s) => s.as_str(),
             None => { println!("Usage: stat <path>"); return 1; }
@@ -2577,7 +1717,7 @@ impl Shell {
     }
 
     #[cfg(feature = "ziqafs")]
-    fn cmd_du(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_du(&mut self, args: &[String]) -> i32 {
         let p = args.first().map(|s| self.resolve_path(s)).unwrap_or_else(|| self.cwd_str().to_string());
         let guard = ZIQAFS.lock();
         if let Some(fs_arc) = guard.as_ref() {
@@ -2609,16 +1749,16 @@ impl Shell {
         0
     }
 
-    fn cmd_echo(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_echo(&mut self, args: &[String]) -> i32 {
         println!("{}", args.join(" "));
         0
     }
 
-    fn cmd_rmdir(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_rmdir(&mut self, args: &[String]) -> i32 {
         self.cmd_rm(args)
     }
 
-    fn cmd_jobs(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_jobs(&mut self, _args: &[String]) -> i32 {
         if self.jobs.is_empty() {
             println!("No background jobs.");
             return 0;
@@ -2635,7 +1775,7 @@ impl Shell {
         0
     }
 
-    fn cmd_bg(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_bg(&mut self, args: &[String]) -> i32 {
         let job_num = match args.first().and_then(|s| s.parse::<usize>().ok()) {
             Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
             _ => {
@@ -2657,7 +1797,7 @@ impl Shell {
         0
     }
 
-    fn cmd_fg(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_fg(&mut self, args: &[String]) -> i32 {
         let job_num = match args.first().and_then(|s| s.parse::<usize>().ok()) {
             Some(n) if n > 0 && n <= self.jobs.len() => n - 1,
             _ => {
@@ -2682,7 +1822,7 @@ impl Shell {
         0
     }
 
-    fn cmd_compress(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_compress(&mut self, args: &[String]) -> i32 {
         let max_pages: usize = args.first()
             .and_then(|s| s.parse().ok())
             .unwrap_or(256);
@@ -2697,7 +1837,7 @@ impl Shell {
         0
     }
 
-    fn cmd_snap(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_snap(&mut self, args: &[String]) -> i32 {
         if args.is_empty() {
             println!("Usage: snap <pid>        - Create a snapshot of process PID");
             println!("       snap restore <pid> - Restore process from snapshot PID");
@@ -2711,7 +1851,7 @@ impl Shell {
                 Err(_) => { println!("Invalid PID: {}", args[1]); return 1; }
             };
 
-            let dummy_binary = include_bytes!("../assets/test_elf.bin");
+            let dummy_binary = include_bytes!("../../assets/test_elf.bin");
             if let Some(pid) = crate::process::scheduler::spawn_elf(dummy_binary) {
                 println!("[Snapshot] Spawning target process PID={}...", pid.0);
                 let success = crate::process::scheduler::with_process_mut(pid, |proc| {
@@ -2745,7 +1885,7 @@ impl Shell {
         }
     }
 
-    fn cmd_ls_snap(&mut self, _args: &[String]) -> i32 {
+    pub(crate) fn cmd_ls_snap(&mut self, _args: &[String]) -> i32 {
         let pids = crate::process::snapshot::SnapshotManager::list();
         println!("{}{}  SAVED SNAPSHOTS  ({} total){}", C_YELLOW, C_BOLD, pids.len(), C_RESET);
         if pids.is_empty() {
@@ -2760,7 +1900,7 @@ impl Shell {
         0
     }
 
-    fn cmd_rm_snap(&mut self, args: &[String]) -> i32 {
+    pub(crate) fn cmd_rm_snap(&mut self, args: &[String]) -> i32 {
         let pid_val = match args.first().and_then(|s| s.parse::<u64>().ok()) {
             Some(v) => v,
             None => { println!("Usage: rm-snap <pid>"); return 1; }
@@ -2773,58 +1913,4 @@ impl Shell {
         }
     }
 
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
-    let alen = a.len();
-    let blen = b.len();
-    if alen == 0 { return blen; }
-    if blen == 0 { return alen; }
-    let mut prev: Vec<usize> = (0..=blen).collect();
-    let mut curr: Vec<usize> = (0..=blen).map(|_| 0).collect();
-    for i in 1..=alen {
-        curr[0] = i;
-        for j in 1..=blen {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
-        }
-        core::mem::swap(&mut prev, &mut curr);
-    }
-    prev[blen]
-}
-
-fn longest_common_prefix(strings: &[String]) -> String {
-    if strings.is_empty() {
-        return String::new();
-    }
-    if strings.len() == 1 {
-        return strings[0].clone();
-    }
-    let first = strings[0].as_bytes();
-    let mut len = first.len();
-    for s in &strings[1..] {
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < len && i < bytes.len() && first[i] == bytes[i] {
-            i += 1;
-        }
-        len = i;
-        if len == 0 {
-            break;
-        }
-    }
-    strings[0][..len].to_string()
-}
-
-}
-
-pub fn start() -> ! {
-    let mut shell = Shell::new();
-    shell.run();
-}
-
-pub fn run() -> ! {
-    start()
 }

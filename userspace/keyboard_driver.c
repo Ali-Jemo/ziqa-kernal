@@ -19,14 +19,10 @@ static size_t my_strlen(const char *s) {
 static uint64_t sys_port_in(uint16_t port, uint64_t size) {
     uint64_t res;
     __asm__ volatile (
-        "mov $1031, %%rax\n"
-        "movzwq %1, %%rdi\n"
-        "mov %2, %%rsi\n"
-        "syscall\n"
-        "mov %%rax, %0\n"
-        : "=r"(res)
-        : "r"(port), "r"(size)
-        : "rax", "rdi", "rsi", "rcx", "r11", "memory"
+        "syscall"
+        : "=a"(res)
+        : "a"(1031), "D"((uint64_t)port), "S"(size)
+        : "rcx", "r11", "memory"
     );
     return res;
 }

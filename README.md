@@ -91,7 +91,7 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 | Network | Experimental | smoltcp-backed TCP/UDP socket experiments behind `net` feature. |
 | Memory compression | Experimental | LZ4 page compression, compressed page store, page-fault decompression, daemon/status hooks. |
 | Snapshots | Functional / experimental | Process snapshot save/load/resume through FAT32-backed storage; instant-on resume restores full process state (registers, VMAs, FDs) at boot. |
-| Shell / demos | Functional / experimental | Foreground-safe shell, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. QEMU GUI mode uses raw terminal serial input plus PS/2 polling. |
+| Shell / demos | Functional / experimental | Foreground-safe shell modularized under `src/shell/`, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. Interrupt-safe keyboard buffer locks prevent CPU freezes on key press. |
 
 The current boot path reaches an interactive shell in **~50ms** (QEMU/KVM):
 
@@ -152,7 +152,7 @@ FAT32-backed snapshot files at boot, skipping full re-initialization.
 
 - Foreground shell owns serial/PS2 input while a command line is active; timer-driven scheduler preemption stays disabled in the shell so boot-spawned demos/drivers cannot steal the input loop after the first timer slice.
 - `make run-gui` forces the host terminal into raw noncanonical mode before launching QEMU with `-serial stdio`, then restores the terminal on exit. This prevents host-side line echo from masquerading as kernel input.
-- PS/2 keyboard input is polled from `read_stdin()` with IRQ1 disabled, avoiding missed or duplicated GUI keystrokes in QEMU.
+- PS/2 keyboard input is polled or handled via IRQ1 interrupts, with lock acquisitions wrapped in interrupt-disabling wrappers to completely prevent CPU deadlocks.
 - `syscalls [filter]` lists the curated native syscall table by name, number, category, arguments, and safety.
 - `syscall <name|nr>` safely probes side-effect-free syscall state such as PID, parent PID, uptime ticks, current signal mask, and GPU channel ID. Unsafe process, IPC mutation, network, and framebuffer calls are listed but not invoked by the shell probe.
 
@@ -246,7 +246,7 @@ docker compose run dev
 | [`src/scheme/`](src/scheme) | Scheme registry and scheme implementations. |
 | [`src/abi/`](src/abi) | ABI plugins, syscall dispatch, Linux/WASM ABI surfaces. |
 | [`src/ebpf/`](src/ebpf) | eBPF verifier, VM, maps, helpers, tracepoints. |
-| [`src/shell.rs`](src/shell.rs) | Shell parser, command registry, builtins, job control, syscall table/probe commands. |
+| [`src/shell/`](src/shell/) | Modularized shell parser, command registry, line editor, built-in commands, and helper functions. |
 | [`conductor/`](conductor/) | Documentation: changelog, roadmap, architecture, syscall ABI, compositor IPC. |
 | [`assets/`](assets/) | Diagrams and embedded boot/test binaries. |
 

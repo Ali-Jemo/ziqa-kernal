@@ -22,7 +22,9 @@ pub mod serio;
 pub mod memory;
 pub mod event;
 pub mod sys;
+pub mod pty;
 pub mod orbital_bridge;
+pub mod sdl;
 
 use self::debug::DebugScheme;
 use self::pipe::PipeScheme;
@@ -38,6 +40,8 @@ use self::event::EventScheme;
 use self::user::UserScheme;
 use self::orbital_bridge::OrbitalBridge;
 use self::sys::SysScheme;
+use self::pty::PtyScheme;
+use self::sdl::SdlScheme;
 
 pub type SchemeResult<T> = Result<T, crate::abi::AbiError>;
 
@@ -102,6 +106,8 @@ pub fn init() {
     registry.register("user", Box::new(UserScheme::new()));
     registry.register("", Box::new(UserScheme::new()));
     registry.register("sys", Box::new(SysScheme::new()));
+    registry.register("pty", Box::new(PtyScheme::new()));
+    registry.register("sdl", Box::new(SdlScheme::new()));
     registry.register("display_v2", Box::new(OrbitalBridge::new()));
     registry.register("display", Box::new(OrbitalBridge::new()));
     registry.register("input", Box::new(OrbitalBridge::new()));

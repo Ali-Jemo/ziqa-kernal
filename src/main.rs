@@ -70,14 +70,12 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
 // ── GPU Display / Compositor Init ───────────────────────────────────
     section("Display");
-    let mut compositor_display = false;
-    let _display_ok = if ziqa_kernel::drivers::virtio_gpu::init_display() {
+    let display_ok = if ziqa_kernel::drivers::virtio_gpu::init_display() {
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::drivers::virtio_gpu::gpu_ipc_listener,
             core::ptr::null(),
         );
         crate::println!(" ~ VirtIO GPU display ................... ready");
-        compositor_display = true;
         true
     } else if ziqa_kernel::drivers::framebuffer::is_bga_available()
         || ziqa_kernel::drivers::framebuffer::init_bga()
@@ -88,16 +86,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
         false
     };
-    if compositor_display {
-        // Compositor owns only a working VirtIO GPU framebuffer.  When the
-        // display is the BGA framebuffer, keep the framebuffer console active
-        // so the QEMU GUI window remains an interactive shell.
-        ziqa_kernel::process::scheduler::spawn_kthread(
-            ziqa_kernel::userspace::compositor::compositor_main,
-            core::ptr::null(),
-        );
-        ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
-    }
     set_fg(Color::White);
 
     // 4. Verification/Demos
@@ -109,6 +97,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // preempted by the timer into a newly-spawned process.
     run_startup();
 
+    if display_ok {
+        ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
+        ziqa_kernel::process::scheduler::spawn_kthread(
+            ziqa_kernel::userspace::orbital_desktop::orbital_desktop_main,
+            core::ptr::null(),
+        );
+    }
+
+    ziqa_kernel::process::scheduler::enable_preemption();
     ziqa_kernel::shell::start();
 }
 
@@ -186,6 +183,13 @@ fn init_services() {
             "/bin/keyboard_driver",
             Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
                 "../userspace/keyboard_driver.elf"
+            )))),
+        );
+        // Demo client userspace GUI application
+        vfs.mount(
+            "/bin/demo_client",
+            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                "../userspace/demo_client.elf"
             )))),
         );
         // Verification script
@@ -300,13 +304,21 @@ fn run_startup() {
     let binary = include_bytes!("../assets/test_elf.bin");
     ziqa_kernel::process::scheduler::spawn_elf(binary);
 
-    // Spawn built-in compositor demo client (kernel thread)
+    // Spawn built-in compositor demo client (userspace ELF process)
     #[cfg(feature = "games")]
     {
-        ziqa_kernel::process::scheduler::spawn_kthread(
-            ziqa_kernel::userspace::demo_client::demo_client_main,
-            core::ptr::null(),
-        );
+        let client_bin = include_bytes!("../userspace/demo_client.elf");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(client_bin) {
+            ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                let full = ziqa_kernel::capability::Permissions::full();
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
+                proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
+            });
+            println!(" ✓ Userspace GUI Demo Client spawned (PID={})", pid.0);
+        } else {
+            println!(" ✗ Failed to spawn userspace GUI Demo Client");
+        }
     }
 
     // Spawn verification log dumper

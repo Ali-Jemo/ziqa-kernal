@@ -1,6 +1,11 @@
 use std::process::Command;
 
 fn main() {
+    // Decompress assets/orbital.elf.lz4 to assets/orbital.elf
+    let compressed = std::fs::read("assets/orbital.elf.lz4").expect("Missing assets/orbital.elf.lz4");
+    if let Ok(decompressed) = lz4_flex::decompress_size_prepended(&compressed) {
+        std::fs::write("assets/orbital.elf", decompressed).expect("Failed to write assets/orbital.elf");
+    }
     // Check if zig-hotpaths feature is enabled
     let link_zig = std::env::var("CARGO_FEATURE_ZIG_HOTPATHS").is_ok();
 
