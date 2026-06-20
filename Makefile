@@ -73,8 +73,8 @@ inc:
 
 # Boot image
 boot-gui:
-	cargo build --release --bin ziqa-kernel --features "skip-self-tests orbital"
-	cargo bootimage --release --features "skip-self-tests orbital"
+	cargo build --release --bin ziqa-kernel --features "skip-self-tests"
+	cargo bootimage --release --features "skip-self-tests"
 
 boot: build
 	cargo bootimage
