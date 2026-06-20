@@ -136,7 +136,6 @@ extern "C" {
         gravity: i16,
     ) -> u32;
 
-    pub fn zig_demo_client_main();
 }
 
 /// Native Axiq-IQ Syscall Entry Point (for Zig/C FFI)

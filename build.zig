@@ -32,17 +32,6 @@ pub fn build(b: *std.Build) void {
     libkernelops.root_module.pic = true;
     b.installArtifact(libkernelops);
 
-    const libdemoclient = b.addLibrary(.{
-        .name = "democlient",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zig/demo_client.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    libdemoclient.root_module.pic = true;
-    b.installArtifact(libdemoclient);
 
     // ── doom.elf (standalone test binary) ─────────────────────────────────
     // When linking with doomgeneric C code, compile doom_port.zig as an

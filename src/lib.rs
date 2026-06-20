@@ -19,7 +19,6 @@ pub mod io;
 pub mod ipc;
 pub mod klog;
 pub mod memory;
-pub mod perf;
 pub mod process;
 pub mod sync;
 pub mod timer;

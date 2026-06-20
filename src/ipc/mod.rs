@@ -5,7 +5,6 @@
 pub mod shm;
 pub mod signal;
 pub mod gui;
-pub mod driver;
 
 use crate::process::Pid;
 use spin::{Mutex, RwLock};

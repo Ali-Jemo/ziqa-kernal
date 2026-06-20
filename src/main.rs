@@ -13,8 +13,6 @@ use ziqa_kernel::fs::vfs::VFS;
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::println;
-mod orbital_test;
-mod ziqa_orbclient;
 
 extern crate alloc;
 
@@ -297,10 +295,6 @@ fn run_startup() {
     section("Startup");
     set_fg(Color::LightGreen);
 
-    ziqa_kernel::process::scheduler::spawn_kthread(
-        |_| ziqa_kernel::drivers::mouse_server::run_mouse_server(1),
-        core::ptr::null(),
-    );
 
     // Spawn the built-in test ELF as a user process
     let binary = include_bytes!("../assets/test_elf.bin");

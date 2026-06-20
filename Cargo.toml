@@ -11,7 +11,6 @@ shell = ["vfs"]
 vfs = []
 ziqafs = ["vfs"]
 fat32 = ["vfs"]
-fatfs-crate = ["dep:fatfs"]
 net = ["dep:smoltcp"]
 ebpf = []
 drm = []
@@ -32,12 +31,10 @@ pic8259 = { version = "0.10.1", optional = true }
 spin = "0.9.8"
 uart_16550 = { version = "0.3.0", optional = true }
 volatile = "0.2.7"
-embedded-cli = "0.2.1"
 x86_64 = { version = "0.14.12", features = ["nightly", "instructions"], optional = true }
 smoltcp = { version = "0.11", optional = true, default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-icmp", "socket-dns", "socket-dhcpv4", "alloc"] }
 pci_types = "0.10"
 acpi = { version = "4.0", default-features = false }
-fatfs = { version = "0.3.6", optional = true, default-features = false, features = ["alloc", "core_io"] }
 virtio-drivers = { version = "0.7.1", default-features = false, features = ["alloc"] }
 lz4_flex = { version = "0.11.6", default-features = false }
 libm = { version = "0.2.16", default-features = false }

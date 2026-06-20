@@ -52,7 +52,6 @@ fat-disk:
 	mkfs.vfat --offset=2048 -F 32 disk.img
 	mkdir -p fat-root/bin
 	cp assets/orbital.elf fat-root/bin/ 2>/dev/null || true
-	cp userspace/orbital_test.rs fat-root/bin/ || true
 	echo 'Hello from host FAT32 disk' > fat-root/README.TXT
 	mcopy -i disk.img@@1M -s fat-root/* ::/ 2>/dev/null || true
 	rm -rf fat-root
@@ -74,8 +73,8 @@ inc:
 
 # Boot image
 boot-gui:
-	cargo build --release --bin ziqa-kernel --features skip-self-tests
-	cargo bootimage --release --features skip-self-tests
+	cargo build --release --bin ziqa-kernel --features "skip-self-tests orbital"
+	cargo bootimage --release --features "skip-self-tests orbital"
 
 boot: build
 	cargo bootimage

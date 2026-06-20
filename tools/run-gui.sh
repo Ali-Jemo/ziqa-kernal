@@ -55,6 +55,7 @@ qemu-system-x86_64 \
     -drive format=raw,file="$BOOTIMAGE" \
     -drive file="$DISK",if=none,format=raw,id=hdr0 \
     -device virtio-blk-pci,drive=hdr0 \
+    -device virtio-gpu-pci \
     -m 512M \
     -monitor none \
     -serial stdio \
