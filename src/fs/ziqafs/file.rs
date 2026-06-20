@@ -1,8 +1,8 @@
 //! File read, write, truncate, copy, and disk-usage for ZiqaFS.
 
-use super::block::{free_data_block, read_block, write_block};
+use super::block::{read_block, write_block};
 use super::dir::{dir_add_entry, lookup_in_dir};
-use super::inode::{alloc_inode, free_inode_blocks, inode_alloc_block, inode_get_block, read_inode, write_inode};
+use super::inode::{alloc_inode, free_inode_blocks, inode_get_block, read_inode, write_inode};
 use super::types::*;
 use crate::abi::AbiError;
 use crate::drivers::block::BlockDevice;
@@ -36,7 +36,7 @@ pub fn read_file(
     while done < to_read {
         let logical = (offset + done) as u32 / BLOCK_SIZE as u32;
         let block_off = (offset + done) % BLOCK_SIZE;
-        let phys = inode_get_block(device, &inode, logical)?;
+        let (phys, _cs) = inode_get_block(device, &inode, logical)?;
         if phys == 0 {
             break;
         }
@@ -66,16 +66,23 @@ pub fn write_file(
     while done < buf.len() {
         let logical = (offset + done) as u32 / BLOCK_SIZE as u32;
         let block_off = (offset + done) % BLOCK_SIZE;
-        let phys = inode_alloc_block(device, sb, &mut inode, logical)?;
+        let (old_phys, _old_cs) = super::inode::inode_get_block(device, &inode, logical)?;
         let mut block_buf = [0u8; BLOCK_SIZE];
-        if block_off > 0 || done + BLOCK_SIZE > buf.len() {
-            // ARCH: [file→block] CS-12 write_file reads the existing data block before a
-            //       partial-block write (read-modify-write to preserve unwritten bytes).
-            read_block(device, phys, &mut block_buf)?;
+        if old_phys != 0 {
+            if block_off > 0 || done + BLOCK_SIZE > buf.len() {
+            read_block(device, old_phys, &mut block_buf)?;
+            }
         }
         let chunk = (BLOCK_SIZE - block_off).min(buf.len() - done);
         block_buf[block_off..block_off + chunk].copy_from_slice(&buf[done..done + chunk]);
-        write_block(device, phys, &block_buf)?;
+        
+        let new_phys = super::block::alloc_data_block(device, sb)?;
+        write_block(device, new_phys, &block_buf)?;
+        super::inode::inode_set_block(device, sb, &mut inode, logical, new_phys, 0)?;
+        
+        if old_phys != 0 && old_phys != new_phys {
+            super::block::free_data_block(device, sb, old_phys)?;
+        }
         done += chunk;
     }
     let new_size = (offset + buf.len()).max(inode.size as usize);
@@ -99,11 +106,12 @@ pub fn truncate(
     let old_blocks = (inode.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
     let new_blocks = (new_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for logical in (new_blocks as u32)..(old_blocks as u32) {
-        let phys = inode_get_block(device, &inode, logical)?;
+        let (phys, _cs) = inode_get_block(device, &inode, logical)?;
         if phys != 0 {
-            free_data_block(device, sb, phys)?;
+            let mut block_buf = [0u8; BLOCK_SIZE];
+            read_block(device, phys, &mut block_buf)?;
             if logical < 10 {
-                inode.blocks[logical as usize] = 0;
+                write_block(device, phys, &block_buf)?;
             } else {
                 let idx = (logical - 10) as usize;
                 if idx < BLOCK_SIZE / 4 && inode.indirect != 0 {
@@ -125,7 +133,7 @@ pub fn truncate(
     }
     if new_size > 0 && new_size % BLOCK_SIZE != 0 {
         let last_logical = (new_size - 1) as u32 / BLOCK_SIZE as u32;
-        let phys = inode_get_block(device, &inode, last_logical)?;
+        let (phys, _cs) = inode_get_block(device, &inode, last_logical)?;
         if phys != 0 {
             let mut block_buf = [0u8; BLOCK_SIZE];
             // ARCH: [file→block] CS-14 truncate reads the last data block to zero the tail
@@ -198,31 +206,36 @@ pub fn unlink(
     let total_dir_blocks = (parent.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
     let mut target_id = None;
     let mut found_phys = 0u32;
+    let mut last_phys = 0u32;
+    let mut last_buf = [0u8; BLOCK_SIZE];
     for logical in 0..total_dir_blocks as u32 {
-        let phys = inode_get_block(device, &parent, logical)?;
+        let (phys, _cs) = inode_get_block(device, &parent, logical)?;
         if phys == 0 {
             continue;
         }
-        let mut buf = [0u8; BLOCK_SIZE];
-        // ARCH: [file→block] CS-15 unlink scans parent directory blocks to locate the target
-        //       entry. Reads each data block of the directory inode in logical order.
-        read_block(device, phys, &mut buf)?;
-        if let Some(id) = super::dir::find_entry(&buf, BLOCK_SIZE as u32, name) {
+        
+        if phys != last_phys {
+            read_block(device, phys, &mut last_buf)?;
+            last_phys = phys;
+        }
+        
+        if let Some(id) = super::dir::find_entry(&last_buf, BLOCK_SIZE as u32, name) {
             target_id = Some(id);
             found_phys = phys;
-            break;
         }
     }
     let target_id = target_id.ok_or(AbiError::Other("File not found"))?;
     let mut target_inode = read_inode(device, target_id)?;
     target_inode.nlink = target_inode.nlink.saturating_sub(1);
     target_inode.ctime = crate::timer::TIMER.lock().uptime_secs() as u32;
-    let mut buf = [0u8; BLOCK_SIZE];
-    // ARCH: [file→block] CS-16 unlink re-reads the found directory block to remove the entry.
-    //       Separate read from CS-15 because found_phys may differ from the last scanned block.
-    read_block(device, found_phys, &mut buf)?;
-    super::dir::remove_entry_raw(&mut buf, BLOCK_SIZE as u32, target_id);
-    write_block(device, found_phys, &buf)?;
+
+    // Use last_buf if found_phys == last_phys
+    if found_phys != last_phys {
+        read_block(device, found_phys, &mut last_buf)?;
+    }
+    
+    super::dir::remove_entry_raw(&mut last_buf, BLOCK_SIZE as u32, target_id);
+    write_block(device, found_phys, &last_buf)?;
     if target_inode.nlink == 0 {
         free_inode_blocks(device, sb, &target_inode)?;
         super::inode::free_inode(device, sb, target_id)?;
@@ -250,15 +263,15 @@ pub fn rename(
     let total_blocks = (src_inode_obj.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for logical in 0..total_blocks as u32 {
         let phys = inode_get_block(device, &src_inode_obj, logical)?;
-        if phys == 0 {
+        if phys.0 == 0 {
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
         // ARCH: [file→block] CS-17 rename scans source-parent directory blocks to find and
         //       remove the old entry before inserting it under the new name/parent.
-        read_block(device, phys, &mut buf)?;
+        read_block(device, phys.0, &mut buf)?;
         if super::dir::remove_entry_raw(&mut buf, BLOCK_SIZE as u32, target_id) {
-            write_block(device, phys, &buf)?;
+        write_block(device, phys.0, &buf)?;
             break;
         }
     }
@@ -306,11 +319,11 @@ pub fn read_dir(
     let mut entries = Vec::new();
     for logical in 0..total_blocks as u32 {
         let phys = inode_get_block(device, &inode, logical)?;
-        if phys == 0 {
+        if phys.0 == 0 {
             continue;
         }
         let mut buf = [0u8; BLOCK_SIZE];
-        read_block(device, phys, &mut buf)?;
+        read_block(device, phys.0, &mut buf)?;
         super::dir::dirent_foreach(&buf, BLOCK_SIZE as u32, |eid, ename| {
             if ename != "." && ename != ".." {
                 entries.push((String::from(ename), eid));
@@ -356,13 +369,13 @@ pub fn copy_file(
     let total_logical = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for logical in 0..total_logical as u32 {
         let src_phys = inode_get_block(device, &src_inode, logical)?;
-        if src_phys == 0 {
+        if src_phys.0 == 0 {
             continue;
         }
         let mut block_buf = [0u8; BLOCK_SIZE];
         // ARCH: [file→block] CS-18 copy_file reads each source data block and writes it to
         //       the new inode via write_file. Block-by-block copy; no shared buffer aliasing.
-        read_block(device, src_phys, &mut block_buf)?;
+        read_block(device, src_phys.0, &mut block_buf)?;
         let write_len =
             if logical as usize == total_logical.saturating_sub(1) && size % BLOCK_SIZE != 0 {
                 size % BLOCK_SIZE

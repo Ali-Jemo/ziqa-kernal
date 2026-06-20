@@ -202,8 +202,12 @@ pub fn init_bga() -> bool {
         
         let (phys_addr, is_io) = crate::drivers::pci::bar_address(device.bars[0]);
         if is_io || phys_addr == 0 {
-            crate::println!("[BGA] Invalid BAR0 address");
+            crate::println!("[BGA] Error: Invalid BAR0 address (io={}, addr={:#X})", is_io, phys_addr);
             return false;
+        }
+
+        if phys_addr < 0x1000000 {
+            crate::println!("[BGA] Warning: BAR0 address {:#X} is very low, possible clobber risk!", phys_addr);
         }
         
         let width = 1024u32;
@@ -218,8 +222,7 @@ pub fn init_bga() -> bool {
         
         let virt_addr = crate::memory::paging::phys_offset().as_u64() + phys_addr;
         
-        crate::println!("[BGA] Framebuffer configured at phys {:#X}, virt {:#X} ({}x{} @ {}bpp)", 
-            phys_addr, virt_addr, width, height, bpp);
+        crate::println!("[BGA] Framebuffer configured at phys {:#X}, virt {:#X}", phys_addr, virt_addr);
             
         let fb_size_bytes = width * height * 4;
         let page_size = 4096u64;
@@ -244,7 +247,7 @@ pub fn init_bga() -> bool {
                         flusher.flush();
                     }
                 }
-                crate::println!("[BGA] Mapped {} pages for framebuffer", pages_count);
+                crate::println!("[BGA] Mapped {} pages ({} MB)", pages_count, fb_size_bytes / (1024*1024));
             }
         }
         

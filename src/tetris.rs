@@ -425,6 +425,11 @@ pub fn run() {
         let mut key_buf = [0u8; 1];
 
         // ── Keyboard input ─────────────────────────────────────────────────
+        if crate::drivers::keyboard::check_and_clear_interrupt() {
+            println!("^C");
+            break;
+        }
+
         if crate::drivers::keyboard::read_stdin(&mut key_buf) > 0 {
             let key = key_buf[0];
             if key == b'q' || key == b'Q' { break; }

@@ -3,7 +3,7 @@ use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use x86_64::structures::paging::PageTableFlags;
+use x86_64::structures::paging::{PageTableFlags, FrameAllocator, Mapper};
 use crate::abi::syscall::abi_error_to_errno;
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -171,8 +171,10 @@ extern "x86-interrupt" fn page_fault_handler(
     }
     
     let handled = crate::process::scheduler::with_current_task(|proc| {
-        let access_flags = if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
-             PageTableFlags::WRITABLE 
+        // Bit 1 in page-fault error code = write access
+        let is_write = (error_code.bits() & 2) != 0;
+        let access_flags = if is_write {
+            PageTableFlags::WRITABLE
         } else {
             PageTableFlags::empty()
         };
@@ -188,23 +190,15 @@ extern "x86-interrupt" fn page_fault_handler(
             return false;
         }
 
-        let pt_frame = match proc.page_table_frame {
-            Some(f) => f,
-            None => return false,
-        };
+        let vma_flags = &vma.flags;
+        let page_flags = crate::memory::paging::region_flags_to_page_flags(vma_flags);
 
-        // Handle COW fault
-        if vma.flags.copy_on_write && access_flags.contains(PageTableFlags::WRITABLE) {
-            return crate::memory::paging::handle_cow_fault(pt_frame, fault_addr);
-        }
-
-        // Demand page with binary data copying if applicable
         let page_addr = fault_addr.align_down(4096u64);
         let page_offset_in_vma = page_addr.as_u64() - vma.start.as_u64();
-        
+
         let mut temp_buf = [0u8; 4096];
         let mut init_data = None;
-        
+
         if !proc.binary_data.is_empty() && page_offset_in_vma < vma.file_size {
             let binary_offset = (vma.file_offset + page_offset_in_vma) as usize;
             let copy_len = (vma.file_size - page_offset_in_vma).min(4096) as usize;
@@ -216,8 +210,64 @@ extern "x86-interrupt" fn page_fault_handler(
             }
         }
 
-        let page_flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
-        crate::memory::paging::demand_page_for_frame(pt_frame, fault_addr, page_flags, init_data)
+        match proc.page_table_frame {
+            Some(pt_frame) => {
+                crate::memory::paging::demand_page_for_frame(pt_frame, fault_addr, page_flags, init_data)
+            }
+            None => {
+                // No per-process page table — share kernel page table directly.
+                // Must replace the kernel identity mapping at this address with a
+                // user-accessible page containing the ELF segment data.
+                let new_frame = {
+                    let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+                    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+                    fa.allocate_frame()
+                };
+                let new_frame = match new_frame {
+                    Some(f) => f,
+                    None => return false,
+                };
+                let po = crate::memory::paging::phys_offset();
+                let frame_ptr = (po + new_frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                unsafe {
+                    if let Some(data) = init_data {
+                        let len = data.len().min(4096);
+                        core::ptr::copy_nonoverlapping(data.as_ptr(), frame_ptr, len);
+                        if len < 4096 {
+                            core::ptr::write_bytes(frame_ptr.add(len), 0, 4096 - len);
+                        }
+                    } else {
+                        core::ptr::write_bytes(frame_ptr, 0, 4096);
+                    }
+                }
+                let page = x86_64::structures::paging::Page::<x86_64::structures::paging::Size4KiB>::containing_address(fault_addr);
+                let mut mapper = unsafe { crate::memory::paging::current_mapper() };
+                let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+                let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+                // Use map_to which creates intermediate page tables as needed
+                match unsafe { mapper.map_to(page, new_frame, page_flags, fa) } {
+                    Ok(flusher) => { flusher.flush(); true }
+                    Err(x86_64::structures::paging::mapper::MapToError::PageAlreadyMapped(_)) => {
+                        // Page already present (e.g. kernel identity map). Unmap then remap.
+                        unsafe {
+                            match mapper.unmap(page) {
+                                Ok((_old_frame, flusher)) => {
+                                    flusher.flush();
+                                    let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
+                                    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
+                                    match mapper.map_to(page, new_frame, page_flags, fa) {
+                                        Ok(f) => { f.flush(); true }
+                                        Err(_) => false,
+                                    }
+                                }
+                                Err(_) => false,
+                            }
+                        }
+                    }
+                    Err(_) => false,
+                }
+            }
+        }
     }).unwrap_or(false);
 
     if handled {

@@ -74,6 +74,8 @@ pub fn abi_error_to_errno(e: &crate::abi::AbiError) -> u64 {
                 errno::EPIPE
             } else if s.contains("ENOSYS") {
                 errno::ENOSYS
+            } else if s.contains("EAGAIN") {
+                errno::EAGAIN
             } else {
                 // Default to EPERM if we don't recognize the string
                 errno::EPERM
@@ -248,6 +250,7 @@ pub mod errno {
     pub const EMLINK: u64 = 31;
     pub const EPIPE: u64 = 32;
     pub const ENOSYS: u64 = 38;
+    pub const EAGAIN: u64 = 11;
 }
 
 /// Check if a process has the required capability for a kernel syscall.

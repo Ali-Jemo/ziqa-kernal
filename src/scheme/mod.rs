@@ -100,8 +100,10 @@ pub fn init() {
     registry.register("event", Box::new(EventScheme::new()));
     registry.register("serio", Box::new(SerioScheme::new()));
     registry.register("user", Box::new(UserScheme::new()));
+    registry.register("", Box::new(UserScheme::new()));
     registry.register("sys", Box::new(SysScheme::new()));
     registry.register("display_v2", Box::new(OrbitalBridge::new()));
+    registry.register("display", Box::new(OrbitalBridge::new()));
     registry.register("input", Box::new(OrbitalBridge::new()));
     // Log registered schemes
     crate::klog!(crate::klog::Level::Info, "init: ZiqaScheme registry initialized");

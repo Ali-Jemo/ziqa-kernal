@@ -384,6 +384,8 @@ pub struct Fat32File {
     entry_cluster: u32,
     /// Byte offset of the directory entry within entry_cluster.
     entry_offset: usize,
+    /// Cached cluster chain.
+    cluster_chain: Mutex<Option<Vec<u32>>>,
 }
 
 impl Fat32File {
@@ -403,6 +405,7 @@ impl Fat32File {
             bpb,
             entry_cluster,
             entry_offset,
+            cluster_chain: Mutex::new(None),
         }
     }
 }
@@ -420,31 +423,20 @@ impl File for Fat32File {
             return Ok(0);
         }
 
+        let mut cluster = self.start_cluster;
+        let mut bytes_to_skip = offset;
         let bytes_per_cluster =
             (self.bpb.sectors_per_cluster as usize) * (self.bpb.bytes_per_sector as usize);
-
-        // Determine which cluster in the chain the offset falls into
-        let cluster_index = offset / bytes_per_cluster;
-        let offset_in_cluster = offset % bytes_per_cluster;
-
-        // Walk the cluster chain to the target cluster
-        let chain = if self.start_cluster == 0 {
-            Vec::new()
-        } else {
-            collect_cluster_chain(&*self.disk, &self.bpb, self.start_cluster)
-        };
-        if cluster_index >= chain.len() {
-            return Ok(0);
+        while bytes_to_skip >= bytes_per_cluster {
+            cluster = follow_cluster_chain(&*self.disk, &self.bpb, cluster).ok_or_else(|| AbiError::Other("FAT32 chain read error"))?;
+            bytes_to_skip -= bytes_per_cluster;
         }
 
         let mut bytes_copied = 0;
-        let mut chain_idx = cluster_index;
-        let mut intra_offset = offset_in_cluster;
-
+        let mut intra_offset = bytes_to_skip;
         let mut cluster_buf = vec![0u8; bytes_per_cluster];
 
-        while bytes_copied < to_read && chain_idx < chain.len() {
-            let cluster = chain[chain_idx];
+        while bytes_copied < to_read {
             let sector = self.bpb.cluster_to_sector(cluster);
 
             self.disk
@@ -463,8 +455,10 @@ impl File for Fat32File {
                 .copy_from_slice(&cluster_buf[copy_from..copy_from + copy_len]);
 
             bytes_copied += copy_len;
-            chain_idx += 1;
-            intra_offset = 0; // subsequent clusters start at offset 0
+            if bytes_copied < to_read {
+                cluster = follow_cluster_chain(&*self.disk, &self.bpb, cluster).ok_or_else(|| AbiError::Other("FAT32 chain read error"))?;
+            }
+            intra_offset = 0;
         }
 
         Ok(bytes_copied)
@@ -572,6 +566,7 @@ impl File for Fat32File {
             self.file_size = new_size;
         }
 
+        *self.cluster_chain.lock() = None;
         Ok(bytes_written)
     }
 
@@ -1153,6 +1148,7 @@ pub fn create_file_on_disk(path: &str) -> Result<Fat32File, &'static str> {
         bpb: fs.bpb,
         entry_cluster: slot.cluster,
         entry_offset: slot.offset,
+        cluster_chain: Mutex::new(None),
     };
 
     crate::println!("DEBUG create_file_on_disk: fat_file.bpb.bytes_per_sector={}, fat_file.bpb.sectors_per_cluster={}", fat_file.bpb.bytes_per_sector, fat_file.bpb.sectors_per_cluster);

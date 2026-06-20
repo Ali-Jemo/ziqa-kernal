@@ -1,5 +1,6 @@
-//! VFS adapter and mount integration for ZiqaFS.
+/// VFS adapter and mount integration for ZiqaFS.
 
+use crate::capability::{CapabilityToken, CapabilityId, ResourceKind, Permissions};
 use super::file::read_dir;
 use super::inode::read_inode;
 use super::types::*;
@@ -16,6 +17,7 @@ pub struct ZiqaFsFile {
     pub fs: Arc<spin::Mutex<ZiqaFs>>,
     pub inode_id: u32,
     pub inode: Inode,
+    pub cap: CapabilityToken,
 }
 
 impl File for ZiqaFsFile {
@@ -94,14 +96,13 @@ pub fn mount_into_vfs(fs: &Arc<spin::Mutex<ZiqaFs>>) {
             read_inode(&*fs_lock.device, *inode_id)
         };
         if let Ok(inode) = inode {
-            vfs.mount(
-                path,
-                Arc::new(Mutex::new(ZiqaFsFile {
-                    fs: fs.clone(),
-                    inode_id: *inode_id,
-                    inode,
-                })),
-            );
+            let file = ZiqaFsFile {
+                fs: fs.clone(),
+                inode_id: *inode_id,
+                inode,
+                cap: CapabilityToken::new(CapabilityId(0), None, ResourceKind::ZiqaFsMount, Permissions::full(), 0),
+            };
+            vfs.mount(path, Arc::new(Mutex::new(file)));
         }
     }
     let root_inode = {
@@ -109,14 +110,13 @@ pub fn mount_into_vfs(fs: &Arc<spin::Mutex<ZiqaFs>>) {
         read_inode(&*fs_lock.device, ROOT_INODE)
     };
     if let Ok(inode) = root_inode {
-        vfs.mount(
-            "/disk",
-            Arc::new(Mutex::new(ZiqaFsFile {
-                fs: fs.clone(),
-                inode_id: ROOT_INODE,
-                inode,
-            })),
-        );
+        let file = ZiqaFsFile {
+            fs: fs.clone(),
+            inode_id: ROOT_INODE,
+            inode,
+            cap: CapabilityToken::new(CapabilityId(0), None, ResourceKind::ZiqaFsMount, Permissions::full(), 0),
+        };
+        vfs.mount("/disk", Arc::new(Mutex::new(file)));
         vfs.mkdir("/disk");
     }
     *ZIQAFS.lock() = Some(fs.clone());

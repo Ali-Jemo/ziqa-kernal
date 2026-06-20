@@ -21,20 +21,25 @@ build:
 release:
 	cargo build --release --bin ziqa-kernel
 
+# Kill any leftover QEMU from interrupted runs (avoids "Failed to get write lock")
+kill-qemu:
+	-pkill -9 qemu-system-x86_64 2>/dev/null; sleep 0.5; true
+
 # Run on QEMU (headless)
-run: boot disk.img
+run: kill-qemu boot disk.img
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
-# Run on QEMU with graphical display and interactive serial terminal.
-run-gui: boot-gui disk.img
-	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -monitor none -serial stdio -display gtk -device virtio-net-pci,netdev=net0 -netdev user,id=net0
+# Run with graphical display AND interactive serial in THIS terminal.
+# Uses TCP serial + socat to avoid Wayland/GTK keyboard-grab issues.
+run-gui: kill-qemu
+	./tools/run-gui.sh
 
-# Run headless with terminal-only I/O.
-run-headless: boot-gui disk.img
+# Run headless with terminal-only I/O (debug build).
+run-headless: kill-qemu boot-gui disk.img
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -serial stdio -display none -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
 # Run with terminal I/O AND graphical display via VNC (connect with 'vncviewer :0')
-run-vnc: boot-gui disk.img
+run-vnc: kill-qemu boot-gui disk.img
 	qemu-system-x86_64 -drive format=raw,file=$(BOOT_IMAGE_RELEASE) -drive file=disk.img,if=none,format=raw,id=hdr0 -device virtio-blk-pci,drive=hdr0 -m 512M -monitor none -serial stdio -vnc :0 -device virtio-net-pci,netdev=net0 -netdev user,id=net0
 
 # Build the FAT32 disk image with orbital.elf and development files.
@@ -47,6 +52,7 @@ fat-disk:
 	mkfs.vfat --offset=2048 -F 32 disk.img
 	mkdir -p fat-root/bin
 	cp assets/orbital.elf fat-root/bin/ 2>/dev/null || true
+	cp userspace/orbital_test.rs fat-root/bin/ || true
 	echo 'Hello from host FAT32 disk' > fat-root/README.TXT
 	mcopy -i disk.img@@1M -s fat-root/* ::/ 2>/dev/null || true
 	rm -rf fat-root

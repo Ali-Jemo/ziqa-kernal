@@ -10,6 +10,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::{Mutex, RwLock};
 use crate::abi::AbiPlugin;
 
+pub static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
+
 /// The global process table, allowing concurrent access to different processes.
 pub struct GlobalProcessTable {
     pub tasks: BTreeMap<Pid, Arc<Mutex<Process>>>,
@@ -32,17 +34,20 @@ use alloc::collections::BTreeSet;
 /// Ready queue for DWRR scheduler (CFS-style vruntime).
 pub struct ReadySet {
     queues: BTreeSet<(u64, Pid)>,
+    counter: u64,
 }
 
 impl ReadySet {
     pub const fn new() -> Self {
         Self {
             queues: BTreeSet::new(),
+            counter: 0,
         }
     }
 
-    pub fn push(&mut self, pid: Pid, vruntime: u64) {
-        self.queues.insert((vruntime, pid));
+    pub fn push(&mut self, pid: Pid, _vruntime: u64) {
+        self.counter += 1;
+        self.queues.insert((self.counter, pid));
     }
 
     pub fn pop_lowest(&mut self) -> Option<Pid> {
@@ -610,8 +615,9 @@ impl Scheduler {
                     continue;
                 }
             };
-
             self.set_current_pid(Some(new_pid));
+            #[cfg(debug_assertions)]
+            crate::println!("[Scheduler] Switch to PID {}", new_pid.0);
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
 
@@ -627,14 +633,25 @@ impl Scheduler {
                 old_proc.fs_base = fs;
                 old_proc.gs_base = gs;
             }
-
-            let new_cr3 = {
+            let (new_cr3, new_sp, new_kstack_top) = {
                 let mut new_proc = new_proc_arc.lock();
                 new_proc.state = ProcessState::Running;
-                new_proc.page_table_frame
+                
+                let cr3 = if new_proc.abi == AbiKind::ZiqaNative && new_proc.page_table_frame.is_none() {
+                    let phys_addr = KERNEL_CR3.load(Ordering::SeqCst);
+                    if phys_addr != 0 {
+                        Some(x86_64::structures::paging::PhysFrame::containing_address(
+                            x86_64::PhysAddr::new(phys_addr)
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    new_proc.page_table_frame
+                };
+                
+                (cr3, new_proc.kernel_stack_ptr, new_proc.kernel_stack_top)
             };
-            let new_kstack_top = new_proc_arc.lock().kernel_stack_top;
-            let new_sp = new_proc_arc.lock().kernel_stack_ptr;
 
             // Load FS/GS base of the new process
             #[cfg(target_arch = "x86_64")]
@@ -659,15 +676,19 @@ impl Scheduler {
                     let mut old_proc = old_arc.lock();
                     if old_proc.state == ProcessState::Running {
                         old_proc.state = ProcessState::Ready;
+                        old_proc.vruntime += 1;
                         self.ready_queues.lock().push(old_proc.pid, old_proc.vruntime);
                     }
                     &mut old_proc.kernel_stack_ptr as *mut u64
                 };
                 unsafe {
+                    let mut old_proc = old_arc.lock();
+                    crate::arch::save_fpu(&mut old_proc.fpu_state as *mut _);
                     crate::arch::switch_context(
                         old_sp_ptr,
                         new_sp,
                     );
+                    crate::arch::restore_fpu(&new_proc_arc.lock().fpu_state as *const _);
                 }
             } else {
                 let mut dummy: u64 = 0;
@@ -676,6 +697,7 @@ impl Scheduler {
                         &mut dummy as *mut u64,
                         new_sp,
                     );
+                    crate::arch::restore_fpu(&new_proc_arc.lock().fpu_state as *const _);
                 }
             }
             break;

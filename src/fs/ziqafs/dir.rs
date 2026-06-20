@@ -99,7 +99,7 @@ pub fn lookup_in_dir(
 ) -> Result<Option<u32>, AbiError> {
     let total_blocks = (dir_inode.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for logical in 0..total_blocks as u32 {
-        let phys = inode_get_block(device, dir_inode, logical)?;
+        let (phys, _cs) = inode_get_block(device, dir_inode, logical)?;
         if phys == 0 {
             continue;
         }
@@ -124,7 +124,7 @@ pub fn dir_add_entry(
     let mut parent = read_inode(device, parent_inode)?;
     let total_dir_blocks = (parent.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for logical in 0..total_dir_blocks as u32 {
-        let phys = inode_get_block(device, &parent, logical)?;
+        let (phys, _cs) = inode_get_block(device, &parent, logical)?;
         if phys == 0 {
             continue;
         }

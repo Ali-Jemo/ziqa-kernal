@@ -28,9 +28,9 @@ impl Driver for VirtioGpuDriver {
         "VirtIO GPU"
     }
 
-    fn pci_match(&self, device: &PciDevice) -> bool {
-        // Vendor 0x1AF4 (Red Hat / VirtIO), Device 0x1050 (VirtIO GPU)
-        device.vendor_id == 0x1AF4 && device.device_id == 0x1050
+    fn pci_match(&self, _device: &PciDevice) -> bool {
+        // Temporarily disabled to debug boot hang and purple artifact
+        false
     }
 
     fn init(&self, device: &PciDevice) -> Result<(), ()> {
@@ -144,38 +144,52 @@ pub fn get_fb_info() -> Option<(u64, u32, u32, u32)> {
     crate::drivers::framebuffer::get_bga_fb_info()
 }
 
-pub fn init_display() {
-    let mut gpu_lock = VIRTIO_GPU.lock();
-    if let Some(gpu) = gpu_lock.as_mut() {
-        let mut inner = gpu.inner.lock();
-        
-        crate::println!("[VirtIO-GPU] Setting up framebuffer...");
-        match inner.setup_framebuffer() {
-            Ok(fb) => {
-                let ptr = fb.as_mut_ptr();
-                // We need unsafe to bypass the mutability rules since we are exposing the fb_ptr
-                // The underlying memory is managed by the GPU driver and won't move.
-                let gpu_mut = unsafe { &mut *(Arc::as_ptr(gpu) as *mut VirtioGpuDevice) };
-                gpu_mut.fb_ptr = ptr;
-                
-                let w = gpu.width;
-                let h = gpu.height;
-                crate::println!("[VirtIO-GPU] Framebuffer allocated at {:p} ({}x{})", ptr, w, h);
-                
-                // Also init the console
-                crate::drivers::fb_console::init(ptr, w as usize, h as usize, (w * 4) as usize);
-            }
-            Err(e) => {
-                crate::println!("[VirtIO-GPU] Failed to setup framebuffer: {:?}", e);
+pub fn init_display() -> bool {
+    let mut ptr_opt = None;
+    let mut w = 0;
+    let mut h = 0;
+
+    {
+        let mut gpu_lock = VIRTIO_GPU.lock();
+        if let Some(gpu) = gpu_lock.as_mut() {
+            let mut inner = gpu.inner.lock();
+            
+            match inner.setup_framebuffer() {
+                Ok(fb) => {
+                    let ptr = fb.as_mut_ptr();
+                    let gpu_mut = unsafe { &mut *(Arc::as_ptr(gpu) as *mut VirtioGpuDevice) };
+                    gpu_mut.fb_ptr = ptr;
+                    
+                    ptr_opt = Some(ptr);
+                    w = gpu.width;
+                    h = gpu.height;
+                }
+                Err(_e) => {
+                    ptr_opt = None;
+                }
             }
         }
+    }
+
+    if let Some(ptr) = ptr_opt {
+        crate::println!("[VirtIO-GPU] Framebuffer allocated at {:p} ({}x{})", ptr, w, h);
+        crate::drivers::fb_console::init(ptr, w as usize, h as usize, (w * 4) as usize);
+        true
+    } else {
+        false
     }
 }
 
 pub fn flush() {
     if let Some(gpu) = VIRTIO_GPU.lock().as_ref() {
+        if gpu.fb_ptr.is_null() {
+            return;
+        }
+        // Use direct VGA print to avoid recursive deadlock with println!
+        // crate::drivers::vga::print(format_args!("[GPU] flush..."));
         let mut inner = gpu.inner.lock();
         let _ = inner.flush();
+        // crate::drivers::vga::print(format_args!("done\n"));
     }
 }
 

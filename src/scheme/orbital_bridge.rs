@@ -104,8 +104,12 @@ impl Scheme for OrbitalBridge {
     fn open(&self, path: &str, _flags: usize) -> SchemeResult<usize> {
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
         
-        if path.starts_with("display_v2:") {
-            let inner = path.trim_start_matches("display_v2:");
+        if path.starts_with("display_v2:") || path.starts_with("display:") {
+            let inner = if path.starts_with("display_v2:") {
+                path.trim_start_matches("display_v2:")
+            } else {
+                path.trim_start_matches("display:")
+            };
             if let Some((title, rest)) = inner.split_once(':') {
                 let parts: Vec<&str> = rest.split(',').collect();
                 if parts.len() >= 4 {
@@ -149,9 +153,10 @@ impl Scheme for OrbitalBridge {
             }
         }
 
-        // Try keyboard first
+        // Use the separate Orbital input buffer so we don't consume
+        // events before the kernel shell (read_stdin / INPUT_BUF) sees them.
         let mut key_buf = [0u8; 4];
-        let n = crate::drivers::keyboard::read_stdin(&mut key_buf);
+        let n = crate::drivers::keyboard::read_editor_byte(&mut key_buf);
         if n > 0 {
             events_slice[0] = Event {
                 id: 0, // Keyboard

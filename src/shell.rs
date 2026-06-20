@@ -446,9 +446,11 @@ impl Shell {
     }
 
     pub fn run(&mut self) -> ! {
-        // Enable timer-driven preemption now that the boot initialization is complete
-        // and we are entering the shell loop.
-        crate::process::scheduler::enable_preemption();
+        // Keep timer-driven preemption disabled while the in-kernel shell owns
+        // the console.  The current scheduler can switch the shell away to
+        // boot-spawned demos/drivers for long stretches, which makes keyboard
+        // input look frozen after the first timer slice.
+        crate::process::scheduler::disable_preemption();
 
         let ms = crate::timer::uptime_ms();
         println!("\x1b[36m\x1b[1m  ⚡ ZiqaKernel v0.1 ⚡\x1b[0m");
@@ -763,16 +765,12 @@ impl Shell {
         self.input_buf = [0; 256];
         self.cursor = 0;
         loop {
-            // Re-enable pre-emption so other processes can run while we wait for input
-            if !crate::process::scheduler::preemption_enabled() {
-                crate::process::scheduler::enable_preemption();
-            }
+            // Stay on the shell context while waiting for input.  Hardware
+            // interrupts still run; only timer-driven task switching is gated.
 
             let mut byte = [0u8; 1];
             if read_stdin(&mut byte) > 0 {
                 let b = byte[0];
-                // Disable pre-emption temporarily during character processing
-                crate::process::scheduler::disable_preemption();
                 match b {
                     0x80 => { // Up arrow — history back
                         if !self.history.is_empty() {
@@ -834,7 +832,6 @@ impl Shell {
                         }
                     }
                     b'\n' | b'\r' => {
-                        crate::process::scheduler::enable_preemption();
                         self.cursor = idx;
                         if crate::drivers::vga::is_scrolled() {
                             crate::drivers::vga::restore_terminal();
@@ -843,7 +840,6 @@ impl Shell {
                         return;
                     }
                     0x03 => {
-                        crate::process::scheduler::enable_preemption();
                         self.cursor = idx;
                         println!("^C");
                         self.input_buf = [0; 256];
@@ -855,7 +851,6 @@ impl Shell {
                         self.refresh_line(idx);
                     }
                     0x04 => {
-                        crate::process::scheduler::enable_preemption();
                         println!("^D - Exiting shell");
                         return;
                     }
@@ -871,10 +866,9 @@ impl Shell {
                         }
                     }
                 }
-                crate::process::scheduler::enable_preemption();
             } else {
-                // Keep polling COM1/keyboard here. Timer pre-emption remains enabled,
-                // so background tasks still run without stealing the shell forever.
+                // Keep polling COM1 and the PS/2 controller.  Interrupts still
+                // fire, but the shell is not preempted away from its input loop.
                 core::hint::spin_loop();
             }
         }
@@ -2267,6 +2261,10 @@ impl Shell {
                     } else {
                         x86_64::instructions::nop();
                     }
+                    if crate::drivers::keyboard::check_and_clear_interrupt() {
+                        println!("^C");
+                        return 130;
+                    }
                 }
                 if !got {
                     println!("Request timeout for icmp_seq {}", seq);
@@ -2277,6 +2275,10 @@ impl Shell {
                     let wait = start + 1000;
                     while crate::timer::uptime_ms() < wait {
                         stack.poll();
+                        if crate::drivers::keyboard::check_and_clear_interrupt() {
+                            println!("^C");
+                            return 130;
+                        }
                         x86_64::instructions::hlt();
                     }
                 }

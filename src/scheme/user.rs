@@ -78,7 +78,7 @@ impl UserScheme {
 
 impl Scheme for UserScheme {
     fn open(&self, path: &str, _flags: usize) -> SchemeResult<usize> {
-        if path == "" {
+        if path.starts_with(':') {
             return Ok(usize::MAX);
         }
         self.call(PacketKind::Open, 0, 0, 0)
@@ -89,17 +89,21 @@ impl Scheme for UserScheme {
             if buf.len() < core::mem::size_of::<Packet>() {
                 return Err(crate::abi::AbiError::Other("Buffer too small for packet"));
             }
-            let packet = self.todo.receive("user_scheme_daemon_read");
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    &packet as *const _ as *const u8,
-                    buf.as_mut_ptr(),
-                    core::mem::size_of::<Packet>()
-                );
+            if let Some(packet) = self.todo.receive_nonblocking() {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        &packet as *const _ as *const u8,
+                        buf.as_mut_ptr(),
+                        core::mem::size_of::<Packet>()
+                    );
+                }
+                Ok(core::mem::size_of::<Packet>())
+            } else {
+                Err(crate::abi::AbiError::Other("EAGAIN"))
             }
-            return Ok(core::mem::size_of::<Packet>());
+        } else {
+            self.call(PacketKind::Read, id, buf.as_mut_ptr() as usize, buf.len())
         }
-        self.call(PacketKind::Read, id, buf.as_mut_ptr() as usize, buf.len())
     }
 
     fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize> {
@@ -119,5 +123,12 @@ impl Scheme for UserScheme {
             return Ok(());
         }
         self.call(PacketKind::Close, id, 0, 0).map(|_| ())
+    }
+    fn fevent(&self, id: usize, flags: usize) -> SchemeResult<usize> {
+        if id == usize::MAX && !self.todo.is_empty() {
+            Ok(flags & 1)
+        } else {
+            Ok(0)
+        }
     }
 }

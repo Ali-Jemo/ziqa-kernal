@@ -82,7 +82,7 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 | SMP / APIC | Experimental | BSP/AP setup, per-CPU data via GS.base, IPI reschedule/TLB shootdown, APIC timer calibration. |
 | ACPI / PCI | Experimental | ACPI table parsing, PCI enumeration, BAR decoding, driver matching. |
 | Memory | Experimental | Frame allocator, kernel mapper, heap, paging, per-process page tables, COW fork, VMA support. |
-| Scheduler / processes | Experimental | Process table, ready queue, kernel threads, ELF/native process launch, signal handling. |
+| Scheduler / processes | Experimental | Process table, ready queue, kernel threads, ELF/native process launch, signal handling, process snapshot save/restore with instant-on resume. |
 | VFS / schemes | Experimental | VFS mount layer, scheme registry, Redox-style schemes, RAM mounts, FAT32 read-only mount, ZiqaFS. |
 | Drivers | Experimental | VirtIO block/GPU, ATA/AHCI, NVMe, xHCI, PS/2 mouse, keyboard, framebuffer, audio, DRM. |
 | ABI / syscalls | Experimental | Linux ABI plugin, POSIX syscall surface, WASM ABI behind feature flags, eBPF VM/verifier, shell syscall inspection/probes. |
@@ -90,22 +90,24 @@ The older Graphify artifacts are also available under [`graphify-out/`](graphify
 | Userspace drivers | Skeleton | DRM and VirtIO-Net userspace driver experiments behind feature flags. |
 | Network | Experimental | smoltcp-backed TCP/UDP socket experiments behind `net` feature. |
 | Memory compression | Experimental | LZ4 page compression, compressed page store, page-fault decompression, daemon/status hooks. |
-| Snapshots | Experimental | Process snapshot save/load/resume experiments through FAT32-backed snapshot storage. |
-| Shell / demos | Functional / experimental | Foreground-safe shell, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. |
+| Snapshots | Functional / experimental | Process snapshot save/load/resume through FAT32-backed storage; instant-on resume restores full process state (registers, VMAs, FDs) at boot. |
+| Shell / demos | Functional / experimental | Foreground-safe shell, syscall inspection tools, BusyBox, DOOM/Tetris/NWM demo clients behind `games` feature, built-in utilities. QEMU GUI mode uses raw terminal serial input plus PS/2 polling. |
 
 The current boot path reaches an interactive shell in **~50ms** (QEMU/KVM):
 
 1. **Bootloader entry** calls [`kernel_main`](src/main.rs).
 2. [`ziqa_kernel::init`](src/init.rs) — memory, scheduler, PCI, drivers, APIC/SMP. Clean summary prints.
-3. [`init_subsystems`](src/main.rs) — schemes, PS/2 mouse, VFS, **42 self-tests** (41/42 pass).
-4. [`init_services`](src/main.rs) — RAM mounts, FAT32/ZiqaFS disk mount at `/fat`, keyboard driver.
-5. **Display** — VirtIO GPU or BGA framebuffer.
-6. **Shell** — prompt ready at `uptime=60ms`.
+3. [`init_subsystems`](src/main.rs) — network stack, PS/2 keyboard/mouse, and self-test gate.
+4. [`init_services`](src/main.rs) — RAM mounts, FAT32/ZiqaFS disk mount at `/fat`, block device capability grants, and startup assets.
+5. **Display** — VirtIO GPU framebuffer when available; otherwise BGA framebuffer console remains active for QEMU GTK.
+6. **Startup** — Mouse server, test ELF, keyboard driver, optional Orbital GUI, snapshot instant-on resume.
+7. **Shell** — prompt ready at `uptime=40–60ms`; foreground shell owns input without timer preemption.
 
 When a FAT32 disk is attached as virtio-blk, the kernel mounts it at `/fat` and
-exposes files via VFS. Use `spawnelf /fat/bin/orbital.elf` to launch the embedded
-Orbital compositor from disk (the 37MB `orbital.elf` is NOT embedded in the kernel
-binary to avoid bootloader overflow).
+exposes files via VFS. Orbital GUI can be loaded from `/fat/bin/orbital.elf` on disk
+or from the embedded compressed binary (behind the `orbital` feature flag).
+Process snapshots enable instant-on resume: saved process state is restored from
+FAT32-backed snapshot files at boot, skipping full re-initialization.
 
 ## Feature Map
 
@@ -113,7 +115,7 @@ binary to avoid bootloader overflow).
 
 - x86_64 paging, frame allocation, heap initialization, and kernel virtual mapping.
 - Per-process page tables, COW fork, VMA-based memory regions, and page-fault handling.
-- Process table, ready queue, kernel threads, ELF/native process launch, and signal handling.
+- Process table, ready queue, kernel threads, ELF/native process launch, signal handling, and process snapshot save/restore with instant-on resume.
 - Interrupt/exception handlers for page fault, double fault, GPF, timer, keyboard, and syscall paths.
 - SMP/APIC experiments with per-CPU data, IPIs, APIC timer, and BSP/AP coordination.
 
@@ -148,19 +150,22 @@ binary to avoid bootloader overflow).
 
 ### Shell and Runtime Diagnostics
 
-- Foreground shell owns serial input while a command line is active; scheduler preemption stays disabled during line editing and command execution to keep demo/kernel threads from stealing input.
+- Foreground shell owns serial/PS2 input while a command line is active; timer-driven scheduler preemption stays disabled in the shell so boot-spawned demos/drivers cannot steal the input loop after the first timer slice.
+- `make run-gui` forces the host terminal into raw noncanonical mode before launching QEMU with `-serial stdio`, then restores the terminal on exit. This prevents host-side line echo from masquerading as kernel input.
+- PS/2 keyboard input is polled from `read_stdin()` with IRQ1 disabled, avoiding missed or duplicated GUI keystrokes in QEMU.
 - `syscalls [filter]` lists the curated native syscall table by name, number, category, arguments, and safety.
 - `syscall <name|nr>` safely probes side-effect-free syscall state such as PID, parent PID, uptime ticks, current signal mask, and GPU channel ID. Unsafe process, IPC mutation, network, and framebuffer calls are listed but not invoked by the shell probe.
 
 ### Graphics and Userspace Experiments
 
-- Kernel-mode compositor with SHM-backed surfaces, dirty rectangles, damage tracking, and compositing.
-- Compositor IPC protocol documented in [`docs/COMPOSITOR_IPC.md`](docs/COMPOSITOR_IPC.md).
+- Kernel-mode compositor with SHM-backed surfaces, dirty rectangles, damage tracking, and compositing when a working VirtIO GPU framebuffer is present.
+- Compositor IPC protocol documented in [`conductor/docs/COMPOSITOR_IPC.md`](conductor/docs/COMPOSITOR_IPC.md).
 - NWM demo (`nwm-test`) renders an 80×25 text desktop through VGA memory and mirrors dirty cells into the active linear framebuffer so QEMU GTK shows the desktop on BGA/VirtIO display paths.
 - NWM supports desktop icons, taskbar restore/focus, start-menu launching, window maximize/restore, contextual mouse cursor shapes, and the Snake/Cube/System monitor demos.
 - Demo client and userspace display server experiments.
 - Zig blitter hot paths for framebuffer operations.
 - DOOM/Tetris/demo binaries behind the `games` feature.
+- Orbital GUI compositor loaded from FAT32 disk or embedded compressed binary, with full capability grants.
 
 ---
 
@@ -172,11 +177,13 @@ binary to avoid bootloader overflow).
 make build     # Debug build
 make boot      # Build + bootimage
 make run       # QEMU with serial stdio and virtio-blk disk
-make run-gui   # QEMU with graphical display for demos
+make run-gui   # QEMU with GTK display + raw terminal serial shell
 make test      # Cargo tests
 make clean     # Remove build artifacts
 make zig-check # Verify Zig blitter compiles independently
 ```
+
+`make run-gui` opens a GTK display and keeps the serial shell in the invoking terminal. Type shell commands in the terminal. The runner sets raw terminal mode for byte-at-a-time input and restores your terminal when QEMU exits. If VirtIO GPU setup fails, the kernel keeps the BGA framebuffer console active so the GTK window continues mirroring shell output.
 
 Create a host-editable FAT32 development disk:
 
@@ -240,7 +247,7 @@ docker compose run dev
 | [`src/abi/`](src/abi) | ABI plugins, syscall dispatch, Linux/WASM ABI surfaces. |
 | [`src/ebpf/`](src/ebpf) | eBPF verifier, VM, maps, helpers, tracepoints. |
 | [`src/shell.rs`](src/shell.rs) | Shell parser, command registry, builtins, job control, syscall table/probe commands. |
-| [`docs/`](docs/) | Architecture, roadmap, build configuration, compositor IPC. |
+| [`conductor/`](conductor/) | Documentation: changelog, roadmap, architecture, syscall ABI, compositor IPC. |
 | [`assets/`](assets/) | Diagrams and embedded boot/test binaries. |
 
 ---
@@ -249,13 +256,12 @@ docker compose run dev
 
 | Document | Use |
 | --- | --- |
-| [`docs/ARCHITECTURE_TARGET.md`](docs/ARCHITECTURE_TARGET.md) | Target spec, linker script, bootimage config, toolchain, build script, graphics/compositor architecture. |
-| [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) | Memory compression implementation status and next steps. |
-| [`docs/COMPOSITOR_IPC.md`](docs/COMPOSITOR_IPC.md) | Compositor IPC opcodes and input-event channel protocol. |
-| [`docs/architecture/community-boundaries.md`](docs/architecture/community-boundaries.md) | Refactoring map for low-cohesion architecture communities. |
-| [`ZIQA_KERNEL_ROADMAP.md`](ZIQA_KERNEL_ROADMAP.md) | Status and roadmap summary. |
-| [`BUILD_OPTIMIZATIONS.md`](BUILD_OPTIMIZATIONS.md) | Build tuning notes. |
-| [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) | Graphify knowledge-graph report. |
+| [`conductor/docs/ARCHITECTURE_TARGET.md`](conductor/docs/ARCHITECTURE_TARGET.md) | Target spec, linker script, bootimage config, toolchain, build script, graphics/compositor architecture. |
+| [`conductor/docs/IMPLEMENTATION_ROADMAP.md`](conductor/docs/IMPLEMENTATION_ROADMAP.md) | Memory compression implementation status and next steps. |
+| [`conductor/docs/COMPOSITOR_IPC.md`](conductor/docs/COMPOSITOR_IPC.md) | Compositor IPC opcodes and input-event channel protocol. |
+| [`conductor/docs/CHANGELOG.md`](conductor/docs/CHANGELOG.md) | Fix history and feature additions. |
+| [`conductor/SYSCALLS.md`](conductor/SYSCALLS.md) | Syscall ABI contract and register convention. |
+| [`conductor/ZIQA_KERNEL_ROADMAP.md`](conductor/ZIQA_KERNEL_ROADMAP.md) | Status and roadmap summary. |
 
 ---
 
@@ -304,5 +310,4 @@ node .gitnexus/run.cjs analyze
 MIT
 
 ---
-
-_Last updated: 2026-06-13. GitNexus index: 21,971 nodes, 46,665 edges, 683 communities, 300 execution flows._
+_Last updated: 2026-06-17. GitNexus index: 21,971 nodes, 46,665 edges, 683 communities, 300 execution flows._

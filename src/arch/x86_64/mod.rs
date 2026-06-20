@@ -85,11 +85,11 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
                 let l4_virt = po + pt_frame.start_address().as_u64();
                 let l4 = &mut *(l4_virt.as_mut_ptr());
                 let mut mapper = x86_64::structures::paging::OffsetPageTable::new(l4, po);
-                let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                let _ = mapper.map_to(page, frame, flags, fa).map(|flusher| flusher.flush());
                 stack_frame_phys = Some(frame.start_address().as_u64());
             } else {
                 let mut mapper = crate::memory::paging::current_mapper();
-                let _ = mapper.map_to(page, frame, flags, fa).unwrap().flush();
+                let _ = mapper.map_to(page, frame, flags, fa).map(|flusher| flusher.flush());
                 stack_frame_phys = Some(frame.start_address().as_u64());
             }
         }
@@ -245,6 +245,7 @@ pub fn init_kthread_stack(proc: &mut crate::process::Process, entry: u64, arg: u
 pub unsafe extern "C" fn kthread_trampoline() -> ! {
     core::arch::naked_asm!(
         "
+        sti
         mov rdi, r12
         call r13
         xor edi, edi

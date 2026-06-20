@@ -53,6 +53,10 @@ static INPUT_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
 static EDITOR_BUF: Mutex<RingBuf> = Mutex::new(RingBuf::new());
 static ECHO_ENABLED: Mutex<bool> = Mutex::new(true);
 
+/// Global flag for Ctrl+C interruption.
+/// Set when 0x03 is received, cleared by the consumer.
+pub static CTRL_C_PRESSED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Last decoded key available for compositor polling.
 /// 0 = no pending event; bit 8 set = Unicode; bits 0-7 = key data.
 /// Written from the keyboard ISR, read+cleared by compositor thread.
@@ -66,6 +70,126 @@ lazy_static! {
     ));
 }
 
+fn wait_controller_write_ready() -> bool {
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    for _ in 0..1_000_000 {
+        if unsafe { status.read() } & 0x02 == 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn wait_controller_read_ready() -> bool {
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    for _ in 0..1_000_000 {
+        if unsafe { status.read() } & 0x01 != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn write_controller_command(command: u8) -> bool {
+    if !wait_controller_write_ready() {
+        return false;
+    }
+    unsafe {
+        x86_64::instructions::port::Port::<u8>::new(0x64).write(command);
+    }
+    true
+}
+
+fn write_controller_data(data: u8) -> bool {
+    if !wait_controller_write_ready() {
+        return false;
+    }
+    unsafe {
+        x86_64::instructions::port::Port::<u8>::new(0x60).write(data);
+    }
+    true
+}
+
+fn read_controller_data() -> Option<u8> {
+    if !wait_controller_read_ready() {
+        return None;
+    }
+    Some(unsafe { x86_64::instructions::port::Port::<u8>::new(0x60).read() })
+}
+
+fn flush_controller_output() {
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    let mut data = x86_64::instructions::port::Port::<u8>::new(0x60);
+    for _ in 0..32 {
+        if unsafe { status.read() } & 0x01 == 0 {
+            break;
+        }
+        let _ = unsafe { data.read() };
+    }
+}
+
+/// Enable the first PS/2 port and keyboard scanning.
+///
+/// QEMU's graphical window delivers normal key presses through the i8042
+/// keyboard device. Mouse setup only enables the auxiliary IRQ, so initialize
+/// the keyboard port explicitly before the shell starts polling stdin.
+///
+/// The PS/2 controller port enable (0xAE) triggers a BAT (Basic Assurance
+/// Test) on the keyboard device, which sends result 0xAA (passed) to the
+/// output buffer. We must wait for and drain this result BEFORE sending the
+/// 0xF4 (enable scanning) command, otherwise read_controller_data() after
+/// 0xF4 would consume the BAT result instead of the ACK (0xFA).
+pub fn init() {
+    let _ = write_controller_command(0xAD); // Disable first PS/2 port while editing config.
+    flush_controller_output();
+
+    let mut config = if write_controller_command(0x20) {
+        read_controller_data().unwrap_or(0)
+    } else {
+        0
+    };
+    config &= !0x01; // IRQ1 disabled; shell/readers poll the controller directly.
+    config |= 0x40; // Translate device scancodes to set 1 for pc-keyboard.
+    config &= !0x10; // First PS/2 port clock enabled.
+
+    if !write_controller_command(0x60) || !write_controller_data(config) {
+        crate::println!(" ~ PS/2 Keyboard ........................ init timed out");
+        return;
+    }
+
+    let _ = write_controller_command(0xAE); // Enable first PS/2 port.
+    flush_controller_output();
+
+    // Enable keyboard scanning
+    write_controller_data(0xF4);
+    
+    // Poll the output-buffer bit directly here. Calling read_controller_data()
+    // in this loop would perform a full timeout wait on every iteration when
+    // no ACK arrives, stretching boot into a long apparent hang.
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    let mut data = x86_64::instructions::port::Port::<u8>::new(0x60);
+    for _ in 0..100_000 {
+        if unsafe { status.read() } & 0x01 != 0 {
+            if unsafe { data.read() } == 0xFA {
+                break;
+            }
+        }
+        core::hint::spin_loop();
+    }
+
+    crate::println!(" ~ PS/2 Keyboard ........................ ready");
+}
+
+fn push_to_buffers(b: u8) {
+    if b == 0x03 {
+        CTRL_C_PRESSED.store(true, Ordering::Release);
+    }
+    INPUT_BUF.lock().push(b);
+    EDITOR_BUF.lock().push(b);
+}
+
 /// Called from the keyboard ISR with the raw scancode.
 pub fn push_scancode(scancode: u8) {
     let mut kb = KB.lock();
@@ -73,15 +197,9 @@ pub fn push_scancode(scancode: u8) {
         if let Some(key) = kb.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(c) => {
-                    if *ECHO_ENABLED.lock() {
-                        if c >= ' ' || c == '\n' || c == '\r' {
-                            crate::print!("{}", c);
-                        }
-                    }
                     if c.is_ascii() {
                         let b = c as u8;
-                        INPUT_BUF.lock().push(b);
-                        EDITOR_BUF.lock().push(b);
+                        push_to_buffers(b);
                         // Notify compositor (ISR-safe atomic store)
                         COMPOSITOR_LAST_KEY.store(b as u16 | 0x100, Ordering::Release);
                     }
@@ -114,14 +232,14 @@ pub fn push_scancode(scancode: u8) {
 
 /// Poll PS/2 controller for pending keyboard scancodes.
 ///
-/// This is a fallback for QEMU graphical input: if IRQ delivery/userspace
-/// keyboard service misses an event, the shell still drains the controller.
+/// QEMU GUI input is level-triggered through the i8042 output buffer.  Polling
+/// from read_stdin avoids depending on keyboard IRQ delivery and keeps GUI input
+/// aligned with serial input: bytes are consumed only when a reader is active.
 fn poll_ps2_keyboard() {
     unsafe {
         use x86_64::instructions::port::Port;
         let mut status: Port<u8> = Port::new(0x64);
         let mut data: Port<u8> = Port::new(0x60);
-        // Bound the loop: avoid monopolizing the shell if the controller is noisy.
         for _ in 0..32 {
             let s = status.read();
             if s & 1 == 0 {
@@ -129,8 +247,6 @@ fn poll_ps2_keyboard() {
             }
 
             let byte = data.read();
-            // Bit 5 set means AUX/mouse byte. Drain it so it cannot block
-            // later keyboard scancodes; the mouse IRQ path handles motion.
             if s & 0x20 != 0 {
                 continue;
             }
@@ -139,25 +255,33 @@ fn poll_ps2_keyboard() {
         }
     }
 }
+
 /// Read up to `buf.len()` bytes from the keyboard buffer.
 /// Returns number of bytes read (0 = no input available).
 pub fn read_stdin(buf: &mut [u8]) -> usize {
-    // Poll serial port (COM1) for any incoming bytes.
-    unsafe {
-        use x86_64::instructions::port::Port;
-        let mut lsr: Port<u8> = Port::new(0x3FD); // Line Status Register
-        let mut rbr: Port<u8> = Port::new(0x3F8); // Receiver Buffer
-        while lsr.read() & 1 != 0 {
-            let byte = rbr.read();
-            if byte == b'\r' {
-                INPUT_BUF.lock().push(b'\n');
-            } else {
-                INPUT_BUF.lock().push(byte);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        // Poll serial port (COM1) for any incoming bytes using the global Mutex to avoid conflicts.
+        {
+            let mut _serial = crate::drivers::uart::SERIAL1.lock();
+            // Check if data is available (Bit 0 of Line Status Register)
+            unsafe {
+                use x86_64::instructions::port::Port;
+                let mut lsr: Port<u8> = Port::new(0x3FD);
+                let mut rbr: Port<u8> = Port::new(0x3F8);
+                while lsr.read() & 1 != 0 {
+                    let byte = rbr.read();
+                    if byte == b'\r' {
+                        push_to_buffers(b'\n');
+                    } else {
+                        push_to_buffers(byte);
+                    }
+                }
             }
         }
-    }
 
-    poll_ps2_keyboard();
+        poll_ps2_keyboard();
+    });
+
     let mut ring = INPUT_BUF.lock();
     let mut n = 0;
     while n < buf.len() {
@@ -183,6 +307,11 @@ pub fn clear_stdin() {
 /// Returns true if there is pending keyboard input.
 pub fn has_input() -> bool {
     !INPUT_BUF.lock().is_empty()
+}
+
+/// Check and clear the global Ctrl+C interrupt flag.
+pub fn check_and_clear_interrupt() -> bool {
+    CTRL_C_PRESSED.swap(false, Ordering::Acquire)
 }
 
 /// Read a byte from the editor input buffer

@@ -13,8 +13,11 @@ use ziqa_kernel::fs::vfs::VFS;
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::println;
+mod orbital_test;
+mod ziqa_orbclient;
 
 extern crate alloc;
+
 
 entry_point!(kernel_main);
 
@@ -35,21 +38,27 @@ fn print_hex(val: u64) {
 }
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    // Enable early heap for very early allocations (e.g. VFS init if called here)
+    unsafe { ziqa_kernel::memory::heap::init_early_heap(); }
+
+    // Enable SSE support in CR4 early
     unsafe {
-        let mut serial = uart_16550::SerialPort::new(0x3f8);
-        serial.init();
-        let _ = core::fmt::Write::write_str(&mut serial, "=== KERNEL_MAIN ENTRY ===\n");
-        let _rsp_val: u64;
-        core::arch::asm!("mov {}, rsp", out(reg) _rsp_val);
-        let _ = core::fmt::Write::write_str(&mut serial, "rsp at entry: ");
+        use x86_64::registers::control::{Cr4, Cr4Flags};
+        let mut cr4 = Cr4::read();
+        cr4 |= Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE;
+        Cr4::write(cr4);
     }
-    unsafe {
-        let rsp: u64;
-        core::arch::asm!("mov {}, rsp", out(reg) rsp);
-        print_hex(rsp);
-    }
+
+    let mut serial = unsafe { uart_16550::SerialPort::new(0x3f8) };
+    serial.init();
+    let _ = core::fmt::Write::write_str(&mut serial, "=== KERNEL_MAIN ENTRY ===\n");
+    let (frame, _) = x86_64::registers::control::Cr3::read();
+    ziqa_kernel::process::scheduler::KERNEL_CR3.store(frame.start_address().as_u64(), core::sync::atomic::Ordering::SeqCst);
     // 1. Core Init
     ziqa_kernel::init(boot_info);
+
+    // Initialize VFS after core init (heap is ready)
+    ziqa_kernel::fs::vfs::VFS.write().init();
     // print_banner(); // Removed to allow new boot screen
     KLOG.lock().min_level = Level::Debug;
     ziqa_kernel::klog!(Level::Info, "ZiqaKernel v1.0 booting");
@@ -63,27 +72,33 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
 // ── GPU Display / Compositor Init ───────────────────────────────────
     section("Display");
-    let display_ok = if ziqa_kernel::drivers::virtio_gpu::is_available() {
-        ziqa_kernel::drivers::virtio_gpu::init_display();
+    let mut compositor_display = false;
+    let _display_ok = if ziqa_kernel::drivers::virtio_gpu::init_display() {
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::drivers::virtio_gpu::gpu_ipc_listener,
             core::ptr::null(),
         );
         crate::println!(" ~ VirtIO GPU display ................... ready");
+        compositor_display = true;
         true
-    } else if ziqa_kernel::drivers::framebuffer::init_bga() {
+    } else if ziqa_kernel::drivers::framebuffer::is_bga_available()
+        || ziqa_kernel::drivers::framebuffer::init_bga()
+    {
         crate::println!(" ~ BGA Display .......................... ready");
         true
     } else {
         crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
         false
     };
-    if display_ok {
-        // Spawn compositor kernel thread for window management
+    if compositor_display {
+        // Compositor owns only a working VirtIO GPU framebuffer.  When the
+        // display is the BGA framebuffer, keep the framebuffer console active
+        // so the QEMU GUI window remains an interactive shell.
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::userspace::compositor::compositor_main,
             core::ptr::null(),
         );
+        ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
     }
     set_fg(Color::White);
 
@@ -114,9 +129,8 @@ fn init_subsystems() {
     set_fg(Color::LightGreen);
     #[cfg(feature = "net")]
     ziqa_kernel::net::init();
+    ziqa_kernel::drivers::keyboard::init();
     ziqa_kernel::drivers::ps2_mouse::init();
-    // Initialize VFS before running tests (tests may need filesystem access)
-    ziqa_kernel::fs::vfs::VFS.write().init();
     set_fg(Color::White);
     #[cfg(not(feature = "skip-self-tests"))]
     {
@@ -155,12 +169,14 @@ fn init_services() {
             ))),
         );
         #[cfg(feature = "orbital")]
-        vfs.mount(
-            "/bin/orbital",
-            Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
-                "../assets/orbital.elf"
-            )))),
-        );
+        {
+            let compressed = include_bytes!("../assets/orbital.elf.lz4");
+            let decompressed = lz4_flex::decompress_size_prepended(compressed).unwrap_or_default();
+            vfs.mount(
+                "/bin/orbital",
+                Arc::new(Mutex::new(RamFile::from_bytes(&decompressed))),
+            );
+        }
         vfs.mount(
             "/bin/busybox",
             Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
@@ -255,6 +271,7 @@ fn init_services() {
 }
 
 fn run_verification() {
+    
     section("Verification");
     // Verification logic omitted for brevity, but this is now encapsulated
 }
@@ -267,6 +284,12 @@ fn verify_logger(_arg: *const ()) {
     crate::println!("\n── Verification Log Dump ──");
     ziqa_kernel::klog::KLOG.lock().dump();
     crate::println!("───────────────────────────\n");
+}
+fn compatible_orbital_on_disk() -> Option<alloc::vec::Vec<u8>> {
+    ziqa_kernel::fs::vfs::VFS
+        .read()
+        .read_raw_all("/fat/bin/orbital.elf")
+        .ok()
 }
 fn run_startup() {
     // ziqa_kernel::drivers::vga::clear_screen(); // Removed to keep new boot screen visible
@@ -317,10 +340,15 @@ fn run_startup() {
         ziqa_kernel::process::scheduler::spawn_elf(doom_binary);
     }
 
-    #[cfg(feature = "orbital")]
-    {
-        let orbital_binary = include_bytes!("../assets/orbital.elf");
-        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf(orbital_binary) {
+    let orbital_disk_state = if !cfg!(feature = "orbital") {
+        compatible_orbital_on_disk()
+    } else {
+        None
+    };
+
+    let spawned_orbital = if let Some(orbital_data) = orbital_disk_state {
+        println!(" ~ Found Orbital GUI on disk, spawning...");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf_from_vec(orbital_data) {
             ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
                 let full = ziqa_kernel::capability::Permissions::full();
                 proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
@@ -328,6 +356,36 @@ fn run_startup() {
                 proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
                 proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
             });
+            // Orbital owns the display — stop FbConsole writes to avoid corruption.
+            ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
+            println!(" ✓ Orbital GUI spawned (PID={})", pid.0);
+            true
+        } else {
+            println!(" ✗ Failed to spawn Orbital GUI from disk");
+            false
+        }
+    } else {
+        false
+    };
+
+    if !spawned_orbital {
+        #[cfg(feature = "orbital")]
+        {
+            let compressed = include_bytes!("../assets/orbital.elf.lz4");
+            if let Ok(decompressed) = lz4_flex::decompress_size_prepended(compressed) {
+                if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf_from_vec(decompressed) {
+                    ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                        let full = ziqa_kernel::capability::Permissions::full();
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
+                    });
+                    // Orbital owns the display — stop FbConsole writes.
+                    ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
+                    println!(" ✓ Embedded Orbital GUI spawned (PID={})", pid.0);
+                }
+            }
         }
     }
     let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(binary);

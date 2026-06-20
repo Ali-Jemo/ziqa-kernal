@@ -625,7 +625,12 @@ impl Editor {
                         };
                         if let Ok(id) = crate::fs::ziqafs::ZiqaFs::create_file(&mut fs_lock, parent_id, file_name) {
                             if let Ok(ino) = crate::fs::ziqafs::ZiqaFs::get_inode(&mut fs_lock, id) {
-                                let file = crate::fs::ziqafs::ZiqaFsFile { fs: fs.clone(), inode_id: id, inode: ino };
+                                let file = crate::fs::ziqafs::ZiqaFsFile { 
+                                    fs: fs.clone(), 
+                                    inode_id: id, 
+                                    inode: ino,
+                                    cap: crate::capability::CapabilityToken::new(crate::capability::CapabilityId(0), None, crate::capability::ResourceKind::ZiqaFsMount, crate::capability::Permissions::full(), 0),
+                                };
                                 vfs.mount(path, alloc::sync::Arc::new(spin::Mutex::new(file)));
                             }
                         }

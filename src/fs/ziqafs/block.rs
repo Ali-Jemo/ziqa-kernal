@@ -92,3 +92,10 @@ pub fn free_data_block(
     sb.free_blocks = sb.free_blocks.saturating_add(1);
     Ok(())
 }
+
+pub fn patch_bitmap_byte(device: &dyn BlockDevice, offset: usize, value: u8) -> Result<(), AbiError> {
+    let mut bitmap = [0u8; BLOCK_SIZE];
+    read_block(device, BITMAP_BLOCK, &mut bitmap)?;
+    bitmap[offset] = value;
+    write_block(device, BITMAP_BLOCK, &bitmap)
+}

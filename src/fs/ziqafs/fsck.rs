@@ -35,7 +35,7 @@ pub fn fsck(device: &dyn BlockDevice, sb: &Superblock) -> FsckResult {
             live_inodes += 1;
             let total_blocks = (inode.size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
             for logical in 0..total_blocks as u32 {
-                if let Ok(phys) = inode_get_block(device, &inode, logical) {
+                if let Ok((phys, _cs)) = inode_get_block(device, &inode, logical) {
                     if phys != 0 {
                         reachable[phys as usize / 8] |= 1 << (phys as usize % 8);
                     }

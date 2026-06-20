@@ -1,12 +1,13 @@
-// Userspace Wayland‑like compositor implementation
+// Userspace Wayland-like compositor implementation
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use crate::ipc::{self, Message as IpcMessage};
 use crate::process::Pid;
 use crate::ipc::gui::{OpCode, CreateSurfaceMsg, FlushMsg, BufferAttachMsg, SetPositionMsg};
 
-/// Entry point called from `src/init.rs`. Registers a dedicated IPC channel (ID 2)
-/// and forwards client messages to the kernel compositor (channel 3).
+/// Entry point called from `src/init.rs`. Registers a dedicated IPC channel (ID 2)
+/// and forwards client messages to the kernel compositor (channel 3).
 pub fn run() -> Result<(), &'static str> {
     // Register userspace compositor channel 2
     ipc::register_channel(2, Arc::new(ipc::Channel::new()));
@@ -26,7 +27,7 @@ pub fn run() -> Result<(), &'static str> {
     }
 }
 
-/// Userspace compositor‑side message definitions – retained for compatibility.
+/// Userspace compositor-side message definitions – retained for compatibility.
 #[derive(Debug)]
 pub enum Message {
     CreateSurface { width: u32, height: u32 },

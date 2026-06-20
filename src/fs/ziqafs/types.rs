@@ -10,8 +10,15 @@ pub const BITMAP_BLOCK: u32 = 2;
 pub const INODE_TABLE_BLOCK: u32 = 3;
 pub const JOURNAL_BLOCK: u32 = 4;
 pub const FIRST_DATA_BLOCK: u32 = 5;
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct BlockHeader {
+    pub checksum: u32,
+}
+const _: () = assert!(core::mem::size_of::<BlockHeader>() == 4);
 
-pub const INODE_COUNT: u32 = 56;
+pub const INODE_COUNT: u32 = 32;
+pub const INODE_SIZE: usize = 136;
 pub const ROOT_INODE: u32 = 1;
 
 pub const INODE_MODE_FILE: u16 = 0o100000;
@@ -41,6 +48,7 @@ pub struct Superblock {
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct Inode {
+    pub checksum: u32,
     pub mode: u16,
     pub nlink: u16,
     pub uid: u16,
@@ -50,10 +58,14 @@ pub struct Inode {
     pub ctime: u32,
     pub atime: u32,
     pub blocks: [u32; 10],
+    pub block_checksums: [u32; 10],
     pub indirect: u32,
     pub double_indirect: u32,
+    pub indirect_checksum: u32,
+    pub double_indirect_checksum: u32,
+    pub reserved: [u8; 12],
 }
-const _: () = assert!(core::mem::size_of::<Inode>() == 72);
+const _: () = assert!(core::mem::size_of::<Inode>() == INODE_SIZE);
 
 pub struct StatFs {
     pub total_blocks: u32,

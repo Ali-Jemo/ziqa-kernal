@@ -1,6 +1,7 @@
 //! Write-ahead journal (WAL) for ZiqaFS.
 
-use super::block::{read_block, write_block};
+use super::block::{patch_bitmap_byte, read_block, write_block};
+use super::inode::patch_inode_raw;
 use super::types::*;
 use crate::abi::AbiError;
 use crate::drivers::block::BlockDevice;
@@ -74,30 +75,33 @@ pub fn journal_replay(device: &dyn BlockDevice) -> u32 {
         let off = core::mem::size_of::<JournalHeader>() + i * JOURNAL_ENTRY_SIZE;
         let entry: JournalEntry =
             unsafe { core::ptr::read_unaligned(buf[off..].as_ptr() as *const JournalEntry) };
+        
+        let mut csum_bytes = [0u8; 4];
+        csum_bytes.copy_from_slice(&entry.data[52..56]);
+        let stored_crc = u32::from_le_bytes(csum_bytes);
+        let computed_crc = zig_kernel_ops::crc32(&entry.data[..52]);
+        
+        if stored_crc != computed_crc {
+            continue;
+        }
+        // ARCH: [journal→inode] CS-22 journal_replay patches inode directly via
+        //       inode::patch_inode_raw helper. Crash-recovery path.
         if entry.op == JournalOp::WriteInode as u8 {
             let inode_id = entry.block;
             if inode_id < INODE_COUNT {
-                if let Ok(mut ib) = {
-                    let mut b = [0u8; BLOCK_SIZE];
-                    // ARCH: [journal→block] CS-22 journal_replay reads INODE_TABLE_BLOCK to
-                    //       re-apply a WriteInode entry. Crash-recovery path; only runs on mount.
-                    read_block(device, INODE_TABLE_BLOCK, &mut b).map(|_| b)
-                } {
-                    let o = inode_id as usize * 72;
-                    ib[o..o + 56].copy_from_slice(&entry.data);
-                    let _ = write_block(device, INODE_TABLE_BLOCK, &ib);
+                // ARCH: [journal→inode] CS-22 journal_replay patches inode directly via
+                //       inode::patch_inode_raw helper. Crash-recovery path.
+                if patch_inode_raw(device, inode_id, 0, &entry.data).is_ok() {
                     replayed += 1;
                 }
             }
         } else if entry.op == JournalOp::WriteBitmap as u8 {
-            if let Ok(mut bm) = {
-                let mut b = [0u8; BLOCK_SIZE];
-                // ARCH: [journal→block] CS-23 journal_replay reads BITMAP_BLOCK to re-apply a
-                //       WriteBitmap entry. Restores a single bitmap byte from the journal record.
-                read_block(device, BITMAP_BLOCK, &mut b).map(|_| b)
-            } {
-                bm[entry.block as usize] = entry.data[0];
-                let _ = write_block(device, BITMAP_BLOCK, &bm);
+        // ARCH: [journal→block] CS-23 journal_replay patches bitmap directly via
+        //       block::patch_bitmap_byte helper. Crash-recovery path.
+        // The journal now relies on these specialized helpers instead of constructing
+        // raw read/write_block calls for structures it does not own, improving
+        // encapsulation and maintainability.
+            if patch_bitmap_byte(device, entry.block as usize, entry.data[0]).is_ok() {
                 replayed += 1;
             }
         }

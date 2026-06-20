@@ -433,6 +433,11 @@ pub fn run_serial(steps: usize) {
                 }
             }
         }
+        
+        if crate::drivers::keyboard::check_and_clear_interrupt() {
+            println!("^C");
+            break;
+        }
     }
     println!("━━━ ZIQA Inferno complete ({} steps) ━━━", steps);
 }

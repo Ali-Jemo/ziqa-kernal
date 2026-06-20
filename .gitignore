@@ -1,5 +1,5 @@
 # Build artifacts
-/target
+target/
 /target-*
 /target-alt
 /target-verify

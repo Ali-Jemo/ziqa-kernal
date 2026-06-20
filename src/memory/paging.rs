@@ -744,53 +744,15 @@ pub fn handle_brk(
 }
 
 /// Create a new page table for a process by copying kernel space L4 entries.
+/// 
+/// NOTE: Currently returns `None` because the kernel is linked at low-half
+/// virtual addresses (0x200000-0x600000) that fall in L4[0]'s range. Creating
+/// a new L3/L2 for L4[0] would unmap the kernel, causing an immediate page
+/// fault during context-switch CR3 reload. A full fix requires either:
+///   (a) remapping the kernel text/data into the process page table,
+///   (b) handling over-map conflicts with ELF segments at 0x400000,
+///   (c) or moving the kernel to the higher half.
+/// Until then, all processes share KERNEL_CR3 (no per-process page tables).
 pub fn create_process_page_table() -> Option<PhysFrame> {
-    let (parent_l4_frame, _) = Cr3::read();
-    let mut fa_guard = FRAME_ALLOCATOR.lock();
-    let fa = fa_guard.as_mut().expect("FRAME_ALLOCATOR not initialized");
-
-    // Allocate a new frame for L4 table
-    let new_frame = fa.allocate_frame()?;
-    let new_table = unsafe { frame_as_page_table_mut(new_frame) };
-
-    // Clear all entries first
-    for i in 0..512 {
-        new_table[i].set_unused();
-    }
-
-    // Copy the kernel mappings (L4 indices 256 to 511)
-    let parent_table = unsafe { frame_as_page_table(parent_l4_frame) };
-    for i in 256..512 {
-        new_table[i] = parent_table[i].clone();
-    }
-
-    // Copy the kernel heap mapping (L4 index 136) since it is in the lower half
-    // but houses the kernel stacks allocated via Vec.
-    new_table[136] = parent_table[136].clone();
-
-    // Allocate private Level 3 and Level 2 page tables for L4 index 0 (low-half)
-    // so the kernel mappings stay present but don't conflict with private userspace.
-    let new_l3_frame = fa.allocate_frame()?;
-    let new_l3_table = unsafe { frame_as_page_table_mut(new_l3_frame) };
-    for i in 0..512 {
-        new_l3_table[i].set_unused();
-    }
-
-    let l3_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-    new_table[0].set_addr(new_l3_frame.start_address(), l3_flags);
-
-    let new_l2_frame = fa.allocate_frame()?;
-    let new_l2_table = unsafe { frame_as_page_table_mut(new_l2_frame) };
-    for i in 0..512 {
-        new_l2_table[i].set_unused();
-    }
-
-    let l2_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-    new_l3_table[0].set_addr(new_l2_frame.start_address(), l2_flags);
-
-    // Do not copy parent low-half L2 entries into a process address space.
-    // User mappings must start empty; copying the kernel's bootstrap low
-    // mappings makes ordinary user VMAs collide with PageAlreadyMapped.
-
-    Some(new_frame)
+    None
 }

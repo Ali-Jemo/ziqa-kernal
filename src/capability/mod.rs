@@ -16,22 +16,15 @@ pub struct CapabilityId(pub u64);
 /// What the capability grants access to
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceKind {
-    /// A memory region (virtual address range)
     Memory,
-    /// A file descriptor or filesystem path
     File,
-    /// A network socket
     Network,
-    /// An I/O port or MMIO range
     DeviceIo,
-    /// Permission to spawn processes
     ProcessCreate,
-    /// Permission to load/register ABI plugins
     AbiPlugin,
-    /// Permission to debug/inspect another process
     ProcessDebug,
-    /// Inter-process communication channel
     IpcChannel,
+    ZiqaFsMount,
 }
 
 /// Permission bits within a capability
