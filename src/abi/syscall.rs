@@ -779,6 +779,11 @@ fn ziqa_sig_pause(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
 }
 
 /// ZIQA_DEV_PORT_IN (1031) — Read from an I/O port.
+///
+/// ponytail: only the kernel init process (PID 0) may access the full I/O
+/// port space. Userspace drivers with DeviceIo get nothing — they must use
+/// PCI BAR mapping (ziqa_dev_map) instead. This prevents a compromised
+/// userspace process from resetting the PCI bus, disk controller, etc.
 fn ziqa_dev_port_in(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
     if !check_capability(ctx.process, ResourceKind::DeviceIo, false, false) {
         return Ok(-(errno::EPERM as i64) as u64);
@@ -786,6 +791,12 @@ fn ziqa_dev_port_in(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErro
     let port = ctx.args[0] as u16;
     let size = ctx.args[1];
     
+    // Whitelist: only kernel init (PID 0) can do raw port I/O.
+    let is_kernel_init = ctx.process.pid.0 == 0;
+    if !is_kernel_init {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
     use x86_64::instructions::port::Port;
     let val = match size {
         1 => unsafe { Port::<u8>::new(port).read() as u64 },
@@ -804,7 +815,13 @@ fn ziqa_dev_port_out(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErr
     let port = ctx.args[0] as u16;
     let size = ctx.args[1];
     let val = ctx.args[2];
-    
+
+    // Whitelist: only kernel init (PID 0) can do raw port I/O.
+    let is_kernel_init = ctx.process.pid.0 == 0;
+    if !is_kernel_init {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+
     use x86_64::instructions::port::Port;
     match size {
         1 => unsafe { Port::<u8>::new(port).write(val as u8) },
@@ -828,11 +845,23 @@ fn ziqa_dev_map(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> {
     let phys_end = (phys_addr + size as u64 + 0xFFF) & !0xFFF;
     let aligned_size = (phys_end - phys_start) as usize;
     
+    // ponytail: only allow mapping device MMIO regions, not kernel RAM.
+    // PCI MMIO typically lives at phys >= 2GB. Reject anything below 1MB
+    // (legacy ISA/BIOS) and anything in the low RAM range.
+    const MIN_PHYS_MMIO: u64 = 0x1_0000_0000; // 4GB — typical PCI MMIO base
+    if phys_start < MIN_PHYS_MMIO {
+        return Ok(-(errno::EPERM as i64) as u64);
+    }
+    // Also cap the total mappable region to 16MB to prevent exhaustion.
+    const MAX_PHYS_MAP: usize = 16 * 1024 * 1024;
+    if aligned_size > MAX_PHYS_MAP {
+        return Ok(-(errno::EINVAL as i64) as u64);
+    }
+
     // Find virtual slot (reuse mmap bump)
     let virt_start = (ctx.process.mmap_bump + 0xFFF) & !0xFFF;
     ctx.process.mmap_bump = virt_start + aligned_size as u64;
-    
-    // Map in current process table
+
     use x86_64::{PhysAddr, VirtAddr, structures::paging::{Mapper, Page, PhysFrame, PageTableFlags}};
     
     let mut mapper = unsafe { crate::memory::paging::current_mapper() };
@@ -1005,20 +1034,21 @@ fn ziqa_cap_request(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiErro
     let path_ptr = ctx.args[1] as *const u8;
     let path_len = ctx.args[2] as usize;
     let _flags   = ctx.args[3] as u32;
-
     let kind = match kind_val {
         1 => ResourceKind::File,
         _ => return Ok(-(errno::EINVAL as i64) as u64),
     };
 
-    if path_ptr.is_null() || path_len == 0 {
-        return Ok(-(errno::EFAULT as i64) as u64);
-    }
 
     // Read path from userspace
+    let user = UserSliceRo::ro(path_ptr as u64, path_len)
+        .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_request path"))?;
     let mut tmp = alloc::vec![0u8; path_len];
-    unsafe { core::ptr::copy_nonoverlapping(path_ptr, tmp.as_mut_ptr(), path_len); }
-    let path_str = core::str::from_utf8(&tmp).map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
+    user.copy_to_slice(&mut tmp)
+        .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_request path"))?;
+
+    let path_str = core::str::from_utf8(&tmp)
+        .map_err(|_| crate::abi::AbiError::Other("Invalid UTF-8"))?;
 
     // Handle special stdio paths
     if path_str == "stdin" {
@@ -1106,8 +1136,10 @@ fn ziqa_cap_read(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> 
         crate::process::FdTarget::Stdin => {
             let mut buf = alloc::vec![0u8; count];
             let n = crate::drivers::keyboard::read_stdin(&mut buf);
-            unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
-            klog_syscall("ziqa_cap_read(stdin)", n as u64);
+            let user = UserSliceWo::wo(buf_ptr as u64, n)
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_read stdin"))?;
+            user.copy_from_slice(&buf[..n])
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_read stdin"))?;
             Ok(n as u64)
         }
         crate::process::FdTarget::File(_) | crate::process::FdTarget::Scheme(_, _) => {
@@ -1120,7 +1152,10 @@ fn ziqa_cap_read(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError> 
             match crate::fs::vfs::VFS.read().read_handle(&handle, &mut buf, offset) {
                 Ok(n) => {
                     if n > 0 {
-                        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr, n); }
+                        let user = UserSliceWo::wo(buf_ptr as u64, n)
+                            .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_read"))?;
+                        user.copy_from_slice(&buf[..n])
+                            .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_read"))?;
                     }
                     if let Some(desc_mut) = ctx.process.fds.get_mut(fd) {
                         desc_mut.offset = offset + n;
@@ -1158,8 +1193,13 @@ fn ziqa_cap_write(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
 
     match desc.target {
         crate::process::FdTarget::Stdout | crate::process::FdTarget::Stderr => {
-            let buf = unsafe { core::slice::from_raw_parts(buf_ptr, count) };
-            if let Ok(s) = core::str::from_utf8(buf) {
+            // ponytail: use UserSliceRo to safely read userspace buffer
+            let user = UserSliceRo::ro(buf_ptr as u64, count)
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_write stdout"))?;
+            let mut buf = alloc::vec![0u8; count];
+            user.copy_to_slice(&mut buf)
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_write stdout"))?;
+            if let Ok(s) = core::str::from_utf8(&buf) {
                 crate::print!("{}", s);
                 klog_syscall("ziqa_cap_write(stdout)", count as u64);
                 Ok(count as u64)
