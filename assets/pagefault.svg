@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 720">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="faultg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="pageg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="walkg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <linearGradient id="allocg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="okg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="arrowred" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f7768e"/>
+    </marker>
+  </defs>
+
+  <rect width="640" height="720" fill="url(#bg)" rx="8"/>
+
+  <text x="320" y="28" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Page Fault Handler &amp; Demand Paging</text>
+
+  <!-- Access attempt -->
+  <rect x="120" y="50" width="400" height="55" rx="4" fill="url(#userg)" filter="url(#shadow)"/>
+  <text x="320" y="72" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">User / Kernel Memory Access</text>
+  <text x="320" y="91" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Load, store, or instruction fetch at unmapped address</text>
+
+  <line x1="320" y1="105" x2="320" y2="135" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- #PF Entry -->
+  <rect x="120" y="135" width="400" height="50" rx="4" fill="url(#faultg)" filter="url(#shadow)"/>
+  <text x="320" y="155" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">#PF Exception (Vector 14)</text>
+  <text x="320" y="172" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">CR2 = faulting address · error code on stack</text>
+
+  <line x1="320" y1="185" x2="320" y2="215" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- page_fault handler -->
+  <rect x="80" y="215" width="480" height="50" rx="4" fill="url(#pageg)" filter="url(#shadow)"/>
+  <text x="320" y="237" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">page_fault(interrupt::InterruptStackFrame, error_code)</text>
+  <text x="320" y="254" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Read CR2 · match on error_code flags</text>
+
+  <!-- Branch: protect fault -->
+  <line x1="320" y1="265" x2="80" y2="310" stroke="#f7768e" stroke-width="2" marker-end="url(#arrowred)"/>
+
+  <rect x="30" y="310" width="150" height="60" rx="4" fill="url(#faultg)" filter="url(#shadow)"/>
+  <text x="105" y="333" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Protection Fault</text>
+  <text x="105" y="352" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="system-ui, -apple-system, sans-serif">panic!("Page Fault")</text>
+
+  <!-- Branch: demand page -->
+  <line x1="320" y1="265" x2="320" y2="310" stroke="#2ac3de" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="200" y="310" width="240" height="50" rx="4" fill="url(#walkg)" filter="url(#shadow)"/>
+  <text x="320" y="333" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Demand Paging Candidate</text>
+  <text x="320" y="352" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Check `proc.regions` for mapping</text>
+
+  <!-- Branch: region found -->
+  <line x1="320" y1="360" x2="320" y2="400" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Map the page -->
+  <rect x="160" y="400" width="320" height="55" rx="4" fill="url(#allocg)" filter="url(#shadow)"/>
+  <text x="320" y="423" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Allocate &amp; Map Page</text>
+  <text x="320" y="442" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">frame_allocator → page_table → Flags::PRESENT | WRITABLE</text>
+
+  <line x1="320" y1="455" x2="320" y2="495" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- TLB flush -->
+  <rect x="160" y="495" width="320" height="55" rx="4" fill="url(#okg)" filter="url(#shadow)"/>
+  <text x="320" y="518" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">TLB Flush</text>
+  <text x="320" y="537" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">x86::invlpg(fault_addr) ; flush_all() if L4 changed</text>
+
+  <line x1="320" y1="550" x2="320" y2="590" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Return -->
+  <rect x="160" y="590" width="320" height="50" rx="4" fill="url(#okg)" filter="url(#shadow)"/>
+  <text x="320" y="612" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">iretq — Retry Faulting Instruction</text>
+  <text x="320" y="630" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Instruction re-executes → page now mapped → success</text>
+
+  <!-- Error code breakdown -->
+  <rect x="30" y="415" width="110" height="160" rx="4" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+  <text x="85" y="438" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Error Code</text>
+  <line x1="40" y1="448" x2="130" y2="448" stroke="#3b4261" stroke-width="1"/>
+  <text x="45" y="465" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">bit 0  P: 0=non-present</text>
+  <text x="45" y="483" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">              1=protection</text>
+  <text x="45" y="503" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">bit 1  W: 0=read, 1=write</text>
+  <text x="45" y="523" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">bit 2  U: 0=supervisor</text>
+  <text x="45" y="541" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">              1=user</text>
+  <text x="45" y="561" fill="#565f89" font-size="9" font-family="system-ui, -apple-system, sans-serif">bits 3–4 reserved</text>
+
+  <text x="320" y="715" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">On-demand physical page allocation backed by process region map</text>
+</svg>

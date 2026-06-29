@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="g-fill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2335"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="#16161e"/>
+  
+  <!-- Capability Matrix Grid -->
+  <path d="M50 50 L550 50 M50 100 L550 100 M50 150 L550 150 M50 200 L550 200 M50 250 L550 250 M50 300 L550 300" stroke="#3b4261" stroke-width="1"/>
+  <path d="M150 50 L150 300 M300 50 L300 300 M450 50 L450 300" stroke="#3b4261" stroke-width="1"/>
+
+  <!-- Headers -->
+  <text x="225" y="40" text-anchor="middle" fill="#7aa2f7" font-family="monospace">Ziqa</text>
+  <text x="375" y="40" text-anchor="middle" fill="#bb9af7" font-family="monospace">Linux</text>
+  <text x="500" y="40" text-anchor="middle" fill="#e0af68" font-family="monospace">Win</text>
+
+  <!-- Rows -->
+  <text x="100" y="80" text-anchor="middle" fill="#c0caf5" font-family="monospace">Cap-Based</text>
+  <text x="225" y="80" text-anchor="middle" fill="#2ac3de" font-family="monospace">YES</text>
+  <text x="375" y="80" text-anchor="middle" fill="#f7768e" font-family="monospace">NO</text>
+  <text x="500" y="80" text-anchor="middle" fill="#f7768e" font-family="monospace">NO</text>
+
+  <text x="100" y="130" text-anchor="middle" fill="#c0caf5" font-family="monospace">Memory-Safe</text>
+  <text x="225" y="130" text-anchor="middle" fill="#2ac3de" font-family="monospace">YES</text>
+  <text x="375" y="130" text-anchor="middle" fill="#f7768e" font-family="monospace">NO</text>
+  <text x="500" y="130" text-anchor="middle" fill="#f7768e" font-family="monospace">NO</text>
+</svg>

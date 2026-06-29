@@ -1,0 +1,64 @@
+# Build artifacts
+target/
+/target-*
+/target-alt
+/target-verify
+/build
+/zig-cache
+/zig-out
+*.o
+*.a
+*.rlib
+*.d
+*.bin
+*.elf
+*.ppm
+*.img
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Aider files
+.aider*
+
+# Debug logs
+*.log
+
+# Graphify output
+/graphify-out
+
+# OS configuration & tools
+.gemini/
+.antigravitycli/
+.poolside/
+.omx/
+.venv/
+.graphify_venv/
+
+# Zig cache (root + subprojects)
+.zig-cache/
+gui/**/.zig-cache/
+gui/**/zig-out/
+
+# Temp files
+temp_*.txt
+userspace/busybox-1.36.1/
+
+# QEMU/boot logs and test outputs
+boot_output.txt
+output.txt
+make_run.log
+check_errors*.txt
+qemu_*.txt
+kernel.log
+serial.log
+local_qemu.log
+high_half_boot2.log
+low_half_boot.log
+
+# Build artifacts from make fat-disk
+/fat-root

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#2ac3de"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="800" height="600" fill="#16161e"/>
+
+  <!-- Subsystems -->
+  <g filter="url(#shadow)">
+    <rect x="50" y="50" width="150" height="80" rx="10" fill="#1f2335" stroke="#7aa2f7" stroke-width="2"/>
+    <text x="125" y="95" text-anchor="middle" fill="#c0caf5" font-family="monospace">Memory Mgmt</text>
+    
+    <rect x="325" y="50" width="150" height="80" rx="10" fill="#1f2335" stroke="#7aa2f7" stroke-width="2"/>
+    <text x="400" y="95" text-anchor="middle" fill="#c0caf5" font-family="monospace">Scheduler</text>
+    
+    <rect x="600" y="50" width="150" height="80" rx="10" fill="#1f2335" stroke="#7aa2f7" stroke-width="2"/>
+    <text x="675" y="95" text-anchor="middle" fill="#c0caf5" font-family="monospace">VFS/Storage</text>
+  </g>
+
+  <!-- Connectors -->
+  <path d="M125 130 L125 200 L400 200 L400 130" stroke="#bb9af7" stroke-width="4" fill="none"/>
+  <path d="M400 130 L400 200 L675 200 L675 130" stroke="#9ece6a" stroke-width="4" fill="none"/>
+
+  <!-- Central Hub -->
+  <rect x="250" y="250" width="300" height="100" rx="20" fill="#1f2335" stroke="#e0af68" stroke-width="4"/>
+  <text x="400" y="305" text-anchor="middle" fill="#c0caf5" font-family="monospace" font-size="20">CORE ABI REGISTRY</text>
+
+  <!-- Bottom layer -->
+  <rect x="50" y="450" width="700" height="100" rx="10" fill="#1a1b26" stroke="#f7768e" stroke-width="2"/>
+  <text x="400" y="505" text-anchor="middle" fill="#f7768e" font-family="monospace">Hardware Drivers (VirtIO, DRM, UART)</text>
+</svg>

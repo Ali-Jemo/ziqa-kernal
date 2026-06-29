@@ -1,0 +1,263 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 880" width="1000" height="880" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="kernelg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="heapp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="stackg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="mmiog" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="codedg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <linearGradient id="pteg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#73daca"/>
+      <stop offset="100%" stop-color="#41a6b6"/>
+    </linearGradient>
+
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="880" fill="url(#bg)" rx="12"/>
+  <text x="500" y="30" text-anchor="middle" fill="#c0caf5" font-size="20" font-weight="bold">Detailed Memory Layout — Higher-Half Kernel</text>
+  <text x="500" y="50" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">x86_64 · 4-level paging · PML4 → PDPT → PD → PT · 4 KiB frames · canonical address ceiling</text>
+
+  <!-- 4-level page walk strip (top) -->
+  <g transform="translate(60, 80)">
+    <text x="0" y="0" fill="#c0caf5" font-size="13" font-weight="bold" font-family="monospace">4-level page walk (on TLB miss)</text>
+  </g>
+  <g transform="translate(60, 95)">
+    <g transform="translate(0, 0)">
+      <rect x="0" y="0" width="120" height="28" rx="4" fill="url(#userg)"/>
+      <text x="60" y="19" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">CR3 → PML4</text>
+    </g>
+    <line x1="120" y1="14" x2="138" y2="14" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <g transform="translate(140, 0)">
+      <rect x="0" y="0" width="120" height="28" rx="4" fill="url(#pteg)"/>
+      <text x="60" y="19" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">PDPT</text>
+    </g>
+    <line x1="260" y1="14" x2="278" y2="14" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <g transform="translate(280, 0)">
+      <rect x="0" y="0" width="120" height="28" rx="4" fill="url(#heapp)"/>
+      <text x="60" y="19" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Page Dir</text>
+    </g>
+    <line x1="400" y1="14" x2="418" y2="14" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <g transform="translate(420, 0)">
+      <rect x="0" y="0" width="120" height="28" rx="4" fill="url(#codedg)"/>
+      <text x="60" y="19" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Page Table</text>
+    </g>
+    <line x1="540" y1="14" x2="558" y2="14" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+    <g transform="translate(560, 0)">
+      <rect x="0" y="0" width="120" height="28" rx="4" fill="url(#kernelg)"/>
+      <text x="60" y="19" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">4 KiB Frame</text>
+    </g>
+    <text x="700" y="19" fill="#565f89" font-size="10" font-family="monospace">512 entries × 8 B = 4 KiB per table · context switch = CR3 reload + invlpg</text>
+  </g>
+
+  <!-- Memory bar -->
+  <g transform="translate(60, 160)">
+    <!-- Address labels -->
+    <text x="0" y="0" fill="#565f89" font-size="10" font-family="monospace">0xFFFF_FFFF_FFFF_FFFF</text>
+    <text x="440" y="0" fill="#565f89" font-size="10" font-family="monospace">0xFFFF_8000_0000_0000  ← higher-half kernel boundary</text>
+    <text x="0" y="640" fill="#565f89" font-size="10" font-family="monospace">0x0000_0000_0000_0000</text>
+
+    <!-- Full outline -->
+    <rect x="0" y="10" width="900" height="620" rx="6" fill="none" stroke="#3b4261" stroke-width="1.5"/>
+
+    <!-- ── Kernel half (top) ── -->
+    <g transform="translate(0, 10)">
+      <!-- Physical memory map (top of address space) -->
+      <rect x="0" y="0" width="900" height="36" fill="url(#mmiog)" opacity="0.85"/>
+      <text x="20" y="16" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Physmap (direct map of all physical memory)</text>
+      <text x="20" y="30" fill="#1a1b26" font-size="9" font-family="monospace">boot_info.physical_memory_offset + phys  →  used by frame allocator, LAPIC MMIO, trampoline at 0x7000</text>
+
+      <!-- Guard -->
+      <rect x="0" y="36" width="900" height="18" fill="#1a1b26"/>
+      <text x="450" y="49" text-anchor="middle" fill="#3b4261" font-size="9" font-family="monospace">↕ guard region (unmapped, SMEP/SMAP fault if crossed)</text>
+
+      <!-- Kernel heap -->
+      <rect x="0" y="54" width="240" height="48" fill="url(#heapp)" opacity="0.85"/>
+      <text x="20" y="72" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Kernel heap</text>
+      <text x="20" y="86" fill="#1a1b26" font-size="9" font-family="monospace">8 MiB · linked_list_allocator</text>
+      <text x="20" y="98" fill="#1a1b26" font-size="9" font-family="monospace">used by: BTreeMap, Arc, alloc::*</text>
+
+      <!-- Per-CPU pages -->
+      <rect x="240" y="54" width="180" height="48" fill="url(#pteg)" opacity="0.85"/>
+      <text x="260" y="72" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Per-CPU pages</text>
+      <text x="260" y="86" fill="#1a1b26" font-size="9" font-family="monospace">alloc_ap() · 4 KiB each</text>
+      <text x="260" y="98" fill="#1a1b26" font-size="9" font-family="monospace">MAX_CPUS = 64</text>
+
+      <!-- Page-table pages -->
+      <rect x="420" y="54" width="240" height="48" fill="url(#pteg)" opacity="0.55"/>
+      <text x="440" y="72" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Page-table pages</text>
+      <text x="440" y="86" fill="#1a1b26" font-size="9" font-family="monospace">PML4 (1) · PDPT (≤4) · PD · PT</text>
+      <text x="440" y="98" fill="#1a1b26" font-size="9" font-family="monospace">512 entries × 8 B = 4 KiB per table</text>
+
+      <!-- Kernel stacks + IST -->
+      <rect x="660" y="54" width="240" height="48" fill="url(#stackg)" opacity="0.85"/>
+      <text x="680" y="72" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Per-CPU kernel stacks + IST</text>
+      <text x="680" y="86" fill="#1a1b26" font-size="9" font-family="monospace">IST entries: #DF (double fault)</text>
+      <text x="680" y="98" fill="#1a1b26" font-size="9" font-family="monospace">#NMI, #DB, #MC · GS.base → PerCpu</text>
+
+      <!-- Gap -->
+      <rect x="0" y="102" width="900" height="20" fill="#1a1b26"/>
+      <text x="450" y="115" text-anchor="middle" fill="#3b4261" font-size="9" font-family="monospace">unmapped (frees higher-half for vmalloc / future drivers)</text>
+
+      <!-- Kernel .text + .rodata + .data + .bss -->
+      <rect x="0" y="122" width="540" height="44" fill="url(#codedg)" opacity="0.85"/>
+      <text x="20" y="140" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Kernel .text / .rodata / .data / .bss</text>
+      <text x="20" y="154" fill="#1a1b26" font-size="9" font-family="monospace">linker.ld places kernel at ≥ 0x100000 (1 MiB)</text>
+      <text x="20" y="164" fill="#1a1b26" font-size="9" font-family="monospace">contains: GDT, IDT, TSS, eBPF VM, sched, VFS, ipc, …</text>
+
+      <!-- GDT/IDT/TSS marker -->
+      <rect x="540" y="122" width="180" height="44" fill="url(#kernelg)" opacity="0.55"/>
+      <text x="560" y="140" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">GDT / IDT / TSS</text>
+      <text x="560" y="154" fill="#1a1b26" font-size="9" font-family="monospace">.code64 segment selectors:</text>
+      <text x="560" y="164" fill="#1a1b26" font-size="9" font-family="monospace">0x08 CS, 0x10 DS, 0x18 user64</text>
+
+      <!-- Capability registry / KLOG -->
+      <rect x="720" y="122" width="180" height="44" fill="url(#kernelg)" opacity="0.4"/>
+      <text x="740" y="140" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Static globals</text>
+      <text x="740" y="154" fill="#1a1b26" font-size="9" font-family="monospace">VFS, scheduler, FRAME_ALLOCATOR</text>
+      <text x="740" y="164" fill="#1a1b26" font-size="9" font-family="monospace">KLOG, BOOT_INFO, device_manager</text>
+
+      <!-- ── Boundary marker ── -->
+      <line x1="0" y1="170" x2="900" y2="170" stroke="#f7768e" stroke-width="2.5" stroke-dasharray="10 4"/>
+      <rect x="350" y="163" width="200" height="14" rx="3" fill="#f7768e"/>
+      <text x="450" y="174" text-anchor="middle" fill="#1a1b26" font-size="9" font-weight="bold" font-family="monospace">0xFFFF_8000_0000_0000  (higher-half)</text>
+    </g>
+
+    <!-- ── User half (bottom) ── -->
+    <g transform="translate(0, 184)">
+      <!-- User space block -->
+      <rect x="0" y="0" width="900" height="446" fill="url(#userg)" opacity="0.06"/>
+      <rect x="0" y="0" width="900" height="26" fill="url(#userg)" opacity="0.55"/>
+      <text x="20" y="18" fill="#1a1b26" font-size="12" font-weight="bold" font-family="monospace">User address space (per-process PML4)</text>
+
+      <!-- Region 1: User stack (top of user space, grows down) -->
+      <rect x="20" y="32" width="860" height="52" fill="url(#stackg)" opacity="0.85"/>
+      <text x="40" y="50" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">User stack</text>
+      <text x="40" y="65" fill="#1a1b26" font-size="9" font-family="monospace">default ~128 KiB · grows ↓ · guard page at bottom</text>
+      <text x="40" y="78" fill="#1a1b26" font-size="9" font-family="monospace">syscall trampoline pushes RAX/RDI/RSI/RDX/R10/R8/R9 → iretq pops</text>
+
+      <!-- gap -->
+      <rect x="20" y="88" width="860" height="20" fill="#1a1b26" stroke="#3b4261" stroke-width="0.5" stroke-dasharray="3 2"/>
+      <text x="450" y="102" text-anchor="middle" fill="#3b4261" font-size="9" font-family="monospace">↕ unallocated (sbrk/mmap can grow into this)</text>
+
+      <!-- Region 2: mmap area -->
+      <rect x="20" y="112" width="860" height="52" fill="url(#codedg)" opacity="0.4"/>
+      <text x="40" y="130" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">mmap region (VMA-backed)</text>
+      <text x="40" y="145" fill="#1a1b26" font-size="9" font-family="monospace">demand-paged from ELF segments on #PF</text>
+      <text x="40" y="158" fill="#1a1b26" font-size="9" font-family="monospace">COW fork = clone PML4 with read-only PTEs, fix on write fault</text>
+
+      <!-- gap -->
+      <rect x="20" y="168" width="860" height="20" fill="#1a1b26"/>
+
+      <!-- Region 3: heap / brk -->
+      <rect x="20" y="192" width="860" height="52" fill="url(#heapp)" opacity="0.85"/>
+      <text x="40" y="210" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Heap (program break)</text>
+      <text x="40" y="225" fill="#1a1b26" font-size="9" font-family="monospace">sys_brk / sbrk  ·  grows ↑</text>
+      <text x="40" y="238" fill="#1a1b26" font-size="9" font-family="monospace">backed by anonymous VMAs</text>
+
+      <!-- gap -->
+      <rect x="20" y="248" width="860" height="20" fill="#1a1b26"/>
+
+      <!-- Region 4: data + bss -->
+      <rect x="20" y="272" width="860" height="44" fill="#565f89" opacity="0.95"/>
+      <text x="40" y="290" fill="#c0caf5" font-size="11" font-weight="bold" font-family="monospace">Data + BSS</text>
+      <text x="40" y="304" fill="#c0caf5" font-size="9" font-family="monospace">initialized globals · zero-init globals · copy from ELF on execve</text>
+      <text x="40" y="314" fill="#c0caf5" font-size="9" font-family="monospace">writable, NX</text>
+
+      <!-- gap -->
+      <rect x="20" y="320" width="860" height="20" fill="#1a1b26"/>
+
+      <!-- Region 5: text -->
+      <rect x="20" y="344" width="860" height="44" fill="url(#codedg)" opacity="0.85"/>
+      <text x="40" y="362" fill="#1a1b26" font-size="11" font-weight="bold" font-family="monospace">Text (executable)</text>
+      <text x="40" y="376" fill="#1a1b26" font-size="9" font-family="monospace">read-only, NX-user  ·  ELF LOAD segments mapped here</text>
+      <text x="40" y="386" fill="#1a1b26" font-size="9" font-family="monospace">busybox, hello.wasm, custom ELFs</text>
+
+      <!-- gap -->
+      <rect x="20" y="392" width="860" height="20" fill="#1a1b26"/>
+
+      <!-- Region 6: null page trap -->
+      <rect x="20" y="416" width="860" height="26" fill="#f7768e" opacity="0.25" stroke="#f7768e" stroke-width="1.5"/>
+      <text x="40" y="433" fill="#f7768e" font-size="10" font-weight="bold" font-family="monospace">Null page (deliberately unmapped → segfault on NULL deref)</text>
+    </g>
+  </g>
+
+  <!-- PTE bit layout strip -->
+  <g transform="translate(60, 800)">
+    <text x="0" y="0" fill="#c0caf5" font-size="13" font-weight="bold" font-family="monospace">PTE bit layout (64 bits)</text>
+  </g>
+  <g transform="translate(60, 815)">
+    <rect x="0"   y="0" width="14" height="22" rx="2" fill="#f7768e"/>
+    <rect x="14"  y="0" width="14" height="22" rx="2" fill="#e0af68"/>
+    <rect x="28"  y="0" width="14" height="22" rx="2" fill="#9ece6a"/>
+    <rect x="42"  y="0" width="14" height="22" rx="2" fill="#bb9af7"/>
+    <rect x="56"  y="0" width="14" height="22" rx="2" fill="#2ac3de"/>
+    <rect x="70"  y="0" width="14" height="22" rx="2" fill="#c0caf5"/>
+    <rect x="84"  y="0" width="14" height="22" rx="2" fill="#565f89"/>
+    <rect x="98"  y="0" width="14" height="22" rx="2" fill="#f7768e"/>
+    <rect x="112" y="0" width="280" height="22" rx="2" fill="#7aa2f7"/>
+    <rect x="392" y="0" width="50"  height="22" rx="2" fill="#565f89"/>
+    <rect x="442" y="0" width="14"  height="22" rx="2" fill="#f7768e"/>
+
+    <text x="7"   y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">P</text>
+    <text x="21"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">R</text>
+    <text x="35"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">W</text>
+    <text x="49"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">U</text>
+    <text x="63"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">PWT</text>
+    <text x="77"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">PCD</text>
+    <text x="91"  y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">A</text>
+    <text x="105" y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">D</text>
+    <text x="252" y="15" text-anchor="middle" fill="#1a1b26" font-size="9" font-weight="bold">Physical Page Frame (bits 12-51)</text>
+    <text x="417" y="15" text-anchor="middle" fill="#c0caf5" font-size="8" font-weight="bold">avail</text>
+    <text x="449" y="15" text-anchor="middle" fill="#1a1b26" font-size="8" font-weight="bold">NX</text>
+
+    <text x="0"   y="38" fill="#565f89" font-size="9" font-family="monospace">P=Present  R=Read  W=Write  U=User  PWT=WriteThrough  PCD=CacheDisable  A=Accessed  D=Dirty  NX=NoExecute</text>
+    <text x="0"   y="52" fill="#565f89" font-size="9" font-family="monospace">TLB shootdown across CPUs via smp::tlb_shootdown_all();  invlpg flushes a single VA from the local TLB.</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(620, 800)">
+    <rect x="0" y="0" width="12" height="12" rx="2" fill="#f7768e"/>
+    <text x="18" y="10" fill="#565f89" font-size="10" font-family="monospace">kernel</text>
+    <rect x="80" y="0" width="12" height="12" rx="2" fill="#7aa2f7"/>
+    <text x="98" y="10" fill="#565f89" font-size="10" font-family="monospace">user</text>
+    <rect x="150" y="0" width="12" height="12" rx="2" fill="#e0af68"/>
+    <text x="168" y="10" fill="#565f89" font-size="10" font-family="monospace">heap</text>
+    <rect x="220" y="0" width="12" height="12" rx="2" fill="#9ece6a"/>
+    <text x="238" y="10" fill="#565f89" font-size="10" font-family="monospace">stack</text>
+    <rect x="290" y="0" width="12" height="12" rx="2" fill="#bb9af7"/>
+    <text x="308" y="10" fill="#565f89" font-size="10" font-family="monospace">physmap</text>
+    <rect x="380" y="0" width="12" height="12" rx="2" fill="#2ac3de"/>
+    <text x="398" y="10" fill="#565f89" font-size="10" font-family="monospace">code/data</text>
+    <rect x="490" y="0" width="12" height="12" rx="2" fill="#73daca"/>
+    <text x="508" y="10" fill="#565f89" font-size="10" font-family="monospace">page tables</text>
+  </g>
+</svg>

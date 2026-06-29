@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 640" font-family="'Courier New', monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="userg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="loadg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="jailg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="procg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="mamg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="arroww" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#c0caf5"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="640" fill="url(#bg)" rx="8"/>
+
+  <text x="360" y="28" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="sans-serif">eBPF Verifier &amp; Execution Flow</text>
+
+  <!-- ===== Source program ===== -->
+  <rect x="180" y="50" width="360" height="50" rx="4" fill="url(#userg)" filter="url(#shadow)"/>
+  <text x="360" y="72" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">eBPF Bytecode (user-supplied)</text>
+  <text x="360" y="90" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="sans-serif">Up to 4096 insns · may be loaded by privileged process</text>
+
+  <line x1="360" y1="100" x2="360" y2="130" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===== Verifier ===== -->
+  <rect x="30" y="130" width="660" height="200" rx="4" fill="#1a1b26" stroke="#f7768e" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="360" y="155" text-anchor="middle" fill="#f7768e" font-size="14" font-weight="bold" font-family="sans-serif">eBPF Verifier (in-kernel)</text>
+
+  <text x="60" y="178" fill="#c0caf5" font-size="10" font-weight="bold" font-family="sans-serif">Step 1: Structural checks</text>
+  <text x="80" y="196" fill="#565f89" font-size="9" font-family="sans-serif">├─ insn count ≤ 4096 · insn boundary alignment</text>
+  <text x="80" y="211" fill="#565f89" font-size="9" font-family="sans-serif">└─ JMP targets within bounds · no loops (DAG check)</text>
+
+  <text x="60" y="233" fill="#c0caf5" font-size="10" font-weight="bold" font-family="sans-serif">Step 2: Control-flow graph construction</text>
+  <text x="80" y="251" fill="#565f89" font-size="9" font-family="sans-serif">├─ Build basic blocks · DFS reachability</text>
+  <text x="80" y="266" fill="#565f89" font-size="9" font-family="sans-serif">└─ Detect dead code · prune unreachable blocks</text>
+
+  <text x="60" y="288" fill="#c0caf5" font-size="10" font-weight="bold" font-family="sans-serif">Step 3: Abstract interpretation</text>
+  <text x="80" y="306" fill="#565f89" font-size="9" font-family="sans-serif">├─ 64-bit tracked state per register (known/unknown, range bounds, pointer ID)</text>
+  <text x="80" y="321" fill="#565f89" font-size="9" font-family="sans-serif">└─ Reject if: unsafe ptr arithmetic, invalid stack access, unbounded loops, type mismatch</text>
+
+  <!-- Verdict outcomes -->
+  <line x1="180" y1="330" x2="180" y2="370" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="370" width="240" height="50" rx="4" fill="url(#procg)" filter="url(#shadow)"/>
+  <text x="180" y="393" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">PASS → JIT Compile</text>
+  <text x="180" y="410" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">Translated to x86_64 native code</text>
+
+  <line x1="540" y1="330" x2="540" y2="370" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="420" y="370" width="240" height="50" rx="4" fill="url(#jailg)" filter="url(#shadow)"/>
+  <text x="540" y="393" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">FAIL → Load Denied</text>
+  <text x="540" y="410" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">Error code + offending instruction</text>
+
+  <!-- ===== JIT Engine ===== -->
+  <rect x="60" y="445" width="240" height="70" rx="4" fill="url(#mamg)" filter="url(#shadow)"/>
+  <text x="180" y="468" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">JIT Compiler</text>
+  <text x="180" y="487" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">64 opcodes → native x86_64</text>
+  <text x="180" y="502" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">Executable rwx page in kernel</text>
+
+  <line x1="300" y1="480" x2="380" y2="480" stroke="#c0caf5" stroke-width="2" marker-end="url(#arroww)"/>
+
+  <!-- ===== Interpreter fallback ===== -->
+  <rect x="380" y="450" width="280" height="60" rx="4" fill="url(#loadg)" filter="url(#shadow)"/>
+  <text x="520" y="473" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">Interpreter (fallback)</text>
+  <text x="520" y="492" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">fetch_decode_exec loop · slower, no allocation</text>
+
+  <!-- ===== Execution ===== -->
+  <line x1="180" y1="515" x2="180" y2="555" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="60" y="555" width="600" height="55" rx="4" fill="url(#userg)" filter="url(#shadow)"/>
+  <text x="360" y="578" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="sans-serif">eBPF Runtime</text>
+  <text x="360" y="597" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="sans-serif">R0 = return value · Helper function calls · Tail calls to other programs</text>
+
+  <text x="360" y="633" text-anchor="middle" fill="#3b4261" font-size="9" font-family="sans-serif">Safety-critical pipeline: bytecode → verifier → JIT/interpreter → bounded runtime</text>
+</svg>

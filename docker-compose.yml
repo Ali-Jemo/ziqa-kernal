@@ -1,0 +1,41 @@
+services:
+  dev:
+    build:
+      context: .
+      target: dev
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+
+  build:
+    build:
+      context: .
+      target: build
+    volumes:
+      - .:/workspace
+
+  run:
+    build:
+      context: .
+      target: run
+    volumes:
+      - .:/workspace
+    devices:
+      - /dev/kvm:/dev/kvm
+    environment:
+      - DISPLAY=${DISPLAY:-}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+
+  run-headless:
+    build:
+      context: .
+      target: build
+    volumes:
+      - .:/workspace
+    command: >
+      qemu-system-x86_64
+      -drive format=raw,file=target/x86_64-unknown-none/debug/bootimage-ziqa-kernel.bin
+      -serial stdio -display none

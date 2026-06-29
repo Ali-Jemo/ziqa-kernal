@@ -1,0 +1,348 @@
+
+gui/orbital-master/target/x86_64-unknown-redox/release/orbital:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000010149720 <relibc_start_v1>:
+    10149720:	55                   	push   %rbp
+    10149721:	48 89 e5             	mov    %rsp,%rbp
+    10149724:	41 57                	push   %r15
+    10149726:	41 56                	push   %r14
+    10149728:	41 55                	push   %r13
+    1014972a:	41 54                	push   %r12
+    1014972c:	53                   	push   %rbx
+    1014972d:	48 83 ec 28          	sub    $0x28,%rsp
+    10149731:	49 89 f6             	mov    %rsi,%r14
+    10149734:	49 89 f9             	mov    %rdi,%r9
+    10149737:	b8 9e 00 00 00       	mov    $0x9e,%eax
+    1014973c:	48 c7 c7 ff ff ff ff 	mov    $0xffffffffffffffff,%rdi
+    10149743:	48 c7 c6 ff ff ff ff 	mov    $0xffffffffffffffff,%rsi
+    1014974a:	48 c7 c2 ff ff ff ff 	mov    $0xffffffffffffffff,%rdx
+    10149751:	49 c7 c2 ff ff ff ff 	mov    $0xffffffffffffffff,%r10
+    10149758:	49 c7 c0 ff ff ff ff 	mov    $0xffffffffffffffff,%r8
+    1014975f:	0f 05                	syscall
+    10149761:	3d 7c ff ff ff       	cmp    $0xffffff7c,%eax
+    10149766:	0f 83 58 05 00 00    	jae    10149cc4 <relibc_start_v1+0x5a4>
+    1014976c:	4d 8d 61 08          	lea    0x8(%r9),%r12
+    10149770:	49 8b 01             	mov    (%r9),%rax
+    10149773:	48 89 45 b8          	mov    %rax,-0x48(%rbp)
+    10149777:	4d 8d 3c c1          	lea    (%r9,%rax,8),%r15
+    1014977b:	49 83 c7 10          	add    $0x10,%r15
+    1014977f:	4c 89 f8             	mov    %r15,%rax
+    10149782:	66 66 66 66 66 2e 0f 	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+    10149789:	1f 84 00 00 00 00 00 
+    10149790:	48 83 38 00          	cmpq   $0x0,(%rax)
+    10149794:	48 8d 40 08          	lea    0x8(%rax),%rax
+    10149798:	75 f6                	jne    10149790 <relibc_start_v1+0x70>
+    1014979a:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)
+    101497a0:	48 8b 08             	mov    (%rax),%rcx
+    101497a3:	48 85 c9             	test   %rcx,%rcx
+    101497a6:	0f 84 18 05 00 00    	je     10149cc4 <relibc_start_v1+0x5a4>
+    101497ac:	48 83 c0 10          	add    $0x10,%rax
+    101497b0:	48 83 f9 2a          	cmp    $0x2a,%rcx
+    101497b4:	75 ea                	jne    101497a0 <relibc_start_v1+0x80>
+    101497b6:	4c 8b 40 f8          	mov    -0x8(%rax),%r8
+    101497ba:	49 0f ba e0 3e       	bt     $0x3e,%r8
+    101497bf:	72 2f                	jb     101497f0 <relibc_start_v1+0xd0>
+    101497c1:	48 ba 00 00 00 00 00 	movabs $0x4000000000000000,%rdx
+    101497c8:	00 00 40 
+    101497cb:	b8 37 00 00 20       	mov    $0x20000037,%eax
+    101497d0:	4c 89 c7             	mov    %r8,%rdi
+    101497d3:	31 f6                	xor    %esi,%esi
+    101497d5:	0f 05                	syscall
+    101497d7:	48 89 c2             	mov    %rax,%rdx
+    101497da:	b8 06 00 00 20       	mov    $0x20000006,%eax
+    101497df:	0f 05                	syscall
+    101497e1:	81 fa 7b ff ff ff    	cmp    $0xffffff7b,%edx
+    101497e7:	49 89 d0             	mov    %rdx,%r8
+    101497ea:	0f 87 d4 04 00 00    	ja     10149cc4 <relibc_start_v1+0x5a4>
+    101497f0:	0f 57 c0             	xorps  %xmm0,%xmm0
+    101497f3:	0f 29 45 c0          	movaps %xmm0,-0x40(%rbp)
+    101497f7:	48 8d 35 c3 b2 03 00 	lea    0x3b2c3(%rip),%rsi        # 10184ac1 <anon.875f81c13414be3d668ab926d3f421b6.26.llvm.6906131006381979681>
+    101497fe:	ba 08 00 00 00       	mov    $0x8,%edx
+    10149803:	b8 29 00 10 20       	mov    $0x20100029,%eax
+    10149808:	4c 89 c7             	mov    %r8,%rdi
+    1014980b:	0f 05                	syscall
+    1014980d:	48 89 c7             	mov    %rax,%rdi
+    10149810:	81 ff 7b ff ff ff    	cmp    $0xffffff7b,%edi
+    10149816:	0f 87 a8 04 00 00    	ja     10149cc4 <relibc_start_v1+0x5a4>
+    1014981c:	48 8d 75 c0          	lea    -0x40(%rbp),%rsi
+    10149820:	ba 10 00 00 00       	mov    $0x10,%edx
+    10149825:	b8 03 00 00 22       	mov    $0x22000003,%eax
+    1014982a:	0f 05                	syscall
+    1014982c:	3d 7b ff ff ff       	cmp    $0xffffff7b,%eax
+    10149831:	0f 87 8d 04 00 00    	ja     10149cc4 <relibc_start_v1+0x5a4>
+    10149837:	b8 06 00 00 20       	mov    $0x20000006,%eax
+    1014983c:	0f 05                	syscall
+    1014983e:	48 83 7d c0 00       	cmpq   $0x0,-0x40(%rbp)
+    10149843:	75 0b                	jne    10149850 <relibc_start_v1+0x130>
+    10149845:	4c 89 cf             	mov    %r9,%rdi
+    10149848:	4c 89 c6             	mov    %r8,%rsi
+    1014984b:	e8 70 10 ff ff       	call   1013a8c0 <_RNvNtCs5L2uLVYXJ6P_6relibc5ld_so11static_init.llvm.6906131006381979681>
+    10149850:	80 3d 99 2a 09 00 00 	cmpb   $0x0,0x92a99(%rip)        # 101dc2f0 <_RNvNtCs5L2uLVYXJ6P_6relibc5start13INIT_COMPLETE.0>
+    10149857:	0f 84 2e 02 00 00    	je     10149a8b <relibc_start_v1+0x36b>
+    1014985d:	b8 10 00 00 00       	mov    $0x10,%eax
+    10149862:	64 4c 8b 28          	mov    %fs:(%rax),%r13
+    10149866:	b9 18 00 00 00       	mov    $0x18,%ecx
+    1014986b:	64 48 8b 01          	mov    %fs:(%rcx),%rax
+    1014986f:	4d 85 ed             	test   %r13,%r13
+    10149872:	0f 84 3b 01 00 00    	je     101499b3 <relibc_start_v1+0x293>
+    10149878:	48 3d e8 01 00 00    	cmp    $0x1e8,%rax
+    1014987e:	0f 82 2f 01 00 00    	jb     101499b3 <relibc_start_v1+0x293>
+    10149884:	49 83 bd 08 02 00 00 	cmpq   $0x0,0x208(%r13)
+    1014988b:	00 
+    1014988c:	75 1c                	jne    101498aa <relibc_start_v1+0x18a>
+    1014988e:	48 8d 05 53 2c 09 00 	lea    0x92c53(%rip),%rax        # 101dc4e8 <_RNvCs5L2uLVYXJ6P_6relibc9ALLOCATOR>
+    10149895:	48 8b 0d d4 2f 09 00 	mov    0x92fd4(%rip),%rcx        # 101dc870 <_RNvCs5L2uLVYXJ6P_6relibc9ALLOCATOR+0x388>
+    1014989c:	48 85 c9             	test   %rcx,%rcx
+    1014989f:	48 0f 45 c1          	cmovne %rcx,%rax
+    101498a3:	49 89 85 08 02 00 00 	mov    %rax,0x208(%r13)
+    101498aa:	49 83 bd 00 02 00 00 	cmpq   $0x0,0x200(%r13)
+    101498b1:	00 
+    101498b2:	0f 85 e9 00 00 00    	jne    101499a1 <relibc_start_v1+0x281>
+    101498b8:	ff 15 2a 05 09 00    	call   *0x9052a(%rip)        # 101d9de8 <_GLOBAL_OFFSET_TABLE_+0x8c0>
+    101498be:	bf 48 00 00 00       	mov    $0x48,%edi
+    101498c3:	be 08 00 00 00       	mov    $0x8,%esi
+    101498c8:	e8 e3 89 00 00       	call   101522b0 <__relibc__RNvCsjcV3QP8sCdN_7___rustc12___rust_alloc>
+    101498cd:	48 85 c0             	test   %rax,%rax
+    101498d0:	0f 84 f0 03 00 00    	je     10149cc6 <relibc_start_v1+0x5a6>
+    101498d6:	48 89 c3             	mov    %rax,%rbx
+    101498d9:	48 c7 00 01 00 00 00 	movq   $0x1,(%rax)
+    101498e0:	48 c7 40 08 01 00 00 	movq   $0x1,0x8(%rax)
+    101498e7:	00 
+    101498e8:	48 c7 40 10 00 00 00 	movq   $0x0,0x10(%rax)
+    101498ef:	00 
+    101498f0:	48 c7 40 18 01 00 00 	movq   $0x1,0x18(%rax)
+    101498f7:	00 
+    101498f8:	48 8d 05 31 d4 08 00 	lea    0x8d431(%rip),%rax        # 101d6d30 <anon.af3a22c2bb05f1cf0d971d0d2aaa6346.6.llvm.10478213780381311346>
+    101498ff:	48 89 43 20          	mov    %rax,0x20(%rbx)
+    10149903:	48 c7 43 28 01 00 00 	movq   $0x1,0x28(%rbx)
+    1014990a:	00 
+    1014990b:	48 8d 05 4e d4 08 00 	lea    0x8d44e(%rip),%rax        # 101d6d60 <anon.af3a22c2bb05f1cf0d971d0d2aaa6346.7.llvm.10478213780381311346>
+    10149912:	48 89 43 30          	mov    %rax,0x30(%rbx)
+    10149916:	48 c7 43 38 01 00 00 	movq   $0x1,0x38(%rbx)
+    1014991d:	00 
+    1014991e:	48 8d 05 6b d4 08 00 	lea    0x8d46b(%rip),%rax        # 101d6d90 <anon.af3a22c2bb05f1cf0d971d0d2aaa6346.8.llvm.10478213780381311346>
+    10149925:	48 89 43 40          	mov    %rax,0x40(%rbx)
+    10149929:	0f 57 c0             	xorps  %xmm0,%xmm0
+    1014992c:	0f 11 45 c8          	movups %xmm0,-0x38(%rbp)
+    10149930:	ff 15 b2 04 09 00    	call   *0x904b2(%rip)        # 101d9de8 <_GLOBAL_OFFSET_TABLE_+0x8c0>
+    10149936:	bf 78 00 00 00       	mov    $0x78,%edi
+    1014993b:	be 08 00 00 00       	mov    $0x8,%esi
+    10149940:	e8 6b 89 00 00       	call   101522b0 <__relibc__RNvCsjcV3QP8sCdN_7___rustc12___rust_alloc>
+    10149945:	48 85 c0             	test   %rax,%rax
+    10149948:	0f 84 88 03 00 00    	je     10149cd6 <relibc_start_v1+0x5b6>
+    1014994e:	48 c7 00 ff ff ff ff 	movq   $0xffffffffffffffff,(%rax)
+    10149955:	c7 40 18 00 00 00 00 	movl   $0x0,0x18(%rax)
+    1014995c:	c6 40 1c 00          	movb   $0x0,0x1c(%rax)
+    10149960:	48 89 58 20          	mov    %rbx,0x20(%rax)
+    10149964:	48 c7 40 28 01 00 00 	movq   $0x1,0x28(%rax)
+    1014996b:	00 
+    1014996c:	48 c7 40 30 01 00 00 	movq   $0x1,0x30(%rax)
+    10149973:	00 
+    10149974:	0f 57 c0             	xorps  %xmm0,%xmm0
+    10149977:	0f 11 40 38          	movups %xmm0,0x38(%rax)
+    1014997b:	0f 10 45 c0          	movups -0x40(%rbp),%xmm0
+    1014997f:	0f 11 40 48          	movups %xmm0,0x48(%rax)
+    10149983:	48 8b 4d d0          	mov    -0x30(%rbp),%rcx
+    10149987:	48 89 48 58          	mov    %rcx,0x58(%rax)
+    1014998b:	48 c7 40 68 00 00 00 	movq   $0x0,0x68(%rax)
+    10149992:	00 
+    10149993:	c7 40 70 00 00 00 00 	movl   $0x0,0x70(%rax)
+    1014999a:	49 89 85 00 02 00 00 	mov    %rax,0x200(%r13)
+    101499a1:	49 83 c5 20          	add    $0x20,%r13
+    101499a5:	4c 89 ef             	mov    %r13,%rdi
+    101499a8:	be 01 00 00 00       	mov    $0x1,%esi
+    101499ad:	ff 15 ed 10 09 00    	call   *0x910ed(%rip)        # 101daaa0 <_GLOBAL_OFFSET_TABLE_+0x1578>
+    101499b3:	48 8d 7d c0          	lea    -0x40(%rbp),%rdi
+    101499b7:	4c 89 e6             	mov    %r12,%rsi
+    101499ba:	48 8b 55 b8          	mov    -0x48(%rbp),%rdx
+    101499be:	e8 5d ea ff ff       	call   10148420 <_RNvNtCs5L2uLVYXJ6P_6relibc5start17copy_string_array>
+    101499c3:	48 8d 3d 3e 17 09 00 	lea    0x9173e(%rip),%rdi        # 101db108 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform10inner_argv>
+    101499ca:	e8 f1 cf 00 00       	call   101569c0 <_RNvXs1_NtCsaxXNxI1B1e2_5alloc7raw_vecINtB5_6RawVecINtNtB7_3vec3VecINtNtCs2plLtuaaMiQ_6object3elf15ProgramHeader64NtNtB17_6endian12LittleEndianEEENtNtNtCs95Vd2gci2Mn_4core3ops4drop4Drop4dropCs5L2uLVYXJ6P_6relibc>
+    101499cf:	48 8b 4d d0          	mov    -0x30(%rbp),%rcx
+    101499d3:	48 89 0d 3e 17 09 00 	mov    %rcx,0x9173e(%rip)        # 101db118 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform10inner_argv+0x10>
+    101499da:	0f 10 45 c0          	movups -0x40(%rbp),%xmm0
+    101499de:	0f 11 05 23 17 09 00 	movups %xmm0,0x91723(%rip)        # 101db108 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform10inner_argv>
+    101499e5:	48 8b 05 24 17 09 00 	mov    0x91724(%rip),%rax        # 101db110 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform10inner_argv+0x8>
+    101499ec:	48 89 05 a5 2a 09 00 	mov    %rax,0x92aa5(%rip)        # 101dc498 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform4argv>
+    101499f3:	48 85 c9             	test   %rcx,%rcx
+    101499f6:	0f 84 f8 00 00 00    	je     10149af4 <relibc_start_v1+0x3d4>
+    101499fc:	48 8b 18             	mov    (%rax),%rbx
+    101499ff:	48 89 1d 9a 2a 09 00 	mov    %rbx,0x92a9a(%rip)        # 101dc4a0 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform23program_invocation_name>
+    10149a06:	4c 8d 25 17 56 03 00 	lea    0x35617(%rip),%r12        # 1017f024 <anon.3de190ddf7cb4fe4b9d6aa9c22d5f042.94.llvm.16610642918011195879>
+    10149a0d:	48 85 db             	test   %rbx,%rbx
+    10149a10:	0f 84 d7 00 00 00    	je     10149aed <relibc_start_v1+0x3cd>
+    10149a16:	80 3b 00             	cmpb   $0x0,(%rbx)
+    10149a19:	0f 84 ce 00 00 00    	je     10149aed <relibc_start_v1+0x3cd>
+    10149a1f:	48 89 d8             	mov    %rbx,%rax
+    10149a22:	b9 01 00 00 00       	mov    $0x1,%ecx
+    10149a27:	48 ff c0             	inc    %rax
+    10149a2a:	74 09                	je     10149a35 <relibc_start_v1+0x315>
+    10149a2c:	80 38 00             	cmpb   $0x0,(%rax)
+    10149a2f:	0f 85 70 02 00 00    	jne    10149ca5 <relibc_start_v1+0x585>
+    10149a35:	31 c0                	xor    %eax,%eax
+    10149a37:	48 83 f8 ff          	cmp    $0xffffffffffffffff,%rax
+    10149a3b:	48 c7 c2 ff ff ff ff 	mov    $0xffffffffffffffff,%rdx
+    10149a42:	48 0f 4c d0          	cmovl  %rax,%rdx
+    10149a46:	48 89 ce             	mov    %rcx,%rsi
+    10149a49:	0f 1f 80 00 00 00 00 	nopl   0x0(%rax)
+    10149a50:	48 ff ce             	dec    %rsi
+    10149a53:	78 7a                	js     10149acf <relibc_start_v1+0x3af>
+    10149a55:	80 7c 0b ff 2f       	cmpb   $0x2f,-0x1(%rbx,%rcx,1)
+    10149a5a:	48 89 f1             	mov    %rsi,%rcx
+    10149a5d:	74 f1                	je     10149a50 <relibc_start_v1+0x330>
+    10149a5f:	48 89 f1             	mov    %rsi,%rcx
+    10149a62:	66 66 66 66 66 2e 0f 	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+    10149a69:	1f 84 00 00 00 00 00 
+    10149a70:	80 3c 0b 2f          	cmpb   $0x2f,(%rbx,%rcx,1)
+    10149a74:	74 10                	je     10149a86 <relibc_start_v1+0x366>
+    10149a76:	48 85 c9             	test   %rcx,%rcx
+    10149a79:	48 8d 49 ff          	lea    -0x1(%rcx),%rcx
+    10149a7d:	7f f1                	jg     10149a70 <relibc_start_v1+0x350>
+    10149a7f:	48 c7 c1 ff ff ff ff 	mov    $0xffffffffffffffff,%rcx
+    10149a86:	48 89 f2             	mov    %rsi,%rdx
+    10149a89:	eb 56                	jmp    10149ae1 <relibc_start_v1+0x3c1>
+    10149a8b:	b9 10 00 00 00       	mov    $0x10,%ecx
+    10149a90:	64 48 8b 01          	mov    %fs:(%rcx),%rax
+    10149a94:	ba 18 00 00 00       	mov    $0x18,%edx
+    10149a99:	64 48 8b 0a          	mov    %fs:(%rdx),%rcx
+    10149a9d:	48 85 c0             	test   %rax,%rax
+    10149aa0:	0f 84 b7 fd ff ff    	je     1014985d <relibc_start_v1+0x13d>
+    10149aa6:	48 81 f9 e8 01 00 00 	cmp    $0x1e8,%rcx
+    10149aad:	0f 82 aa fd ff ff    	jb     1014985d <relibc_start_v1+0x13d>
+    10149ab3:	48 8b 80 08 02 00 00 	mov    0x208(%rax),%rax
+    10149aba:	48 85 c0             	test   %rax,%rax
+    10149abd:	0f 84 9a fd ff ff    	je     1014985d <relibc_start_v1+0x13d>
+    10149ac3:	48 89 05 a6 2d 09 00 	mov    %rax,0x92da6(%rip)        # 101dc870 <_RNvCs5L2uLVYXJ6P_6relibc9ALLOCATOR+0x388>
+    10149aca:	e9 8e fd ff ff       	jmp    1014985d <relibc_start_v1+0x13d>
+    10149acf:	48 89 d1             	mov    %rdx,%rcx
+    10149ad2:	48 83 f8 fe          	cmp    $0xfffffffffffffffe,%rax
+    10149ad6:	7e 09                	jle    10149ae1 <relibc_start_v1+0x3c1>
+    10149ad8:	4c 8d 25 d2 75 03 00 	lea    0x375d2(%rip),%r12        # 101810b1 <anon.92c46fec0210af977052782c157d69fc.128.llvm.12560999064350417906>
+    10149adf:	eb 0c                	jmp    10149aed <relibc_start_v1+0x3cd>
+    10149ae1:	c6 44 13 01 00       	movb   $0x0,0x1(%rbx,%rdx,1)
+    10149ae6:	4c 8d 24 0b          	lea    (%rbx,%rcx,1),%r12
+    10149aea:	49 ff c4             	inc    %r12
+    10149aed:	4c 89 25 b4 29 09 00 	mov    %r12,0x929b4(%rip)        # 101dc4a8 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform29program_invocation_short_name>
+    10149af4:	4c 8d 25 b5 29 09 00 	lea    0x929b5(%rip),%r12        # 101dc4b0 <environ>
+    10149afb:	49 83 3c 24 00       	cmpq   $0x0,(%r12)
+    10149b00:	75 5e                	jne    10149b60 <relibc_start_v1+0x440>
+    10149b02:	48 c7 c2 ff ff ff ff 	mov    $0xffffffffffffffff,%rdx
+    10149b09:	0f 1f 80 00 00 00 00 	nopl   0x0(%rax)
+    10149b10:	49 83 7c d7 08 00    	cmpq   $0x0,0x8(%r15,%rdx,8)
+    10149b16:	48 8d 52 01          	lea    0x1(%rdx),%rdx
+    10149b1a:	75 f4                	jne    10149b10 <relibc_start_v1+0x3f0>
+    10149b1c:	48 8d 7d c0          	lea    -0x40(%rbp),%rdi
+    10149b20:	4c 89 fe             	mov    %r15,%rsi
+    10149b23:	e8 f8 e8 ff ff       	call   10148420 <_RNvNtCs5L2uLVYXJ6P_6relibc5start17copy_string_array>
+    10149b28:	48 8d 3d 21 16 09 00 	lea    0x91621(%rip),%rdi        # 101db150 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform11OUR_ENVIRON>
+    10149b2f:	e8 8c ce 00 00       	call   101569c0 <_RNvXs1_NtCsaxXNxI1B1e2_5alloc7raw_vecINtB5_6RawVecINtNtB7_3vec3VecINtNtCs2plLtuaaMiQ_6object3elf15ProgramHeader64NtNtB17_6endian12LittleEndianEEENtNtNtCs95Vd2gci2Mn_4core3ops4drop4Drop4dropCs5L2uLVYXJ6P_6relibc>
+    10149b34:	48 8b 45 d0          	mov    -0x30(%rbp),%rax
+    10149b38:	48 89 05 21 16 09 00 	mov    %rax,0x91621(%rip)        # 101db160 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform11OUR_ENVIRON+0x10>
+    10149b3f:	0f 10 45 c0          	movups -0x40(%rbp),%xmm0
+    10149b43:	0f 11 05 06 16 09 00 	movups %xmm0,0x91606(%rip)        # 101db150 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform11OUR_ENVIRON>
+    10149b4a:	48 8b 05 07 16 09 00 	mov    0x91607(%rip),%rax        # 101db158 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform11OUR_ENVIRON+0x8>
+    10149b51:	49 89 04 24          	mov    %rax,(%r12)
+    10149b55:	66 66 2e 0f 1f 84 00 	data16 cs nopw 0x0(%rax,%rax,1)
+    10149b5c:	00 00 00 00 
+    10149b60:	49 83 3f 00          	cmpq   $0x0,(%r15)
+    10149b64:	4d 8d 7f 08          	lea    0x8(%r15),%r15
+    10149b68:	75 f6                	jne    10149b60 <relibc_start_v1+0x440>
+    10149b6a:	4c 89 ff             	mov    %r15,%rdi
+    10149b6d:	e8 5e ef eb ff       	call   10008ad0 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform9get_auxvs>
+    10149b72:	48 89 c7             	mov    %rax,%rdi
+    10149b75:	48 89 d6             	mov    %rdx,%rsi
+    10149b78:	e8 53 ed eb ff       	call   100088d0 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform4init>
+    10149b7d:	80 3d 6c 27 09 00 00 	cmpb   $0x0,0x9276c(%rip)        # 101dc2f0 <_RNvNtCs5L2uLVYXJ6P_6relibc5start13INIT_COMPLETE.0>
+    10149b84:	0f 85 9f 00 00 00    	jne    10149c29 <relibc_start_v1+0x509>
+    10149b8a:	b9 10 00 00 00       	mov    $0x10,%ecx
+    10149b8f:	64 48 8b 01          	mov    %fs:(%rcx),%rax
+    10149b93:	ba 18 00 00 00       	mov    $0x18,%edx
+    10149b98:	64 48 8b 0a          	mov    %fs:(%rdx),%rcx
+    10149b9c:	48 85 c0             	test   %rax,%rax
+    10149b9f:	74 1c                	je     10149bbd <relibc_start_v1+0x49d>
+    10149ba1:	48 81 f9 e8 01 00 00 	cmp    $0x1e8,%rcx
+    10149ba8:	72 13                	jb     10149bbd <relibc_start_v1+0x49d>
+    10149baa:	48 8b 80 08 02 00 00 	mov    0x208(%rax),%rax
+    10149bb1:	48 85 c0             	test   %rax,%rax
+    10149bb4:	74 07                	je     10149bbd <relibc_start_v1+0x49d>
+    10149bb6:	48 89 05 b3 2c 09 00 	mov    %rax,0x92cb3(%rip)        # 101dc870 <_RNvCs5L2uLVYXJ6P_6relibc9ALLOCATOR+0x388>
+    10149bbd:	48 8d 1d 34 27 09 00 	lea    0x92734(%rip),%rbx        # 101dc2f8 <_RNvNtNtNtCs5L2uLVYXJ6P_6relibc6header5stdio7default13DEFAULT_STDIN>
+    10149bc4:	48 89 df             	mov    %rbx,%rdi
+    10149bc7:	e8 f4 66 ff ff       	call   101402c0 <_RINvMs0_NtNtCs5L2uLVYXJ6P_6relibc4sync4onceINtB6_4OnceNtNtNtNtBa_6header5stdio7default10GlobalFileE9call_onceNCNvBS_13default_stdin0EBa_>
+    10149bcc:	48 8d 05 ad 28 09 00 	lea    0x928ad(%rip),%rax        # 101dc480 <stdin>
+    10149bd3:	48 89 18             	mov    %rbx,(%rax)
+    10149bd6:	48 8d 1d 1b 28 09 00 	lea    0x9281b(%rip),%rbx        # 101dc3f8 <_RNvNtNtNtCs5L2uLVYXJ6P_6relibc6header5stdio7default14DEFAULT_STDOUT>
+    10149bdd:	48 89 df             	mov    %rbx,%rdi
+    10149be0:	e8 5b 6a ff ff       	call   10140640 <_RINvMs0_NtNtCs5L2uLVYXJ6P_6relibc4sync4onceINtB6_4OnceNtNtNtNtBa_6header5stdio7default10GlobalFileE9call_onceNCNvBS_14default_stdout0EBa_>
+    10149be5:	48 8d 05 9c 28 09 00 	lea    0x9289c(%rip),%rax        # 101dc488 <stdout>
+    10149bec:	48 89 18             	mov    %rbx,(%rax)
+    10149bef:	48 8d 1d 82 27 09 00 	lea    0x92782(%rip),%rbx        # 101dc378 <_RNvNtNtNtCs5L2uLVYXJ6P_6relibc6header5stdio7default14DEFAULT_STDERR>
+    10149bf6:	48 89 df             	mov    %rbx,%rdi
+    10149bf9:	e8 82 68 ff ff       	call   10140480 <_RINvMs0_NtNtCs5L2uLVYXJ6P_6relibc4sync4onceINtB6_4OnceNtNtNtNtBa_6header5stdio7default10GlobalFileE9call_onceNCNvBS_14default_stderr0EBa_>
+    10149bfe:	48 8d 05 8b 28 09 00 	lea    0x9288b(%rip),%rax        # 101dc490 <stderr>
+    10149c05:	48 89 18             	mov    %rbx,(%rax)
+    10149c08:	49 83 3c 24 00       	cmpq   $0x0,(%r12)
+    10149c0d:	75 0e                	jne    10149c1d <relibc_start_v1+0x4fd>
+    10149c0f:	48 8d 05 62 28 09 00 	lea    0x92862(%rip),%rax        # 101dc478 <__relibc_init_environ>
+    10149c16:	48 8b 00             	mov    (%rax),%rax
+    10149c19:	49 89 04 24          	mov    %rax,(%r12)
+    10149c1d:	e8 0e d7 ff ff       	call   10147330 <_RNvNtCs5L2uLVYXJ6P_6relibc7pthread4init>
+    10149c22:	c6 05 c7 26 09 00 01 	movb   $0x1,0x926c7(%rip)        # 101dc2f0 <_RNvNtCs5L2uLVYXJ6P_6relibc5start13INIT_COMPLETE.0>
+    10149c29:	e8 62 bc 00 00       	call   10155890 <_RNvNtNtCs5L2uLVYXJ6P_6relibc8platform6logger4init>
+    10149c2e:	48 8d 1d 53 fd 07 00 	lea    0x7fd53(%rip),%rbx        # 101c9988 <__frame_dummy_init_array_entry>
+    10149c35:	48 3b 1d 5c 08 09 00 	cmp    0x9085c(%rip),%rbx        # 101da498 <_GLOBAL_OFFSET_TABLE_+0xf70>
+    10149c3c:	73 1d                	jae    10149c5b <relibc_start_v1+0x53b>
+    10149c3e:	4c 8d 3d 43 fd 07 00 	lea    0x7fd43(%rip),%r15        # 101c9988 <__frame_dummy_init_array_entry>
+    10149c45:	66 66 2e 0f 1f 84 00 	data16 cs nopw 0x0(%rax,%rax,1)
+    10149c4c:	00 00 00 00 
+    10149c50:	ff 13                	call   *(%rbx)
+    10149c52:	48 83 c3 08          	add    $0x8,%rbx
+    10149c56:	4c 39 fb             	cmp    %r15,%rbx
+    10149c59:	72 f5                	jb     10149c50 <relibc_start_v1+0x530>
+    10149c5b:	48 8d 1d 26 fd 07 00 	lea    0x7fd26(%rip),%rbx        # 101c9988 <__frame_dummy_init_array_entry>
+    10149c62:	48 3b 1d 27 0c 09 00 	cmp    0x90c27(%rip),%rbx        # 101da890 <_GLOBAL_OFFSET_TABLE_+0x1368>
+    10149c69:	73 20                	jae    10149c8b <relibc_start_v1+0x56b>
+    10149c6b:	4c 8d 3d 26 fd 07 00 	lea    0x7fd26(%rip),%r15        # 101c9998 <__do_global_dtors_aux_fini_array_entry>
+    10149c72:	66 66 66 66 66 2e 0f 	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+    10149c79:	1f 84 00 00 00 00 00 
+    10149c80:	ff 13                	call   *(%rbx)
+    10149c82:	48 83 c3 08          	add    $0x8,%rbx
+    10149c86:	4c 39 fb             	cmp    %r15,%rbx
+    10149c89:	72 f5                	jb     10149c80 <relibc_start_v1+0x560>
+    10149c8b:	48 8b 35 06 28 09 00 	mov    0x92806(%rip),%rsi        # 101dc498 <_RNvNtCs5L2uLVYXJ6P_6relibc8platform4argv>
+    10149c92:	49 8b 14 24          	mov    (%r12),%rdx
+    10149c96:	48 8b 7d b8          	mov    -0x48(%rbp),%rdi
+    10149c9a:	41 ff d6             	call   *%r14
+    10149c9d:	89 c7                	mov    %eax,%edi
+    10149c9f:	ff 15 63 0d 09 00    	call   *0x90d63(%rip)        # 101daa08 <_GLOBAL_OFFSET_TABLE_+0x14e0>
+    10149ca5:	48 8d 7b 02          	lea    0x2(%rbx),%rdi
+    10149ca9:	ff 15 29 00 09 00    	call   *0x90029(%rip)        # 101d9cd8 <_GLOBAL_OFFSET_TABLE_+0x7b0>
+    10149caf:	48 89 c1             	mov    %rax,%rcx
+    10149cb2:	48 83 c1 02          	add    $0x2,%rcx
+    10149cb6:	0f 84 31 fe ff ff    	je     10149aed <relibc_start_v1+0x3cd>
+    10149cbc:	48 ff c0             	inc    %rax
+    10149cbf:	e9 73 fd ff ff       	jmp    10149a37 <relibc_start_v1+0x317>
+    10149cc4:	0f 0b                	ud2
+    10149cc6:	bf 08 00 00 00       	mov    $0x8,%edi
+    10149ccb:	be 48 00 00 00       	mov    $0x48,%esi
+    10149cd0:	ff 15 82 03 09 00    	call   *0x90382(%rip)        # 101da058 <_GLOBAL_OFFSET_TABLE_+0xb30>
+    10149cd6:	bf 08 00 00 00       	mov    $0x8,%edi
+    10149cdb:	be 78 00 00 00       	mov    $0x78,%esi
+    10149ce0:	ff 15 72 03 09 00    	call   *0x90372(%rip)        # 101da058 <_GLOBAL_OFFSET_TABLE_+0xb30>
+    10149ce6:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+    10149ced:	00 00 00 
+
+0000000010149cf0 <_RINvMNtNtNtCs2plLtuaaMiQ_6object4read3elf10relocationNtB3_18RelocationSections5parseINtNtB9_3elf12FileHeader64NtNtB9_6endian12LittleEndianERShECs5L2uLVYXJ6P_6relibc>:
+    10149cf0:	55                   	push   %rbp
+    10149cf1:	48 89 e5             	mov    %rsp,%rbp
+    10149cf4:	41 57                	push   %r15
+    10149cf6:	41 56                	push   %r14
+    10149cf8:	41 55                	push   %r13
+    10149cfa:	41 54                	push   %r12
+    10149cfc:	53                   	push   %rbx
+    10149cfd:	48                   	rex.W
+    10149cfe:	83                   	.byte 0x83
+    10149cff:	ec                   	in     (%dx),%al

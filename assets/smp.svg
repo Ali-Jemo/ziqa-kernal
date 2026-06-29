@@ -1,0 +1,231 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" width="1000" height="720" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+
+    <linearGradient id="bspg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="apg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="perg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="sharedg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="apicg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="ipig" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <filter id="shadow-lg">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+    <marker id="ipi-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#2ac3de"/>
+    </marker>
+    <marker id="ipi-arrow-out" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#e0af68"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="720" fill="url(#bg)" rx="12"/>
+  <text x="500" y="30" text-anchor="middle" fill="#c0caf5" font-size="20" font-weight="bold">Symmetric Multi-Processing (SMP) Topology</text>
+  <text x="500" y="50" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">BSP + N APs · Per-CPU state via GS.base · IPI-driven coordination · INIT-SIPI-SIPI bring-up</text>
+
+  <!-- APIC bus / interconnect -->
+  <rect x="60" y="80" width="880" height="60" rx="30" fill="none" stroke="#3b4261" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="500" y="105" text-anchor="middle" fill="#565f89" font-size="11" font-family="monospace">APIC interconnect (MADT-discovered LAPIC IDs)</text>
+  <text x="500" y="123" text-anchor="middle" fill="#3b4261" font-size="9" font-family="monospace">IPI vectors: 0xFE = reschedule · 0xFD = TLB shootdown · 0x40 = IPI base</text>
+
+  <!-- BSP (cpu_id 0) -->
+  <g transform="translate(80, 165)">
+    <rect x="0" y="0" width="200" height="170" rx="10" fill="#24283b" stroke="#f7768e" stroke-width="2" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="200" height="34" rx="10" fill="url(#bspg)"/>
+    <text x="100" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold">BSP · cpu_id 0</text>
+    <text x="100" y="52" text-anchor="middle" fill="#c0caf5" font-size="11" font-weight="bold" font-family="monospace">Bootstrap Processor</text>
+    <text x="100" y="68" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">_start → kernel_main</text>
+    <line x1="14" y1="78" x2="186" y2="78" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="14" y="96" fill="#c0caf5" font-size="10" font-family="monospace">• Boots first (firmware → bootloader)</text>
+    <text x="14" y="112" fill="#c0caf5" font-size="10" font-family="monospace">• Runs init(), parses ACPI/MADT</text>
+    <text x="14" y="128" fill="#c0caf5" font-size="10" font-family="monospace">• Sends INIT-SIPI-SIPI to APs</text>
+    <text x="14" y="144" fill="#c0caf5" font-size="10" font-family="monospace">• Owns scheduler, VFS, syscall</text>
+    <text x="14" y="160" fill="#c0caf5" font-size="10" font-family="monospace">• Boots shell, awaits commands</text>
+  </g>
+
+  <!-- AP #1 -->
+  <g transform="translate(310, 165)">
+    <rect x="0" y="0" width="200" height="170" rx="10" fill="#24283b" stroke="#7aa2f7" stroke-width="2" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="200" height="34" rx="10" fill="url(#apg)"/>
+    <text x="100" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold">AP · cpu_id 1</text>
+    <text x="100" y="52" text-anchor="middle" fill="#c0caf5" font-size="11" font-weight="bold" font-family="monospace">Application Processor</text>
+    <text x="100" y="68" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">trampoline → ap_entry</text>
+    <line x1="14" y1="78" x2="186" y2="78" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="14" y="96" fill="#c0caf5" font-size="10" font-family="monospace">• SIPI wakes at 0x7000</text>
+    <text x="14" y="112" fill="#c0caf5" font-size="10" font-family="monospace">• Long mode, GS.base set</text>
+    <text x="14" y="128" fill="#c0caf5" font-size="10" font-family="monospace">• Loops on HLT in idle</text>
+    <text x="14" y="144" fill="#c0caf5" font-size="10" font-family="monospace">• Runs scheduler on IPI</text>
+    <text x="14" y="160" fill="#c0caf5" font-size="10" font-family="monospace">• User processes on this CPU</text>
+  </g>
+
+  <!-- AP #2 -->
+  <g transform="translate(540, 165)">
+    <rect x="0" y="0" width="200" height="170" rx="10" fill="#24283b" stroke="#7aa2f7" stroke-width="2" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="200" height="34" rx="10" fill="url(#apg)"/>
+    <text x="100" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold">AP · cpu_id 2</text>
+    <text x="100" y="52" text-anchor="middle" fill="#c0caf5" font-size="11" font-weight="bold" font-family="monospace">Application Processor</text>
+    <text x="100" y="68" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">trampoline → ap_entry</text>
+    <line x1="14" y1="78" x2="186" y2="78" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="14" y="96" fill="#c0caf5" font-size="10" font-family="monospace">• Same path as cpu_id 1</text>
+    <text x="14" y="112" fill="#c0caf5" font-size="10" font-family="monospace">• Own kernel stack + PerCpu</text>
+    <text x="14" y="128" fill="#c0caf5" font-size="10" font-family="monospace">• Local APIC timer active</text>
+    <text x="14" y="144" fill="#c0caf5" font-size="10" font-family="monospace">• Per-CPU tick counter</text>
+    <text x="14" y="160" fill="#c0caf5" font-size="10" font-family="monospace">• MLFQ ready queue shared</text>
+  </g>
+
+  <!-- AP #N (generalised) -->
+  <g transform="translate(770, 165)">
+    <rect x="0" y="0" width="160" height="170" rx="10" fill="#24283b" stroke="#7aa2f7" stroke-width="2" stroke-dasharray="4 3" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="160" height="34" rx="10" fill="url(#apg)"/>
+    <text x="80" y="22" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold">AP · cpu_id N</text>
+    <text x="80" y="52" text-anchor="middle" fill="#c0caf5" font-size="11" font-weight="bold" font-family="monospace">… up to MAX_CPUS = 64</text>
+    <line x1="14" y1="78" x2="146" y2="78" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="14" y="96" fill="#c0caf5" font-size="10" font-family="monospace">PER_CPU_PTRS[N]</text>
+    <text x="14" y="112" fill="#c0caf5" font-size="10" font-family="monospace">alloc_ap() heap</text>
+    <text x="14" y="128" fill="#c0caf5" font-size="10" font-family="monospace">CPU_COUNT.fetch_add</text>
+    <text x="14" y="144" fill="#c0caf5" font-size="10" font-family="monospace">kthread support</text>
+    <text x="14" y="160" fill="#c0caf5" font-size="10" font-family="monospace">planned, not online</text>
+  </g>
+
+  <!-- Connectors from CPUs down to APIC bus -->
+  <line x1="180" y1="165" x2="180" y2="140" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="410" y1="165" x2="410" y2="140" stroke="#7aa2f7" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="640" y1="165" x2="640" y2="140" stroke="#7aa2f7" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="850" y1="165" x2="850" y2="140" stroke="#7aa2f7" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- APIC bus goes down to LAPIC / IOAPIC panel -->
+  <line x1="500" y1="140" x2="500" y2="360" stroke="#3b4261" stroke-width="2" stroke-dasharray="6 4"/>
+
+  <!-- Per-CPU data structures row -->
+  <g transform="translate(80, 360)">
+    <rect x="0" y="0" width="260" height="155" rx="8" fill="#24283b" stroke="#e0af68" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="260" height="26" rx="8" fill="url(#perg)"/>
+    <text x="130" y="18" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold">PerCpu struct (per-cpu state)</text>
+
+    <text x="12" y="46" fill="#c0caf5" font-size="10" font-family="monospace">cpu_id: u32</text>
+    <text x="12" y="62" fill="#c0caf5" font-size="10" font-family="monospace">apic_id: u32</text>
+    <text x="12" y="78" fill="#c0caf5" font-size="10" font-family="monospace">is_bsp: bool</text>
+    <text x="12" y="94" fill="#c0caf5" font-size="10" font-family="monospace">current_pid: AtomicU64</text>
+    <text x="12" y="110" fill="#c0caf5" font-size="10" font-family="monospace">kernel_stack_top: u64</text>
+    <text x="12" y="126" fill="#c0caf5" font-size="10" font-family="monospace">cr3: u64  (per-CPU PML4)</text>
+    <text x="12" y="142" fill="#c0caf5" font-size="10" font-family="monospace">ticks / tlb_shootdown_*</text>
+  </g>
+
+  <g transform="translate(370, 360)">
+    <rect x="0" y="0" width="260" height="155" rx="8" fill="#24283b" stroke="#bb9af7" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="260" height="26" rx="8" fill="url(#sharedg)"/>
+    <text x="130" y="18" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold">Shared kernel state (RwLock)</text>
+
+    <text x="12" y="46" fill="#c0caf5" font-size="10" font-family="monospace">GlobalProcessTable</text>
+    <text x="12" y="62" fill="#c0caf5" font-size="10" font-family="monospace">ReadyQueues [Q0..Q3]</text>
+    <text x="12" y="78" fill="#c0caf5" font-size="10" font-family="monospace">VFS root + mount table</text>
+    <text x="12" y="94" fill="#c0caf5" font-size="10" font-family="monospace">Frame allocator (heap)</text>
+    <text x="12" y="110" fill="#c0caf5" font-size="10" font-family="monospace">Capability space registry</text>
+    <text x="12" y="126" fill="#c0caf5" font-size="10" font-family="monospace">KLOG (klog buffer)</text>
+    <text x="12" y="142" fill="#c0caf5" font-size="10" font-family="monospace">block_registry</text>
+  </g>
+
+  <g transform="translate(660, 360)">
+    <rect x="0" y="0" width="270" height="155" rx="8" fill="#24283b" stroke="#9ece6a" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="270" height="26" rx="8" fill="url(#apicg)"/>
+    <text x="135" y="18" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold">Local APIC + I/O APIC</text>
+
+    <text x="12" y="46" fill="#c0caf5" font-size="10" font-family="monospace">LAPIC regs: ID, EOI, ICR, LVT</text>
+    <text x="12" y="62" fill="#c0caf5" font-size="10" font-family="monospace">LAPIC timer (calibrated)</text>
+    <text x="12" y="78" fill="#c0caf5" font-size="10" font-family="monospace">IOAPIC: GSI base + redir tbl</text>
+    <text x="12" y="94" fill="#c0caf5" font-size="10" font-family="monospace">ICR low/high — send IPIs</text>
+    <text x="12" y="110" fill="#c0caf5" font-size="10" font-family="monospace">IpiDestShorthand: Self / All</text>
+    <text x="12" y="126" fill="#c0caf5" font-size="10" font-family="monospace">smp::send_reschedule_ipi()</text>
+    <text x="12" y="142" fill="#c0caf5" font-size="10" font-family="monospace">smp::tlb_shootdown_all()</text>
+  </g>
+
+  <!-- Vertical connectors -->
+  <line x1="180" y1="335" x2="180" y2="360" stroke="#e0af68" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="410" y1="335" x2="410" y2="360" stroke="#bb9af7" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="640" y1="335" x2="640" y2="360" stroke="#bb9af7" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="850" y1="335" x2="850" y2="360" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- IPI traffic diagram -->
+  <g transform="translate(80, 545)">
+    <rect x="0" y="0" width="850" height="150" rx="8" fill="#24283b" stroke="#2ac3de" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="850" height="26" rx="8" fill="url(#ipig)"/>
+    <text x="425" y="18" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold">IPI traffic (inter-processor interrupts)</text>
+
+    <!-- IPI: BSP -> AP 1 (reschedule) -->
+    <g transform="translate(20, 42)">
+      <rect x="0" y="0" width="180" height="42" rx="6" fill="#1f2335" stroke="#e0af68" stroke-width="1"/>
+      <text x="90" y="16" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="monospace">RESCHEDULE</text>
+      <text x="90" y="32" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">BSP → AP#1 · vec 0xFE</text>
+    </g>
+    <line x1="200" y1="63" x2="305" y2="63" stroke="#e0af68" stroke-width="2" marker-end="url(#ipi-arrow-out)"/>
+
+    <g transform="translate(320, 42)">
+      <rect x="0" y="0" width="180" height="42" rx="6" fill="#1f2335" stroke="#e0af68" stroke-width="1"/>
+      <text x="90" y="16" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="monospace">TLB SHOOTDOWN</text>
+      <text x="90" y="32" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">any → all · vec 0xFD</text>
+    </g>
+    <line x1="500" y1="63" x2="605" y2="63" stroke="#2ac3de" stroke-width="2" marker-end="url(#ipi-arrow)"/>
+
+    <g transform="translate(620, 42)">
+      <rect x="0" y="0" width="210" height="42" rx="6" fill="#1f2335" stroke="#e0af68" stroke-width="1"/>
+      <text x="105" y="16" text-anchor="middle" fill="#e0af68" font-size="10" font-weight="bold" font-family="monospace">INIT-SIPI-SIPI</text>
+      <text x="105" y="32" text-anchor="middle" fill="#c0caf5" font-size="9" font-family="monospace">BSP → AP#N · vec 0x7000/0x08</text>
+    </g>
+
+    <!-- second row -->
+    <g transform="translate(20, 95)">
+      <rect x="0" y="0" width="810" height="42" rx="6" fill="#1f2335" stroke="#3b4261" stroke-width="1" stroke-dasharray="3 2"/>
+      <text x="14" y="17" fill="#c0caf5" font-size="10" font-family="monospace">spin-loop  ⟶  scheduler yields to MLFQ runqueue</text>
+      <text x="14" y="33" fill="#565f89" font-size="9" font-family="monospace">TLB shootdown = CR3 reload + invlpg broadcast via IPI; per-CPU PML4 may differ (COW fork)</text>
+    </g>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(80, 705)">
+    <rect x="0" y="0" width="12" height="12" rx="2" fill="#f7768e"/>
+    <text x="18" y="10" fill="#565f89" font-size="10" font-family="monospace">BSP</text>
+    <rect x="80" y="0" width="12" height="12" rx="2" fill="#7aa2f7"/>
+    <text x="98" y="10" fill="#565f89" font-size="10" font-family="monospace">AP</text>
+    <rect x="150" y="0" width="12" height="12" rx="2" fill="#e0af68"/>
+    <text x="168" y="10" fill="#565f89" font-size="10" font-family="monospace">Per-CPU state</text>
+    <rect x="290" y="0" width="12" height="12" rx="2" fill="#bb9af7"/>
+    <text x="308" y="10" fill="#565f89" font-size="10" font-family="monospace">Shared state</text>
+    <rect x="420" y="0" width="12" height="12" rx="2" fill="#9ece6a"/>
+    <text x="438" y="10" fill="#565f89" font-size="10" font-family="monospace">APIC</text>
+    <rect x="510" y="0" width="12" height="12" rx="2" fill="#2ac3de"/>
+    <text x="528" y="10" fill="#565f89" font-size="10" font-family="monospace">IPI traffic</text>
+  </g>
+</svg>

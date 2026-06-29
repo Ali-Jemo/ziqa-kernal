@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="idtg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="handlerg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="dispatchg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="resultg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="800" height="600" fill="url(#bg)" rx="12"/>
+  <text x="400" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Interrupt Handling Flow</text>
+
+  <!-- Interrupt source -->
+  <rect x="250" y="55" width="300" height="45" rx="6" fill="url(#idtg)" filter="url(#shadow)"/>
+  <text x="400" y="75" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Interrupt / Exception Occurs</text>
+  <text x="400" y="92" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">CPU pushes SS, RSP, RFLAGS, CS, RIP, Error Code</text>
+
+  <line x1="400" y1="100" x2="400" y2="130" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- IDT Lookup -->
+  <rect x="200" y="130" width="400" height="45" rx="6" fill="url(#handlerg)" filter="url(#shadow)"/>
+  <text x="400" y="150" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">IDT Lookup</text>
+  <text x="400" y="167" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">CPU reads IDTR base + vector * 16 → gate descriptor</text>
+
+  <line x1="400" y1="175" x2="400" y2="205" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Handler dispatch -->
+  <rect x="150" y="205" width="500" height="50" rx="6" fill="url(#dispatchg)" filter="url(#shadow)"/>
+  <text x="400" y="225" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Handler Dispatch — interrupts_rs::handler_entry</text>
+  <text x="400" y="245" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">Matches vector number: exception → specific handler · IRQ → PIC handler · 0x80 → syscall</text>
+
+  <line x1="400" y1="255" x2="400" y2="285" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Exception handlers panel -->
+  <g transform="translate(50, 290)">
+    <rect x="0" y="0" width="320" height="170" rx="6" fill="#24283b" stroke="#f7768e" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="160" y="20" text-anchor="middle" fill="#f7768e" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Exception Handlers</text>
+    <line x1="10" y1="30" x2="310" y2="30" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="15" y="48" fill="#c0caf5" font-size="10" font-family="monospace">#DE  divide_error</text>
+    <text x="15" y="65" fill="#c0caf5" font-size="10" font-family="monospace">#DB  debug</text>
+    <text x="15" y="82" fill="#c0caf5" font-size="10" font-family="monospace">#BP  breakpoint</text>
+    <text x="15" y="99" fill="#c0caf5" font-size="10" font-family="monospace">#GP  general_protection</text>
+    <text x="15" y="116" fill="#c0caf5" font-size="10" font-family="monospace">#PF  page_fault → demand paging</text>
+    <text x="15" y="133" fill="#c0caf5" font-size="10" font-family="monospace">#DF  double_fault → IST stack</text>
+    <text x="15" y="150" fill="#c0caf5" font-size="10" font-family="monospace">#NM  device_not_available</text>
+  </g>
+
+  <!-- IRQ / PIC panel -->
+  <g transform="translate(430, 290)">
+    <rect x="0" y="0" width="320" height="170" rx="6" fill="#24283b" stroke="#e0af68" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="160" y="20" text-anchor="middle" fill="#e0af68" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">IRQ / PIC Handlers</text>
+    <line x1="10" y1="30" x2="310" y2="30" stroke="#3b4261" stroke-width="1"/>
+
+    <text x="15" y="48" fill="#c0caf5" font-size="10" font-family="monospace">IRQ 0   timer_interrupt</text>
+    <text x="15" y="65" fill="#c0caf5" font-size="10" font-family="monospace">IRQ 1   keyboard_interrupt</text>
+    <text x="15" y="82" fill="#c0caf5" font-size="10" font-family="monospace">IRQ 12  mouse_interrupt (PS/2)</text>
+    <text x="15" y="99" fill="#c0caf5" font-size="10" font-family="monospace">IRQ 14  primary_ata</text>
+    <text x="15" y="120" fill="#c0caf5" font-size="10" font-family="monospace">3 × PIC spurious (ignore)</text>
+    <text x="15" y="145" fill="#c0caf5" font-size="10" font-family="monospace">EOI written to PICs after handling</text>
+  </g>
+
+  <!-- Syscall specific path -->
+  <g transform="translate(240, 480)">
+    <rect x="0" y="0" width="320" height="50" rx="6" fill="url(#syscallg)" filter="url(#shadow)"/>
+    <text x="160" y="18" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Vector 0x80 → syscall_handler</text>
+    <text x="160" y="36" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">RAX=num, RBX/RDI/RSI=args → dispatch_syscall()</text>
+  </g>
+
+  <line x1="400" y1="285" x2="400" y2="480" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Return -->
+  <rect x="560" y="480" width="140" height="50" rx="6" fill="url(#resultg)" filter="url(#shadow)"/>
+  <text x="630" y="500" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">iretq</text>
+  <text x="630" y="518" text-anchor="middle" fill="#1a1b26" font-size="10" font-family="system-ui, -apple-system, sans-serif">return to user</text>
+  <line x1="560" y1="505" x2="540" y2="505" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+</svg>

@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220" width="900" height="220">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="firmg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="bootg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="halg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <linearGradient id="memg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2ac3de"/>
+      <stop offset="100%" stop-color="#1fb0cc"/>
+    </linearGradient>
+    <linearGradient id="subg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="demosg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7768e"/>
+      <stop offset="100%" stop-color="#e55a75"/>
+    </linearGradient>
+    <linearGradient id="shellg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="900" height="220" fill="url(#bg)" rx="12"/>
+  <text x="450" y="28" text-anchor="middle" fill="#c0caf5" font-size="16" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Kernel Boot Flow</text>
+
+  <!-- Step boxes -->
+  <g transform="translate(20, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#firmg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Firmware</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">BIOS/UEFI</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(125, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#bootg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Bootloader</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">bootimage</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(230, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#halg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">HAL Init</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">GDT/IDT/PIC</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(335, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#memg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Memory</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">Paging + Heap</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(440, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#subg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Subsystems</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">VFS/IPC/eBPF</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(545, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#demosg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Demos</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">5 test suites</text>
+    <line x1="90" y1="27" x2="125" y2="27" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(650, 55)">
+    <rect x="0" y="0" width="90" height="55" rx="6" fill="url(#shellg)" filter="url(#shadow)"/>
+    <text x="45" y="24" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Shell</text>
+    <text x="45" y="40" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">12 commands</text>
+  </g>
+
+  <!-- Timeline rail -->
+  <line x1="65" y1="115" x2="740" y2="115" stroke="#3b4261" stroke-width="2"/>
+  <circle cx="65" cy="115" r="5" fill="#e0af68"/>
+  <circle cx="170" cy="115" r="5" fill="#7aa2f7"/>
+  <circle cx="275" cy="115" r="5" fill="#bb9af7"/>
+  <circle cx="380" cy="115" r="5" fill="#2ac3de"/>
+  <circle cx="485" cy="115" r="5" fill="#9ece6a"/>
+  <circle cx="590" cy="115" r="5" fill="#f7768e"/>
+  <circle cx="695" cy="115" r="5" fill="#7aa2f7"/>
+
+  <!-- Time labels -->
+  <text x="65" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+0s</text>
+  <text x="170" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+0.5s</text>
+  <text x="275" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+1s</text>
+  <text x="380" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+1.5s</text>
+  <text x="485" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+2s</text>
+  <text x="590" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+2.5s</text>
+  <text x="695" y="138" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">T+3s</text>
+
+  <!-- Legend -->
+  <g transform="translate(200, 165)">
+    <text x="0" y="0" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Boot sequence progresses left → right.</text>
+    <text x="0" y="18" fill="#565f89" font-size="10" font-family="system-ui, -apple-system, sans-serif">Interactive shell accepts commands after all subsystems are initialized.</text>
+  </g>
+  <g transform="translate(680, 165)">
+    <rect x="0" y="0" width="50" height="16" rx="3" fill="#24283b" stroke="#3b4261" stroke-width="1"/>
+    <text x="25" y="12" text-anchor="middle" fill="#565f89" font-size="8" font-family="monospace">~50ms</text>
+    <text x="25" y="30" text-anchor="middle" fill="#3b4261" font-size="9" font-family="system-ui, -apple-system, sans-serif">per step</text>
+  </g>
+</svg>

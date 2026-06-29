@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 250" width="500" height="250">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7aa2f7" />
+    </marker>
+  </defs>
+  <rect x="50" y="50" width="120" height="150" rx="10" fill="#1f2335" stroke="#7aa2f7" stroke-width="2"/>
+  <text x="110" y="80" text-anchor="middle" fill="#c0caf5" font-family="monospace">Process</text>
+  <rect x="330" y="50" width="120" height="150" rx="10" fill="#1f2335" stroke="#2ac3de" stroke-width="2"/>
+  <text x="390" y="80" text-anchor="middle" fill="#c0caf5" font-family="monospace">Kernel</text>
+  <path d="M170 100 L330 100" stroke="#7aa2f7" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="250" y="90" text-anchor="middle" fill="#c0caf5" font-size="12" font-family="monospace">Request Cap</text>
+  <rect x="350" y="100" width="80" height="60" rx="5" fill="#16161e" stroke="#2ac3de" stroke-width="1"/>
+  <text x="390" y="130" text-anchor="middle" fill="#c0caf5" font-size="10" font-family="monospace">Capability<br/>Space</text>
+  <path d="M330 150 L170 150" stroke="#2ac3de" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="250" y="140" text-anchor="middle" fill="#c0caf5" font-size="12" font-family="monospace">Grant/Deny</text>
+</svg>

@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 500" width="650" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="startg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#7db84d"/>
+    </linearGradient>
+    <linearGradient id="diamg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0af68"/>
+      <stop offset="100%" stop-color="#d49a4a"/>
+    </linearGradient>
+    <linearGradient id="procg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7aa2f7"/>
+      <stop offset="100%" stop-color="#5d8fe8"/>
+    </linearGradient>
+    <linearGradient id="doneg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bb9af7"/>
+      <stop offset="100%" stop-color="#a57de6"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#565f89"/>
+    </marker>
+  </defs>
+  <rect width="650" height="500" fill="url(#bg)" rx="12"/>
+  <text x="325" y="30" text-anchor="middle" fill="#c0caf5" font-size="18" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">MLFQ Scheduling Algorithm</text>
+
+  <!-- Timer Tick -->
+  <rect x="225" y="55" width="200" height="40" rx="20" fill="url(#startg)" filter="url(#shadow)"/>
+  <text x="325" y="80" text-anchor="middle" fill="#1a1b26" font-size="13" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Timer Tick</text>
+
+  <line x1="325" y1="95" x2="325" y2="125" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Decision diamond: quantum exhausted? -->
+  <polygon points="325,125 425,170 325,215 225,170" fill="url(#diamg)" filter="url(#shadow)"/>
+  <text x="325" y="166" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Quantum</text>
+  <text x="325" y="180" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">exhausted?</text>
+
+  <!-- Yes branch -->
+  <line x1="225" y1="170" x2="160" y2="170" stroke="#f7768e" stroke-width="2"/>
+  <line x1="160" y1="170" x2="160" y2="255" stroke="#f7768e" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="195" y="165" fill="#f7768e" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Yes</text>
+
+  <rect x="80" y="255" width="160" height="45" rx="6" fill="url(#procg)" filter="url(#shadow)"/>
+  <text x="160" y="275" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Demote to next Q</text>
+  <text x="160" y="291" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">Qn → Q(n+1)</text>
+
+  <line x1="160" y1="300" x2="160" y2="340" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="80" y="340" width="160" height="45" rx="6" fill="url(#doneg)" filter="url(#shadow)"/>
+  <text x="160" y="360" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Enqueue at tail</text>
+  <text x="160" y="376" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">back of Q(n+1)</text>
+
+  <!-- No branch -->
+  <line x1="425" y1="170" x2="490" y2="170" stroke="#9ece6a" stroke-width="2"/>
+  <line x1="490" y1="170" x2="490" y2="255" stroke="#9ece6a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="460" y="165" fill="#9ece6a" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">No</text>
+
+  <rect x="410" y="255" width="160" height="45" rx="6" fill="url(#startg)" filter="url(#shadow)"/>
+  <text x="490" y="275" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Stay in same Q</text>
+  <text x="490" y="291" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">no change</text>
+
+  <line x1="490" y1="300" x2="490" y2="340" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="410" y="340" width="160" height="45" rx="6" fill="url(#doneg)" filter="url(#shadow)"/>
+  <text x="490" y="360" text-anchor="middle" fill="#1a1b26" font-size="12" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Continue round-robin</text>
+  <text x="490" y="376" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">next process in Qn</text>
+
+  <!-- Merging paths -->
+  <line x1="160" y1="385" x2="325" y2="425" stroke="#565f89" stroke-width="2"/>
+  <line x1="490" y1="385" x2="325" y2="425" stroke="#565f89" stroke-width="2"/>
+  <line x1="325" y1="215" x2="325" y2="395" stroke="#565f89" stroke-width="2"/>
+  <line x1="325" y1="395" x2="325" y2="425" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Priority boost check -->
+  <polygon points="325,425 425,470 325,515 225,470" fill="#2ac3de" filter="url(#shadow)"/>
+  <text x="325" y="466" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">100ms</text>
+  <text x="325" y="480" text-anchor="middle" fill="#1a1b26" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">elapsed?</text>
+
+  <!-- Yes: priority boost -->
+  <line x1="225" y1="470" x2="130" y2="470" stroke="#2ac3de" stroke-width="2"/>
+  <line x1="130" y1="470" x2="130" y2="505" stroke="#2ac3de" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="180" y="465" fill="#2ac3de" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Yes</text>
+
+  <rect x="55" y="505" width="150" height="40" rx="6" fill="#2ac3de" filter="url(#shadow)"/>
+  <text x="130" y="525" text-anchor="middle" fill="#1a1b26" font-size="11" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">Boost all to Q0</text>
+  <text x="130" y="540" text-anchor="middle" fill="#1a1b26" font-size="9" font-family="monospace">prevent starvation</text>
+
+  <!-- No: continue -->
+  <line x1="425" y1="470" x2="520" y2="470" stroke="#565f89" stroke-width="2"/>
+  <line x1="520" y1="470" x2="520" y2="505" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="475" y="465" fill="#565f89" font-size="10" font-weight="bold" font-family="system-ui, -apple-system, sans-serif">No</text>
+
+  <rect x="445" y="505" width="150" height="40" rx="6" fill="#24283b" stroke="#565f89" stroke-width="1"/>
+  <text x="520" y="525" text-anchor="middle" fill="#565f89" font-size="11" font-family="system-ui, -apple-system, sans-serif">Continue scheduling</text>
+  <text x="520" y="540" text-anchor="middle" fill="#565f89" font-size="9" font-family="monospace">next tick</text>
+</svg>

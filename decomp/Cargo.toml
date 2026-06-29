@@ -1,0 +1,8 @@
+[package]
+name = "decomp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lz4_flex = "0.13.1"
+redox_syscall = "0.8.0"
