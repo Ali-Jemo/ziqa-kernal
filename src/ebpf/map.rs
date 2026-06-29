@@ -27,11 +27,18 @@ pub struct BpfMap {
 impl BpfMap {
     pub fn new(map_type: BpfMapType, key_size: u32, value_size: u32, max_entries: u32) -> Self {
         let total_size = match map_type {
-            BpfMapType::Array | BpfMapType::ProgArray => (value_size * max_entries) as usize,
+            BpfMapType::Array | BpfMapType::ProgArray => {
+                // ponytail: checked_mul prevents u32 overflow on crafted value_size * max_entries
+                value_size.checked_mul(max_entries)
+                    .map(|n| n as usize)
+                    .unwrap_or(0)
+            }
             BpfMapType::Hash => {
                 // entry: 1 byte used flag + key + value
-                let entry_size = 1 + key_size + value_size;
-                (entry_size * max_entries) as usize
+                let entry_size = 1u32.saturating_add(key_size).saturating_add(value_size);
+                entry_size.checked_mul(max_entries)
+                    .map(|n| n as usize)
+                    .unwrap_or(0)
             }
             BpfMapType::RingBuf => max_entries as usize,
         };

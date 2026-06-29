@@ -5,20 +5,49 @@
 /// and avoiding unnecessary memory copies.
 use crate::ebpf::{op, helpers, BpfError, BpfInstruction, BpfResult};
 use crate::abi::syscall::SyscallContext;
+
 pub struct BpfVm {
     pub registers: [u64; 11], // R0-R10
     pub stack: [u8; 512],     // Standard eBPF stack
+    /// R10 value at entry — one past the end of the stack. Used to bounds-check eBPF memory ops.
+    stack_base: u64,
 }
 
 impl BpfVm {
     pub fn new() -> Self {
         let mut vm = Self {
-            registers: [0; 11],
-            stack: [0; 512],
+            registers: [0u64; 11],
+            stack: [0u8; 512],
+            stack_base: 0,
         };
         // R10 is the read-only frame pointer to the stack
         vm.registers[10] = &vm.stack as *const _ as u64 + 512;
+        vm.stack_base = vm.registers[10];
         vm
+    }
+
+    /// Low end of the valid eBPF stack window.
+    fn stack_start(&self) -> u64 {
+        self.stack_base.saturating_sub(512)
+    }
+
+    /// Returns true if `[addr, addr + size)` lies entirely within the eBPF stack window.
+    fn is_stack_ptr(&self, addr: u64, size: u64) -> bool {
+        let lo = self.stack_start();
+        let hi = self.stack_base;
+        if addr < lo { return false; }
+        let end = addr.saturating_add(size);
+        if end < addr { return false; } // overflow
+        end <= hi
+    }
+
+    /// Validate an eBPF memory access. Returns Err on any out-of-bounds access.
+    fn validate_mem_access(&self, addr: u64, size: u64) -> Result<(), BpfError> {
+        if self.is_stack_ptr(addr, size) {
+            Ok(())
+        } else {
+            Err(BpfError::OutOfBounds)
+        }
     }
 
     /// Execute a verified program
@@ -169,26 +198,32 @@ impl BpfVm {
                     }
                     op::LDX_W => {
                         let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 4)?;
                         self.registers[dst] = unsafe { *(addr as *const u32) } as u64;
                     }
                     op::LDX_DW => {
                         let addr = self.registers[insn.src_reg() as usize].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 8)?;
                         self.registers[dst] = unsafe { *(addr as *const u64) };
                     }
                     op::STX_W => {
                         let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 4)?;
                         unsafe { *(addr as *mut u32) = self.registers[insn.src_reg() as usize] as u32 };
                     }
                     op::STX_DW => {
                         let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 8)?;
                         unsafe { *(addr as *mut u64) = self.registers[insn.src_reg() as usize] };
                     }
                     op::ST_W => {
                         let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 4)?;
                         unsafe { *(addr as *mut u32) = insn.imm as u32 };
                     }
                     op::ST_DW => {
                         let addr = self.registers[dst].wrapping_add(insn.off as u64);
+                        self.validate_mem_access(addr, 8)?;
                         unsafe { *(addr as *mut u64) = insn.imm as u64 };
                     }
                     op::CALL => {
@@ -294,34 +329,36 @@ impl BpfVm {
                 Ok(per_cpu::current_cpu().cpu_id as u64)
             }
             helpers::GET_CURRENT_COMM => {
-                let buf = self.registers[1] as *mut u8;
+                let buf = self.registers[1];
                 let size = self.registers[2] as usize;
-                // Currently processes don't have a comm name, so we use a dummy name.
                 let comm = b"ziqa-proc\0";
-                unsafe {
-                    let len = size.min(comm.len());
-                    core::ptr::copy_nonoverlapping(comm.as_ptr(), buf, len);
-                    // Null-terminate the rest if needed, though BPF programs usually assume null-termination
-                    if len < size {
-                        core::ptr::write_bytes(buf.add(len), 0, size - len);
-                    } else if size > 0 {
-                        *buf.add(size - 1) = 0;
+                // ponytail: clamp to 512 so a malicious R2 can't OOB into kernel memory
+                let len = size.min(512).min(comm.len());
+                if self.validate_mem_access(buf, len as u64).is_ok() {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(comm.as_ptr(), buf as *mut u8, len);
+                        if len < size && len < 512 {
+                            core::ptr::write_bytes((buf as *mut u8).add(len), 0, (size - len).min(512 - len));
+                        }
                     }
                 }
                 Ok(0)
             }
             helpers::PROBE_READ => {
-                let dst_ptr = self.registers[1] as *mut u8;
+                let dst_ptr = self.registers[1];
                 let size = self.registers[2] as usize;
-                let src_ptr = self.registers[3] as *const u8;
-                
-                // Safety: Ensure we don't overflow the destination buffer (usually on stack)
-                // In a real eBPF verifier, we'd know the size of the destination buffer.
-                // For now, we'll cap it to 512 (max stack size).
+                let src_ptr = self.registers[3];
+
+                // Clamp to 512 (max stack size) and validate both ends live in the
+                // eBPF stack window — otherwise a malicious program can read arbitrary
+                // kernel memory.
                 let safe_size = size.min(512);
-                
-                unsafe {
-                    core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, safe_size);
+                if self.validate_mem_access(dst_ptr, safe_size as u64).is_ok()
+                    && self.validate_mem_access(src_ptr, safe_size as u64).is_ok()
+                {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(src_ptr as *const u8, dst_ptr as *mut u8, safe_size);
+                    }
                 }
                 Ok(0)
             }

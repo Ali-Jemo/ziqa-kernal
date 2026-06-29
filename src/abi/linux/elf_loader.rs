@@ -130,15 +130,22 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     let mut max_vaddr: u64 = 0;
 
     for i in 0..hdr.e_phnum as usize {
-        let ph_off = hdr.e_phoff as usize + i * hdr.e_phentsize as usize;
+        // ponytail: saturating arithmetic prevents ph_off integer overflow on crafted e_phentsize
+        let ph_off = (hdr.e_phoff as usize)
+            .saturating_add((i as u16).saturating_mul(hdr.e_phentsize) as usize);
         let phdr = parse_phdr(&b, ph_off)?;
 
         match phdr.p_type {
             PT_LOAD => {
                 let vaddr = phdr.p_vaddr + load_base;
-                let end_vaddr = vaddr + phdr.p_memsz;
+                // ponytail: use checked math to prevent end_vaddr wraparound past kernel space
+                let end_vaddr = vaddr.checked_add(phdr.p_memsz)
+                    .ok_or(AbiError::Other("ELF segment memsz overflow"))?;
                 if end_vaddr > 0x0000_7FFF_FFFF_FFFF {
                     return Err(AbiError::Other("ELF segment overlaps kernel space"));
+                }
+                if vaddr > end_vaddr {
+                    return Err(AbiError::Other("ELF segment address overflow"));
                 }
                 
                 let aligned_vaddr = vaddr & !0xFFF;

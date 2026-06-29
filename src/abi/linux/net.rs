@@ -1,5 +1,5 @@
 use super::{nr, SyscallContext, AbiError};
-#[cfg(feature = "net")]
+use crate::abi::usercopy::{UserSliceRo, UserSliceWo};
 use crate::net::socket::{SOCKETS, SocketState, SockAddrInet, SockDomain, SockType};
 
 pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> {
@@ -14,6 +14,35 @@ pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> 
         nr::SYS_SETSOCKOPT | nr::SYS_GETSOCKOPT => Ok(0),
         _ => return None,
     })
+}
+
+/// Read a SockAddrInet from userspace via UserSliceRo into a safe local copy.
+fn read_sockaddr(addr_ptr: *const u8) -> Result<SockAddrInet, AbiError> {
+    let user = UserSliceRo::ro(addr_ptr as u64, core::mem::size_of::<SockAddrInet>())
+        .map_err(|_| AbiError::Other("EFAULT: read_sockaddr"))?;
+    let mut raw_buf = [0u8; core::mem::size_of::<SockAddrInet>()];
+    user.copy_to_slice(&mut raw_buf)
+        .map_err(|_| AbiError::Other("EFAULT: read_sockaddr"))?;
+    Ok(SockAddrInet {
+        family: u16::from_ne_bytes([raw_buf[0], raw_buf[1]]),
+        port:   u16::from_ne_bytes([raw_buf[2], raw_buf[3]]),
+        addr:   [raw_buf[4], raw_buf[5], raw_buf[6], raw_buf[7]],
+        zero:   [0; 8],
+    })
+}
+
+/// Write a SockAddrInet to userspace via UserSliceWo.
+fn write_sockaddr(addr_ptr: *mut u8, sa: SockAddrInet) -> Result<(), AbiError> {
+    let raw_buf = [
+        sa.family.to_ne_bytes()[0], sa.family.to_ne_bytes()[1],
+        sa.port.to_ne_bytes()[0], sa.port.to_ne_bytes()[1],
+        sa.addr[0], sa.addr[1], sa.addr[2], sa.addr[3],
+    ];
+    let user = UserSliceWo::wo(addr_ptr as u64, raw_buf.len())
+        .map_err(|_| AbiError::Other("EFAULT: write_sockaddr"))?;
+    user.copy_from_slice(&raw_buf)
+        .map_err(|_| AbiError::Other("EFAULT: write_sockaddr"))?;
+    Ok(())
 }
 
 /// sys_bind(sockfd, addr, addrlen) → 0 / -EINVAL
@@ -31,7 +60,7 @@ fn sys_bind(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         return Ok((-22_i64) as u64); // -EINVAL (already bound)
     }
     if !addr_ptr.is_null() {
-        let raw = unsafe { core::ptr::read_unaligned(addr_ptr as *const SockAddrInet) };
+        let raw = read_sockaddr(addr_ptr)?;
         entry.local_addr = Some(raw);
     }
     entry.state = SocketState::Bound;
@@ -71,7 +100,7 @@ fn sys_connect(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     if addr_ptr.is_null() {
         return Ok((-14_i64) as u64); // -EFAULT
     }
-    let raw: SockAddrInet = unsafe { core::ptr::read_unaligned(addr_ptr as *const SockAddrInet) };
+    let raw = read_sockaddr(addr_ptr)?;
 
     let mut socks = SOCKETS.lock();
 
@@ -183,10 +212,10 @@ fn sys_accept(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                         addr,
                         zero: [0; 8],
                     };
-                    unsafe { core::ptr::write_unaligned(addr_ptr as *mut SockAddrInet, sa) };
+                    write_sockaddr(addr_ptr, sa)?;
                 }
                 if !addrlen_ptr.is_null() {
-                    unsafe { *addrlen_ptr = core::mem::size_of::<SockAddrInet>() as u32 };
+                    write_u32_to_user(addrlen_ptr, core::mem::size_of::<SockAddrInet>() as u32)?;
                 }
                 Ok(accept_fd as u64)
             }
@@ -203,5 +232,15 @@ fn sys_accept(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     } else {
         Ok((-11_i64) as u64) // -EAGAIN
     }
+}
+
+/// Write a single u32 to a userspace pointer via UserSliceWo.
+fn write_u32_to_user(dst_ptr: *mut u32, val: u32) -> Result<(), AbiError> {
+    let bytes = val.to_ne_bytes();
+    let user = UserSliceWo::wo(dst_ptr as u64, 4)
+        .map_err(|_| AbiError::Other("EFAULT: write_u32"))?;
+    user.copy_from_slice(&bytes)
+        .map_err(|_| AbiError::Other("EFAULT: write_u32"))?;
+    Ok(())
 }
 

@@ -77,8 +77,10 @@ impl ShmManager {
                     match mapper.map_to(page, frame, flags, fa) {
                         Ok(flusher) => flusher.flush(),
                         Err(x86_64::structures::paging::mapper::MapToError::PageAlreadyMapped(_)) => {
-                            // Processes currently share the kernel page table, so a second
-                            // attach of the same SHM slot may already be mapped at virt_base.
+                            // ponytail: don't silently swallow — a second attach of the same SHM slot
+                            // at virt_base means the slot is already occupied. Return an error so the
+                            // caller doesn't assume a fresh mapping.
+                            return Err(AbiError::Other("SHM slot already mapped"));
                         }
                         Err(_) => return Err(AbiError::Other("SHM mapping failed")),
                     }

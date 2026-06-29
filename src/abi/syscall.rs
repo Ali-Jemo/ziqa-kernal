@@ -1174,7 +1174,10 @@ fn ziqa_cap_write(ctx: &mut SyscallContext) -> Result<u64, crate::abi::AbiError>
             };
 
             let mut buf = alloc::vec![0u8; count];
-            unsafe { core::ptr::copy_nonoverlapping(buf_ptr, buf.as_mut_ptr(), count); }
+            let user = UserSliceRo::ro(buf_ptr as u64, count)
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_write file"))?;
+            user.copy_to_slice(&mut buf)
+                .map_err(|_| crate::abi::AbiError::Other("EFAULT: cap_write file"))?;
 
             match crate::fs::vfs::VFS.read().write_handle(&handle, &buf, offset) {
                 Ok(n) => {

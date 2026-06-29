@@ -87,9 +87,7 @@ impl<'a> BpfVerifier<'a> {
                         return Err(BpfError::VerificationFailed("Stack access out of bounds"));
                     }
                 } else {
-                    // For now, we block non-stack memory access unless it's a known helper return
-                    // In a real verifier, we'd track register types (PTR_TO_STACK, PTR_TO_MAP, etc.)
-                    // return Err(BpfError::VerificationFailed("Non-stack memory access forbidden"));
+                    return Err(BpfError::VerificationFailed("Non-stack memory access forbidden"));
                 }
             }
             
