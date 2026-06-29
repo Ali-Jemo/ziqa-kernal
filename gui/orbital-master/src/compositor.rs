@@ -5,7 +5,7 @@ use log::{error, info};
 use orbclient::rect::Rect;
 use orbclient::{Color, image::Image};
 
-use crate::core::display::{Display, Displays};
+use crate::core::display::{Display, Displays, DisplayHandle};
 
 pub struct Compositor {
     displays: Displays,
@@ -14,8 +14,8 @@ pub struct Compositor {
 
     hw_cursor: bool,
     damage_borders: bool,
-    //QEMU UIs do not grab the pointer in case an absolute pointing device is present
-    //and since releasing our gpu cursor makes it disappear, updating it every second fixes it
+    // QEMU UIs do not grab the pointer in case an absolute pointing device is present
+    // and since releasing our gpu cursor makes it disappear, updating it every second fixes it
     update_cursor_timer: Instant,
     cursor: Arc<Image>,
     cursor_x: i32,
@@ -26,22 +26,10 @@ pub struct Compositor {
 
 impl Compositor {
     pub fn new(displays: Displays) -> Self {
-        let mut redraws = Vec::new();
-        for display in displays.displays.iter() {
-            redraws.push(display.screen_rect());
-        }
-
-        let hw_cursor: bool = displays.supports_hw_cursor();
-        if hw_cursor {
-            info!("Hardware cursor detected");
-        }
-
         Compositor {
             displays,
-
-            redraws,
-
-            hw_cursor,
+            redraws: Vec::new(),
+            hw_cursor: true,
             damage_borders: false,
             update_cursor_timer: Instant::now(),
             cursor: Arc::new(Image::new(0, 0)),
@@ -77,41 +65,52 @@ impl Compositor {
 
     /// Find the display that a window (`rect`) most overlaps and return it's screen_rect
     pub fn get_screen_rect_for_window(&self, rect: &Rect) -> Rect {
-        let mut screen_rect = self.displays()[0].screen_rect();
-        let mut max_intersection_area = 0;
+        let mut best_display = &self.displays()[0];
+        let mut best_overlap = 0;
+
         for display in self.displays() {
-            let intersect = display.screen_rect().intersection(rect);
-            if intersect.area() > max_intersection_area {
-                screen_rect = display.screen_rect();
-                max_intersection_area = intersect.area();
+            let overlap = rect.intersection(&display.screen_rect()).area();
+            if overlap > best_overlap {
+                best_overlap = overlap;
+                best_display = display;
             }
         }
-        screen_rect
+
+        best_display.screen_rect()
     }
 
     /// Reduce the rect height based on orblauncher bar height
     pub fn get_window_rect_from_screen_rect(&self, screen_rect: &Rect) -> Rect {
-        let height = screen_rect.height();
-        // TODO: This is a hack, orblauncher should
-        // talk with orbital to register this value
-        let taskbar_h = 48 * ((height / 1600) + 1);
+        let bar_height = (screen_rect.height() as f32 * 0.04) as u32;
         Rect::new(
             screen_rect.left(),
             screen_rect.top(),
             screen_rect.width(),
-            height.saturating_sub(taskbar_h),
+            screen_rect.height().saturating_sub(bar_height as u32),
         )
     }
 
     pub fn resize_if_necessary(&mut self) -> bool {
-        //TODO: should screens be moved after a resize?
+        // TODO: should screens be moved after a resize?
         let mut any_resized = false;
-        for i in 0..self.displays.displays.len() {
-            let resized =
-                self.displays.displays[i].resize_if_necessary(&self.displays.display_handle);
-            any_resized |= resized;
-            if resized {
-                self.schedule(self.displays.displays[i].screen_rect());
+        #[cfg(not(feature = "ziqa-bga-direct"))]
+        {
+            for i in 0..self.displays.displays.len() {
+                let resized = self.displays.displays[i].resize_if_necessary(&self.displays.display_handle);
+                any_resized |= resized;
+                if resized {
+                    self.schedule(self.displays.displays[i].screen_rect());
+                }
+            }
+        }
+        #[cfg(feature = "ziqa-bga-direct")]
+        {
+            for i in 0..self.displays.displays.len() {
+                let resized = self.displays.displays[i].resize_if_necessary(&());
+                any_resized |= resized;
+                if resized {
+                    self.schedule(self.displays.displays[i].screen_rect());
+                }
             }
         }
         any_resized
@@ -123,7 +122,7 @@ impl Compositor {
         }
 
         for rect in self.redraws.iter_mut() {
-            //If contained, ignore new redraw request
+            // If contained, ignore new redraw request
             let container = rect.container(&request);
             if container.width() == request.width() && container.height() == request.height() {
                 *rect = container;
@@ -143,6 +142,18 @@ impl Compositor {
         )
     }
 
+    /// Get the display handle (feature-gated)
+    fn display_handle(&self) -> &DisplayHandle {
+        #[cfg(not(feature = "ziqa-bga-direct"))]
+        {
+            &self.displays.display_handle
+        }
+        #[cfg(feature = "ziqa-bga-direct")]
+        {
+            &()
+        }
+    }
+
     pub fn update_cursor(&mut self, x: i32, y: i32, hot_x: i32, hot_y: i32, cursor: &Arc<Image>) {
         if !self.hw_cursor {
             self.schedule(self.cursor_rect());
@@ -153,11 +164,18 @@ impl Compositor {
                 && self.cursor_hot_x == hot_x
                 && self.cursor_hot_y == hot_y
             {
+                #[cfg(not(feature = "ziqa-bga-direct"))]
                 match self.displays.displays[0].move_cursor(&self.displays.display_handle, x, y) {
                     Ok(_) => (),
                     Err(err) => error!("failed to move cursor: {}", err),
                 }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match self.displays.displays[0].move_cursor(&(), x, y) {
+                    Ok(_) => (),
+                    Err(err) => error!("failed to move cursor: {}", err),
+                }
             } else {
+                #[cfg(not(feature = "ziqa-bga-direct"))]
                 match self.displays.displays[0].set_cursor(
                     &self.displays.display_handle,
                     hot_x,
@@ -167,8 +185,19 @@ impl Compositor {
                     Ok(_) => (),
                     Err(err) => error!("failed to update cursor: {}", err),
                 }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match self.displays.displays[0].set_cursor(&(), hot_x, hot_y, cursor) {
+                    Ok(_) => (),
+                    Err(err) => error!("failed to update cursor: {}", err),
+                }
 
+                #[cfg(not(feature = "ziqa-bga-direct"))]
                 match self.displays.displays[0].move_cursor(&self.displays.display_handle, x, y) {
+                    Ok(_) => (),
+                    Err(err) => error!("failed to move cursor: {}", err),
+                }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match self.displays.displays[0].move_cursor(&(), x, y) {
                     Ok(_) => (),
                     Err(err) => error!("failed to move cursor: {}", err),
                 }
@@ -191,9 +220,7 @@ impl Compositor {
         self.redraw_cursor(total_redraw_opt);
 
         // Sync any parts of displays that changed
-        if let Some(total_redraw) = total_redraw_opt {
-            self.sync_rect(total_redraw);
-        }
+        self.sync_rect(total_redraw_opt.unwrap_or(Rect::new(0, 0, 0, 0)));
     }
 
     fn redraw_windows(&mut self, draw_windows: impl Fn(&mut Display, Rect)) -> Option<Rect> {
@@ -226,6 +253,7 @@ impl Compositor {
     fn redraw_cursor(&mut self, total_redraw: Option<Rect>) {
         if self.hw_cursor {
             if self.update_cursor_timer.elapsed().as_millis() > 1000 {
+                #[cfg(not(feature = "ziqa-bga-direct"))]
                 match self.displays.displays[0].set_cursor(
                     &self.displays.display_handle,
                     self.cursor_hot_x,
@@ -235,12 +263,19 @@ impl Compositor {
                     Ok(_) => (),
                     Err(err) => error!("failed to update cursor: {}", err),
                 }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match self.displays.displays[0].set_cursor(&(), self.cursor_hot_x, self.cursor_hot_y, &self.cursor) {
+                    Ok(_) => (),
+                    Err(err) => error!("failed to update cursor: {}", err),
+                }
 
-                match self.displays.displays[0].move_cursor(
-                    &self.displays.display_handle,
-                    self.cursor_x,
-                    self.cursor_y,
-                ) {
+                #[cfg(not(feature = "ziqa-bga-direct"))]
+                match self.displays.displays[0].move_cursor(&self.displays.display_handle, self.cursor_x, self.cursor_y) {
+                    Ok(_) => (),
+                    Err(err) => error!("failed to move cursor: {}", err),
+                }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match self.displays.displays[0].move_cursor(&(), self.cursor_x, self.cursor_y) {
                     Ok(_) => (),
                     Err(err) => error!("failed to move cursor: {}", err),
                 }
@@ -281,7 +316,13 @@ impl Compositor {
                     const DAMAGE_COLOR: Color = Color::rgba(255, 0, 255, 80);
                     display.border_rect(&display_redraw, DAMAGE_COLOR, 2);
                 }
+                #[cfg(not(feature = "ziqa-bga-direct"))]
                 match display.sync_rect(&self.displays.display_handle, display_redraw) {
+                    Ok(()) => (),
+                    Err(err) => error!("failed to sync display {}: {}", i, err),
+                }
+                #[cfg(feature = "ziqa-bga-direct")]
+                match display.sync_rect(&(), &display_redraw) {
                     Ok(()) => (),
                     Err(err) => error!("failed to sync display {}: {}", i, err),
                 }

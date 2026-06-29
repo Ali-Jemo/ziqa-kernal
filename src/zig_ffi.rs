@@ -5,7 +5,7 @@
 
 // ── Raw extern declarations ─────────────────────────────────────────────────
 
-extern "C" {
+unsafe extern "C" {
     fn zig_fill_rect(fb: *mut u8, pitch: u32, x: u32, y: u32, w: u32, h: u32, color: u32);
 
     fn zig_blit_bitmap(
@@ -142,7 +142,7 @@ extern "C" {
 ///
 /// This allows Zig/C code linked into the kernel to make "syscalls"
 /// through the same dispatcher as user-mode processes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
     // Use the safe closure-based helper: the process lock is held with
     // interrupts disabled only for the duration of the dispatch. Holding

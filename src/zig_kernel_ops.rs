@@ -2,7 +2,7 @@
 //
 // Safe wrappers around the C-ABI functions exported by `src/zig/kernel_ops.zig`.
 
-extern "C" {
+unsafe extern "C" {
     fn zig_bitmap_find_clear(bitmap: *const u8, len_bytes: u32, start_bit: u32) -> u32;
     fn zig_block_copy(dst: *mut u8, src: *const u8, len: usize);
     fn zig_block_zero(dst: *mut u8, len: usize);

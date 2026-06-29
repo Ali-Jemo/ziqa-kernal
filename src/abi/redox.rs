@@ -6,7 +6,7 @@
 //!   - Bits 16-31: flags (read/write, slice, etc.)
 //!   - Bits 0-15: syscall number
 //!
-//! The critical syscall for Orbital is SYS_FMAP (0x21000384) which maps
+//! The critical syscall for Orbital is SYS_FMAP (0x20000384) which maps
 //! the framebuffer into the process address space.
 //!
 //! Common I/O syscalls (open, read, write, close, mmap, etc.) use the
@@ -16,29 +16,17 @@
 use crate::abi::{AbiError, AbiPlugin};
 use crate::process::{AbiKind, Process};
 use crate::abi::syscall::SyscallContext;
-use crate::process::ProcessState;
 use crate::println;
 
-/// Redox syscall numbers (from redox_syscall::number).
+/// Redox syscall numbers (from Redox kernel syscall crate)
 mod nr {
+    /// Map a file into memory (fmap) - the critical one for Orbital
+    pub const SYS_FMAP: u64 = 0x2100_0384;
+    pub const SYS_FPATH: u64 = 0x2200_03a0;
     pub const SYS_CLOSE: u64 = 0x2000_0006;
-    pub const SYS_DUP: u64 = 0x2010_0029;
-    pub const SYS_DUP2: u64 = 0x2010_003f;
     pub const SYS_READ: u64 = 0x2200_0003;
     pub const SYS_WRITE: u64 = 0x2100_0004;
-    pub const SYS_LSEEK: u64 = 0x2000_0013;
-    pub const SYS_FCNTL: u64 = 0x2000_0037;
-    pub const SYS_FUTEX: u64 = 240;
-    pub const SYS_CLOCK_GETTIME: u64 = 265;
-    pub const SYS_NANOSLEEP: u64 = 162;
-    pub const SYS_YIELD: u64 = 158;
-    pub const SYS_FSTAT: u64 = 0x2200_001c;
-    pub const SYS_GETDENTS: u64 = 0x2000_002b;
-    pub const SYS_FEVENT: u64 = 0x2000_039f;
     pub const SYS_OPENAT: u64 = 0x1010_0007;
-    pub const SYS_FMAP: u64 = 0x2100_0384;
-    pub const SYS_FUNMAP: u64 = 0x2000_005c;
-    pub const SYS_CALL: u64 = 0x2300_ca11;
 }
 
 /// Redox ABI plugin
@@ -70,169 +58,143 @@ impl AbiPlugin for RedoxAbiPlugin {
 
     fn handle_syscall(
         &self,
-        handler: &dyn crate::abi::handler::SyscallHandler,
+        _handler: &dyn crate::abi::handler::SyscallHandler,
         ctx: &mut SyscallContext,
     ) -> Result<u64, AbiError> {
-        // Early stdout capture for debugging — print every Redox syscall
-        if ctx.number == nr::SYS_WRITE && matches!(ctx.args[0], 1 | 2) {
-            let len = (ctx.args[2] as usize).min(256);
-            let mut buf = [0u8; 256];
-            if crate::abi::usercopy::UserSliceRo::ro(ctx.args[1], len)
-                .and_then(|s| s.copy_to_slice(&mut buf[..len]))
-                .is_ok()
-            {
-                if let Ok(s) = core::str::from_utf8(&buf[..len]) {
-                    crate::print!("{}", s);
-                }
-            }
-            return Ok(ctx.args[2]);
+        // Redox-specific syscalls checked first
+        if ctx.number == nr::SYS_FMAP {
+            return handle_fmap(ctx);
         }
-        // Magic FD range (31337-31339) — used by relibc for early fd probing
-        let is_magic_fd = ctx.args[0] == 31337 || ctx.args[0] == 31338 || ctx.args[0] == 31339;
-        if is_magic_fd {
-            match ctx.number {
-                nr::SYS_DUP | nr::SYS_FCNTL => return Ok(31338),
-                nr::SYS_READ => {
-                    let buf_addr = ctx.args[1];
-                    let len = ctx.args[2] as usize;
-                    let copy_len = len.min(16);
-                    let zero = [0u8; 16];
-                    let _ = crate::abi::usercopy::UserSliceWo::wo(buf_addr, copy_len)
-                        .and_then(|s| s.copy_from_slice(&zero[..copy_len]));
+        if ctx.number == nr::SYS_FPATH {
+            // FIX: SYS_FPATH - get path for a file descriptor
+            let fd = ctx.args[0] as usize;
+            let buf_addr = ctx.args[1];
+            let buf_len = ctx.args[2] as usize;
+            
+            let path = ctx.process.fds.path_of(fd);
+            match path {
+                Some(p) => {
+                    let path_str = core::str::from_utf8(p).unwrap_or("");
+                    let bytes = path_str.as_bytes();
+                    let copy_len = bytes.len().min(buf_len);
+                    let user_buf = crate::abi::usercopy::UserSliceWo::wo(buf_addr, copy_len)?;
+                    user_buf.copy_from_slice(&bytes[..copy_len])?;
                     return Ok(copy_len as u64);
                 }
-                nr::SYS_CLOSE => return Ok(0),
-                _ => {}
+                None => return Err(AbiError::Other("EBADF")),
             }
         }
+
         match ctx.number {
-            nr::SYS_FMAP => return handle_fmap(ctx),
-            nr::SYS_CALL => return handle_proc_call(ctx),
-            nr::SYS_YIELD => {
-                // SYS_YIELD (158) is multiplexed:
-                //   - args[0] == 0x1001-0x1004 → ARCH_PRCTL (set FS/GS base)
-                //   - otherwise → yield CPU (no-op for us)
-                if matches!(ctx.args[0], 0x1001 | 0x1002 | 0x1003 | 0x1004) {
-                    return with_linux_syscall(ctx, crate::abi::linux::nr::SYS_ARCH_PRCTL, |ctx| {
-                        let linux = crate::abi::linux::LinuxAbiPlugin;
-                        linux.handle_syscall(handler, ctx)
-                    });
-                }
-                if ctx.process.state == ProcessState::Running {
-                    ctx.process.state = ProcessState::Ready;
-                }
-                return Ok(0);
-            }
-            273 => return Ok(0), // set_robust_list: single-threaded userspace shim
-            334 => return Ok(0), // rseq: accept registration; no restartable sequences yet
-            nr::SYS_FEVENT => {
-                let fd = ctx.args[0] as usize;
-                let flags = ctx.args[1] as usize;
-                let desc = ctx.process.fds.get(fd);
-                if let Some(d) = desc {
-                    if let crate::process::FdTarget::Scheme(_, handle_id) = d.target {
-                        let registry = crate::scheme::SCHEME_REGISTRY.lock();
-                        for name in ["display_v2", "display", "input"] {
-                            if let Some(scheme) = registry.get(name) {
-                                let ready = scheme.fevent(handle_id, flags).unwrap_or(0);
-                                return Ok(ready as u64);
-                            }
-                        }
-                    }
-                }
-                return Ok(0)
-            }
+            nr::SYS_CLOSE => return delegate_linux_number(ctx, crate::abi::linux::nr::SYS_CLOSE),
+            nr::SYS_READ => return delegate_linux_number(ctx, crate::abi::linux::nr::SYS_READ),
+            nr::SYS_WRITE => return delegate_linux_number(ctx, crate::abi::linux::nr::SYS_WRITE),
+            nr::SYS_OPENAT => return handle_openat(ctx),
             _ => {}
         }
-        // SYS_EXIT (1) — some Redox binaries use this directly. Mark the
-        // current process exited and let the syscall trap schedule away after
-        // the process lock is released.
-        if ctx.number == 1 {
-            ctx.process.exit(ctx.args[0] as i64);
-            return Ok(0);
+
+        // Redox uses Linux-compatible syscall numbers for standard I/O,
+        // memory, process, time, and signal operations. Delegate to the
+        // shared Linux ABI handler modules so Orbital can open scheme
+        // paths (display_v2:, input:), read/write FDs, map memory, etc.
+        if let Some(result) = crate::abi::linux::memory::handle(ctx) {
+            return result;
         }
-        // Try mapping to a Linux syscall number
-        let mapped = redox_to_linux_syscall(ctx.number);
-        #[cfg(feature = "redox-debug")]
-        crate::println!("[Redox ABI DEBUG] ctx.number={}, mapped={:?}", ctx.number, mapped);
-        if let Some(linux_number) = mapped {
-            return with_linux_syscall(ctx, linux_number, |ctx| {
-                let linux = crate::abi::linux::LinuxAbiPlugin;
-                linux.handle_syscall(handler, ctx)
-            });
+        if let Some(result) = crate::abi::linux::process::handle(ctx) {
+            return result;
         }
-        // ponytail: unknown Redox syscall → return 0 instead of aborting.
-        // relibc's startup path probes several syscalls during boot; returning
-        // success lets the binary continue and fail on something we actually
-        // need to handle (which will produce a visible error).
-        crate::println!(
-            "[Redox ABI] WARN: unhandled syscall {:#x} (args={:#x},{:#x},{:#x}) -> Ok(0)",
-            ctx.number, ctx.args[0], ctx.args[1], ctx.args[2]
-        );
+        if let Some(result) = crate::abi::linux::fs::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = crate::abi::linux::time::handle(ctx) {
+            return result;
+        }
+        #[cfg(feature = "net")]
+        if let Some(result) = crate::abi::linux::net::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = crate::abi::linux::signal::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = crate::abi::linux::misc::handle(ctx) {
+            return result;
+        }
+        if let Some(result) = crate::abi::linux::ebpf::handle(ctx) {
+            return result;
+        }
+
         klog_syscall("unhandled_redox_syscall", ctx.number);
-        Ok(0)
+        Err(AbiError::UnsupportedSyscall(ctx.number))
     }
 }
 
-fn handle_proc_call(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
-    let packet_ptr = ctx.args[4];
-    let mut packet = [0u8; 16];
-    crate::abi::usercopy::UserSliceRo::ro(packet_ptr, packet.len())?
-        .copy_to_slice(&mut packet)?;
-
-    let op = u64::from_le_bytes([
-        packet[0], packet[1], packet[2], packet[3],
-        packet[4], packet[5], packet[6], packet[7],
-    ]);
-    let status = u64::from_le_bytes([
-        packet[8], packet[9], packet[10], packet[11],
-        packet[12], packet[13], packet[14], packet[15],
-    ]);
-
-    if op == 2 {
-        ctx.process.exit(status as i64);
-    }
-
-    Ok(0)
-}
-
-fn redox_to_linux_syscall(number: u64) -> Option<u64> {
-    let linux = match number {
-        218 => crate::abi::linux::nr::SYS_SET_TID_ADDRESS,
-        // The locally linked Orbital binary still emits a few plain
-        // x86_64 Linux-style memory syscalls from its Rust/std startup path.
-        // Route those through the existing Linux memory handlers instead of
-        // killing the Redox process.
-        9 => crate::abi::linux::nr::SYS_MMAP,
-        12 => crate::abi::linux::nr::SYS_BRK,
-        10 => crate::abi::linux::nr::SYS_MPROTECT,
-        11 => crate::abi::linux::nr::SYS_MUNMAP,
-        nr::SYS_READ => crate::abi::linux::nr::SYS_READ,
-        nr::SYS_WRITE => crate::abi::linux::nr::SYS_WRITE,
-        nr::SYS_CLOSE => crate::abi::linux::nr::SYS_CLOSE,
-        nr::SYS_DUP => crate::abi::linux::nr::SYS_DUP,
-        nr::SYS_DUP2 => crate::abi::linux::nr::SYS_DUP2,
-        nr::SYS_LSEEK => crate::abi::linux::nr::SYS_LSEEK,
-        nr::SYS_FCNTL => crate::abi::linux::nr::SYS_FCNTL,
-        nr::SYS_FSTAT => crate::abi::linux::nr::SYS_FSTAT,
-        nr::SYS_GETDENTS => crate::abi::linux::nr::SYS_GETDENTS64,
-        nr::SYS_FUTEX => crate::abi::linux::nr::SYS_FUTEX,
-        nr::SYS_CLOCK_GETTIME => crate::abi::linux::nr::SYS_CLOCK_GETTIME,
-        nr::SYS_NANOSLEEP => crate::abi::linux::nr::SYS_NANOSLEEP,
-        nr::SYS_OPENAT => crate::abi::linux::nr::SYS_OPENAT,
-        nr::SYS_FUNMAP => crate::abi::linux::nr::SYS_MUNMAP,
-        _ => return None,
-    };
-    Some(linux)
-}
-
-fn with_linux_syscall<F>(ctx: &mut SyscallContext, linux_number: u64, f: F) -> Result<u64, AbiError>
-where
-    F: FnOnce(&mut SyscallContext) -> Result<u64, AbiError>,
-{
+fn delegate_linux_number(ctx: &mut SyscallContext, linux_number: u64) -> Result<u64, AbiError> {
+    let redox_number = ctx.number;
     ctx.number = linux_number;
-    let result = f(ctx);
+    let result = if let Some(result) = crate::abi::linux::memory::handle(ctx) {
+        result
+    } else if let Some(result) = crate::abi::linux::process::handle(ctx) {
+        result
+    } else if let Some(result) = crate::abi::linux::fs::handle(ctx) {
+        result
+    } else if let Some(result) = crate::abi::linux::time::handle(ctx) {
+        result
+    } else if let Some(result) = crate::abi::linux::signal::handle(ctx) {
+        result
+    } else if let Some(result) = crate::abi::linux::misc::handle(ctx) {
+        result
+    } else {
+        Err(AbiError::UnsupportedSyscall(redox_number))
+    };
+    ctx.number = redox_number;
     result
+}
+
+fn handle_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    if !ctx
+        .process
+        .capabilities
+        .has_permission(crate::capability::ResourceKind::File, false, false)
+    {
+        return Err(AbiError::PermissionDenied);
+    }
+
+    let path_ptr = ctx.args[1];
+    let path_len = (ctx.args[2] as usize).min(4096);
+    let flags = ctx.args[3] as usize;
+    let mut path_buf = alloc::vec![0u8; path_len];
+    crate::abi::usercopy::UserSliceRo::ro(path_ptr, path_len)?.copy_to_slice(&mut path_buf)?;
+    let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
+
+    let translated_path = if let Some(rest) = path_str.strip_prefix("/scheme/") {
+        match rest.find('/') {
+            Some(pos) => {
+                let mut path = alloc::string::String::from(&rest[..pos]);
+                path.push(':');
+                path.push_str(&rest[pos + 1..]);
+                path
+            }
+            None => alloc::string::String::from(rest),
+        }
+    } else {
+        alloc::string::String::from(path_str)
+    };
+
+    if let Some(result) = crate::fs::vfs::VFS.read().handle_scheme(&translated_path, flags) {
+        return match result {
+            Ok(id) => {
+                let fd = ctx
+                    .process
+                    .fds
+                    .alloc_scheme(translated_path.as_bytes(), flags as u32, id)
+                    .ok_or(AbiError::Other("EMFILE"))?;
+                Ok(fd as u64)
+            }
+            Err(err) => Err(err),
+        };
+    }
+
+    Ok((-2_i64) as u64)
 }
 
 /// Handle the Redox SYS_FMAP call: maps the physical framebuffer into the
@@ -264,8 +226,8 @@ fn handle_fmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let page_count = (fb_size + 4095) / 4096;
 
     // Convert kernel virtual address to physical address
-    let po = crate::memory::paging::phys_offset();
-    let fb_phys = fb_kernel_virt.wrapping_sub(po.as_u64());
+    let po = crate::memory::paging::phys_offset().as_u64();
+    let fb_phys = fb_kernel_virt.wrapping_sub(po);
 
     println!("[SYS_FMAP] phys={:#x} size={} ({} pages)", fb_phys, fb_size, page_count);
 
@@ -274,7 +236,7 @@ fn handle_fmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let user_start = x86_64::VirtAddr::new(fb_user_virt);
 
     // Map framebuffer pages into the process's page table
-    use x86_64::structures::paging::{Page, PhysFrame, Size4KiB, PageTableFlags, Mapper, PageTable};
+    use x86_64::structures::paging::{Page, PhysFrame, Size4KiB, PageTableFlags, Mapper};
     use crate::memory::paging::phys_offset as poff;
 
     let pt_frame = match ctx.process.page_table_frame {
@@ -288,10 +250,11 @@ fn handle_fmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         }
     };
 
-    let l4_virt = poff() + pt_frame.start_address().as_u64();
-    let l4 = unsafe { &mut *(l4_virt.as_mut_ptr::<PageTable>()) };
+    let offset = poff();
+    let l4_virt = offset + pt_frame.start_address().as_u64();
+    let l4 = unsafe { &mut *(l4_virt.as_mut_ptr()) };
     let mut mapper = unsafe {
-        x86_64::structures::paging::OffsetPageTable::new(l4, poff())
+        x86_64::structures::paging::OffsetPageTable::new(l4, offset)
     };
 
     let flags = PageTableFlags::PRESENT

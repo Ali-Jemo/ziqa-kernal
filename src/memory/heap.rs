@@ -12,28 +12,28 @@ pub const HEAP_SIZE: usize = 128 * 1024 * 1024; // 128 MiB
 struct TrackedAllocator(LockedHeap);
 
 unsafe impl core::alloc::GlobalAlloc for TrackedAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 { unsafe {
         let ptr = self.0.alloc(layout);
         if !ptr.is_null() {
             crate::memory::heapstats::record_alloc(layout.size() as u64);
         }
         ptr
-    }
+    }}
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) { unsafe {
         self.0.dealloc(ptr, layout);
         crate::memory::heapstats::record_dealloc(layout.size() as u64);
-    }
+    }}
 }
 
 #[global_allocator]
 static ALLOCATOR: TrackedAllocator = TrackedAllocator(LockedHeap::empty());
 static mut EARLY_HEAP: [u8; 1048576] = [0; 1048576]; // 1 MiB
 
-pub unsafe fn init_early_heap() {
+pub unsafe fn init_early_heap() { unsafe {
     let ptr = core::ptr::addr_of_mut!(EARLY_HEAP) as *mut u8;
     ALLOCATOR.0.lock().init(ptr, 1048576);
-}
+}}
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,

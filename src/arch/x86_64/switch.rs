@@ -33,22 +33,22 @@ global_asm!(
 
     .global jump_to_user_stub
     jump_to_user_stub:
-        # RSP points to CpuState. We pop r15-rax (15 registers)
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop r11
-        pop r10
-        pop r9
-        pop r8
-        pop rdi
-        pop rsi
-        pop rbp
-        pop rbx
-        pop rdx
-        pop rcx
+        # RSP points to CpuState. Pop fields in #[repr(C)] order.
         pop rax
+        pop rcx
+        pop rdx
+        pop rbx
+        pop rbp
+        pop rsi
+        pop rdi
+        pop r8
+        pop r9
+        pop r10
+        pop r11
+        pop r12
+        pop r13
+        pop r14
+        pop r15
 
         # Sanitize rflags: clear IOPL/TF/RF/NT/VM/AC/DF, set IF
         # Bits cleared: TF(8), DF(10), IOPL(12-13), NT(14), RF(16), VM(17), AC(18)
@@ -296,7 +296,7 @@ global_asm!(
     "#
 );
 
-extern "C" {
+unsafe extern "C" {
     /// Save current RSP to `old_rsp`, then switch to `new_rsp`.
     pub fn switch_context(old_rsp: *mut u64, new_rsp: u64);
     /// Jump to user-mode by restoring TrapFrame and executing iretq.
@@ -319,10 +319,10 @@ pub struct TrapFrame {
     pub ss: u64,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut KERNEL_STACK: u64 = 0;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut KERNEL_STACK_SAVE: u64 = 0;
 
 pub fn set_kernel_stack(stack: u64) {
@@ -349,7 +349,7 @@ pub fn init_syscalls() {
     }
 
     // 3. Configure LSTAR MSR (0xC0000082) with syscall_entry
-    extern "C" {
+    unsafe extern "C" {
         fn syscall_entry();
     }
     let mut lstar = Msr::new(0xC0000082);
@@ -364,8 +364,8 @@ pub fn init_syscalls() {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
     let num = frame.rax;
     let args = [
         frame.rdi,
@@ -383,23 +383,24 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         Some(pid) => pid,
         None => return,
     };
-    let proc_arc = match crate::process::scheduler::SCHEDULER.get_process(pid) {
-        Some(proc_arc) => proc_arc,
-        None => return,
-    };
-
-    // Do not hold the Process mutex while dispatching a syscall. Several
-    // syscall paths legitimately call back into scheduler helpers
-    // (`with_current_task`, `WaitCondition::wait`, `schedule`). Holding this
-    // lock across dispatch recursively deadlocks those paths before the next
-    // runnable process, including the GUI client, can run.
-    let proc_ptr = {
+    let cpu = crate::arch::x86_64::per_cpu::current_cpu();
+    let raw = cpu
+        .current_process_raw
+        .load(core::sync::atomic::Ordering::Relaxed) as *mut crate::process::Process;
+    let proc_ptr = if !raw.is_null() && unsafe { (*raw).pid == pid } {
+        unsafe {
+            (*raw).cpu_state = *frame;
+        }
+        raw
+    } else {
+        let proc_arc = match crate::process::scheduler::SCHEDULER.get_process(pid) {
+            Some(proc_arc) => proc_arc,
+            None => return,
+        };
         let mut proc = proc_arc.lock();
         proc.cpu_state = *frame;
         &mut *proc as *mut crate::process::Process
     };
-
-    let cpu = crate::arch::x86_64::per_cpu::current_cpu();
     cpu.current_process_raw.store(proc_ptr as u64, core::sync::atomic::Ordering::Relaxed);
 
     let registry = crate::init_abi_registry();
@@ -433,7 +434,6 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         (proc.cpu_state, matches!(proc.state, crate::process::ProcessState::Exited(_)))
     };
 
-    cpu.current_process_raw.store(0, core::sync::atomic::Ordering::Relaxed);
     *frame = cpu_state;
 
     if is_exited {
@@ -442,4 +442,4 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         // If schedule returns, we have no more work to do — loop halt.
         loop { x86_64::instructions::interrupts::enable_and_hlt(); }
     }
-}
+}}

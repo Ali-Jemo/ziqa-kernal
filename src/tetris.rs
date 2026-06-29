@@ -256,7 +256,7 @@ pub unsafe fn render_screen(
     line_flash: u8,
     line_flash_rows: &[bool; 20],
     now: u32,
-) {
+) { unsafe {
     crate::zig_ffi::clear(fb, (80 * 25 * 4) as usize, 0x000000);
 
     // ── Gradient background ────────────────────────────────────────────────
@@ -378,7 +378,7 @@ pub unsafe fn render_screen(
         write_string_cell(v_fb, 35, 10, "GAME OVER", 15, 4);
         write_string_cell(v_fb, 36, 12, "PRESS R", 15, 4);
     }
-}
+}}
 
 fn get_piece_size(piece: usize) -> usize {
     if piece == 0 { 4 } else if piece == 1 { 2 } else if piece == 7 { 1 } else { 3 }

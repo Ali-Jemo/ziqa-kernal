@@ -72,7 +72,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
         false
     };
-    if compositor_display {
+    if compositor_display && !cfg!(feature = "orbital") {
         // Compositor owns only a working VirtIO GPU framebuffer.  When the
         // display is the BGA framebuffer, keep the framebuffer console active
         // so the QEMU GUI window remains an interactive shell.
@@ -280,9 +280,12 @@ fn run_startup() {
     set_fg(Color::LightGreen);
 
 
-    // Spawn the built-in test ELF as a user process
-    let binary = include_bytes!("../assets/test_elf.bin");
-    ziqa_kernel::process::scheduler::spawn_elf(binary);
+    // Spawn the built-in test ELF as a user process during normal self-test boots.
+    #[cfg(not(feature = "skip-self-tests"))]
+    {
+        let binary = include_bytes!("../assets/test_elf.bin");
+        ziqa_kernel::process::scheduler::spawn_elf(binary);
+    }
 
     // Spawn built-in compositor demo client (kernel thread)
     #[cfg(feature = "games")]
@@ -299,17 +302,21 @@ fn run_startup() {
         ziqa_kernel::process::scheduler::spawn_kthread(verify_logger, core::ptr::null());
     }
 
-    // Spawn the userspace keyboard driver (preemption stays disabled until all spawns complete)
-    let kb_driver_bin = include_bytes!("../userspace/keyboard_driver.elf");
-    if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(kb_driver_bin) {
-        ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
-            proc.capabilities.grant(
-                ziqa_kernel::capability::ResourceKind::DeviceIo,
-                ziqa_kernel::capability::Permissions::full(),
-                0,
-                None,
-            );
-        });
+    // The GUI path uses OrbitalBridge input; don't schedule the standalone
+    // userspace keyboard driver ahead of Orbital.
+    #[cfg(not(feature = "orbital"))]
+    {
+        let kb_driver_bin = include_bytes!("../userspace/keyboard_driver.elf");
+        if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf(kb_driver_bin) {
+            ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                proc.capabilities.grant(
+                    ziqa_kernel::capability::ResourceKind::DeviceIo,
+                    ziqa_kernel::capability::Permissions::full(),
+                    0,
+                    None,
+                );
+            });
+        }
     }
     // Spawn Doom as a user-space process
     #[cfg(feature = "games")]
@@ -351,7 +358,7 @@ fn run_startup() {
         {
             let compressed = include_bytes!("../assets/orbital.elf.lz4");
             if let Ok(decompressed) = lz4_flex::decompress_size_prepended(compressed) {
-                if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf_from_vec(decompressed) {
+                if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf_from_vec(decompressed) {
                     ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
                         let full = ziqa_kernel::capability::Permissions::full();
                         proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
@@ -366,7 +373,7 @@ fn run_startup() {
             }
         }
     }
-    let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(binary);
+    let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(include_bytes!("../assets/test_elf.bin"));
     if restored > 0 {
         set_fg(Color::LightGreen);
         println!(

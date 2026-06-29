@@ -29,13 +29,13 @@ impl FpuState {
     }
 }
 
-pub unsafe fn save_fpu(state: *mut FpuState) {
+pub unsafe fn save_fpu(state: *mut FpuState) { unsafe {
     core::arch::asm!("fxsave [{}]", in(reg) state);
-}
+}}
 
-pub unsafe fn restore_fpu(state: *const FpuState) {
+pub unsafe fn restore_fpu(state: *const FpuState) { unsafe {
     core::arch::asm!("fxrstor [{}]", in(reg) state);
-}
+}}
 
 pub fn interrupts_enabled() -> bool {
     x86_64::instructions::interrupts::are_enabled()

@@ -124,19 +124,19 @@ impl core::ops::BitOrAssign for CpuFeatures {
 /// Set RFLAGS.AC = 1, opening a kernel window to access user-accessible pages.
 /// Must be paired with `clac()`. Prefer `with_user_access` over calling directly.
 #[inline(always)]
-pub unsafe fn stac() {
+pub unsafe fn stac() { unsafe {
     if SMAP_ACTIVE.load(Ordering::Relaxed) {
         core::arch::asm!("stac", options(nostack, preserves_flags));
     }
-}
+}}
 
 /// Clear RFLAGS.AC = 0, re-enabling SMAP enforcement.
 #[inline(always)]
-pub unsafe fn clac() {
+pub unsafe fn clac() { unsafe {
     if SMAP_ACTIVE.load(Ordering::Relaxed) {
         core::arch::asm!("clac", options(nostack, preserves_flags));
     }
-}
+}}
 
 /// Execute `f` inside a STAC/CLAC bracket.
 ///
@@ -150,9 +150,9 @@ pub unsafe fn clac() {
 pub unsafe fn with_user_access<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
-{
+{ unsafe {
     stac();
     let result = f();
     clac();
     result
-}
+}}

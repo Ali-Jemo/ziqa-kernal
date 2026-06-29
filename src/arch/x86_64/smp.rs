@@ -18,7 +18,7 @@ const BOOT_INFO_OFFSET: u64 = 0x1E0;
 const GDT_OFFSET: u64 = 0x100;
 const GDT_PTR_OFFSET: u64 = 0x140;
 
-extern "C" {
+unsafe extern "C" {
     static trampoline_start: u8;
     static trampoline_end: u8;
 }
@@ -347,7 +347,7 @@ fn get_phys_offset() -> u64 {
 
 /// Called by the AP trampoline after entering long mode.
 /// This is the first Rust code the AP executes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn ap_entry() -> ! {
     let cpu = per_cpu::current_cpu();
 

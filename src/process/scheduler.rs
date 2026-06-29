@@ -616,10 +616,6 @@ impl Scheduler {
             crate::arch::disable_interrupts();
         }
 
-        #[cfg(target_arch = "x86_64")]
-        crate::arch::x86_64::per_cpu::current_cpu()
-            .current_process_raw
-            .store(0, Ordering::Relaxed);
 
         loop {
             let next_pid = self.ready_queues.lock().pop_lowest();
@@ -655,22 +651,48 @@ impl Scheduler {
             self.set_current_pid(Some(new_pid));
 
             let old_proc_arc = old_pid.and_then(|id| self.get_process(id));
+            let old_proc_raw: *mut Process = {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let raw = crate::arch::x86_64::per_cpu::current_cpu()
+                        .current_process_raw
+                        .load(Ordering::Relaxed) as *mut Process;
+                    if !raw.is_null() && old_pid == Some(unsafe { (*raw).pid }) {
+                        raw
+                    } else {
+                        core::ptr::null_mut()
+                    }
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    core::ptr::null_mut()
+                }
+            };
 
-            // Save FS/GS base of the old process
+
+            // Save FS/GS base of the old process without blocking on its lock.
             #[cfg(target_arch = "x86_64")]
-            if let Some(old_arc) = old_proc_arc.clone() {
+            {
                 use x86_64::registers::model_specific::Msr;
                 let fs_msr = Msr::new(0xC0000100);
                 let kgs_msr = Msr::new(0xC0000102);
                 let fs = unsafe { fs_msr.read() };
                 let gs = unsafe { kgs_msr.read() };
-                let mut old_proc = old_arc.lock();
-                old_proc.fs_base = fs;
-                old_proc.gs_base = gs;
+                if !old_proc_raw.is_null() {
+                    unsafe {
+                        (*old_proc_raw).fs_base = fs;
+                        (*old_proc_raw).gs_base = gs;
+                    }
+                } else if let Some(old_arc) = old_proc_arc.clone() {
+                    let mut old_proc = old_arc.lock();
+                    old_proc.fs_base = fs;
+                    old_proc.gs_base = gs;
+                }
             }
-            let (new_cr3, new_sp, new_kstack_top) = {
+            let (new_cr3, new_sp, new_kstack_top, new_proc_ptr) = {
                 let mut new_proc = new_proc_arc.lock();
                 new_proc.state = ProcessState::Running;
+                let new_proc_ptr = &mut *new_proc as *mut Process as u64;
                 
                 let cr3 = if new_proc.abi == AbiKind::ZiqaNative && new_proc.page_table_frame.is_none() {
                     let phys_addr = KERNEL_CR3.load(Ordering::SeqCst);
@@ -685,8 +707,12 @@ impl Scheduler {
                     new_proc.page_table_frame
                 };
                 
-                (cr3, new_proc.kernel_stack_ptr, new_proc.kernel_stack_top)
+                (cr3, new_proc.kernel_stack_ptr, new_proc.kernel_stack_top, new_proc_ptr)
             };
+            #[cfg(target_arch = "x86_64")]
+            crate::arch::x86_64::per_cpu::current_cpu()
+                .current_process_raw
+                .store(new_proc_ptr, Ordering::Relaxed);
 
             // Load FS/GS base of the new process
             #[cfg(target_arch = "x86_64")]
@@ -706,7 +732,9 @@ impl Scheduler {
                 unsafe { x86_64::registers::control::Cr3::write(frame, x86_64::registers::control::Cr3Flags::empty()); }
             }
             crate::arch::update_trap_stacks(new_kstack_top);
-            let old_fpu_ptr = if let Some(old_arc) = old_proc_arc.clone() {
+            let old_fpu_ptr = if !old_proc_raw.is_null() {
+                unsafe { &mut (*old_proc_raw).fpu_state as *mut _ }
+            } else if let Some(old_arc) = old_proc_arc.clone() {
                 let mut proc = old_arc.lock();
                 &mut proc.fpu_state as *mut _
             } else {
@@ -719,20 +747,26 @@ impl Scheduler {
             unsafe { crate::arch::restore_fpu(new_fpu_ptr); }
 
 
-            if let Some(old_arc) = old_proc_arc {
-                let old_sp_ptr = {
+            if old_proc_arc.is_some() || !old_proc_raw.is_null() {
+                let old_sp_ptr = if !old_proc_raw.is_null() {
+                    let old_proc = unsafe { &mut *old_proc_raw };
+                    if old_proc.state == ProcessState::Running {
+                        old_proc.state = ProcessState::Ready;
+                        self.ready_queues.lock().push(old_proc.pid, old_proc.vruntime);
+                    }
+                    &mut old_proc.kernel_stack_ptr as *mut u64
+                } else {
+                    let old_arc = old_proc_arc.clone().unwrap();
                     let mut old_proc = old_arc.lock();
-                    old_proc.state = ProcessState::Ready;
-                    let old_sp = &mut old_proc.kernel_stack_ptr as *mut u64;
-                    drop(old_proc);
-                    old_sp
+                    if old_proc.state == ProcessState::Running {
+                        old_proc.state = ProcessState::Ready;
+                        self.ready_queues.lock().push(old_proc.pid, old_proc.vruntime);
+                    }
+                    &mut old_proc.kernel_stack_ptr as *mut u64
                 };
                 unsafe {
                     crate::arch::save_fpu(old_fpu_ptr);
-                    crate::arch::switch_context(
-                        old_sp_ptr,
-                        new_sp,
-                    );
+                    crate::arch::switch_context(old_sp_ptr, new_sp);
                 }
             } else {
                 let mut dummy: u64 = 0;
@@ -1005,7 +1039,7 @@ pub fn exec_process(
 /// asm-friendly alias used by the trampoline to terminate the kthread.
 /// Implemented in Rust so it can call into the scheduler without needing a
 /// Rust→asm→Rust shim.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kthread_exit_trampoline() -> ! {
     SCHEDULER.exit_current_kthread(0)
 }

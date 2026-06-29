@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kernel-engineering": {
+      "command": "/home/jemo/Projects/my-os-reorganized/.agents/mcp-server/run-mcp.sh",
+      "args": [],
+      "env": {}
+    }
+  }
+}

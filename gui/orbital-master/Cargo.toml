@@ -32,3 +32,6 @@ redox_event = "0.4.3"
 
 [patch.crates-io]
 redox-log = { git = "https://gitlab.redox-os.org/redox-os/redox-log.git" }
+[features]
+default = []
+ziqa-bga-direct = []

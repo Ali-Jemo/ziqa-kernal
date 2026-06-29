@@ -18,18 +18,18 @@ pub struct MemoryMapper {
 }
 
 impl MemoryMapper {
-    pub unsafe fn new(physical_memory_offset: VirtAddr) -> Self {
+    pub unsafe fn new(physical_memory_offset: VirtAddr) -> Self { unsafe {
         let level_4_table = Self::active_level_4_table(physical_memory_offset);
         let mapper = OffsetPageTable::new(level_4_table, physical_memory_offset);
         Self { mapper }
-    }
+    }}
 
-    unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {
+    unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable { unsafe {
         let (level_4_table_frame, _) = Cr3::read();
         let phys = level_4_table_frame.start_address();
         let virt = physical_memory_offset + phys.as_u64();
         &mut *(virt.as_mut_ptr())
-    }
+    }}
 
     pub fn translate_addr(&self, addr: VirtAddr) -> Option<PhysAddr> {
         self.mapper.translate_addr(addr)
@@ -114,11 +114,11 @@ impl AddressSpace {
             grants: Vec::new(),
         }
     }
-    pub unsafe fn activate(&self) {
+    pub unsafe fn activate(&self) { unsafe {
         let frame =
             PhysFrame::containing_address(PhysAddr::new(&self.root_page_table as *const _ as u64));
         Cr3::write(frame, Cr3Flags::empty());
-    }
+    }}
 
     pub fn find_grant(&self, addr: VirtAddr) -> Option<&Grant> {
         self.grants.iter().find(|g| g.contains(addr))
@@ -134,18 +134,18 @@ pub fn phys_offset() -> VirtAddr {
 }
 
 /// Map a physical frame as a mutable page table reference.
-pub unsafe fn frame_as_page_table_mut(frame: PhysFrame) -> &'static mut PageTable {
+pub unsafe fn frame_as_page_table_mut(frame: PhysFrame) -> &'static mut PageTable { unsafe {
     let po = phys_offset();
     let virt = po + frame.start_address().as_u64();
     &mut *(virt.as_mut_ptr())
-}
+}}
 
 /// Map a physical frame as a read-only page table reference.
-pub unsafe fn frame_as_page_table(frame: PhysFrame) -> &'static PageTable {
+pub unsafe fn frame_as_page_table(frame: PhysFrame) -> &'static PageTable { unsafe {
     let po = phys_offset();
     let virt = po + frame.start_address().as_u64();
     &*(virt.as_ptr())
-}
+}}
 
 /// Walk the active page table (from CR3) to find the leaf (L1) entry for `vaddr`,
 /// returning a mutable reference if present.
@@ -442,13 +442,13 @@ pub fn clone_user_table_tree(
 /// Create an `OffsetPageTable` for the currently active (CR3) page table.
 /// This must be used instead of `KERNEL_MAPPER` after per-process page tables
 /// are in use, since `KERNEL_MAPPER` is initialized once at boot.
-pub unsafe fn current_mapper() -> OffsetPageTable<'static> {
+pub unsafe fn current_mapper() -> OffsetPageTable<'static> { unsafe {
     let po = phys_offset();
     let (l4_frame, _) = Cr3::read();
     let l4_virt = po + l4_frame.start_address().as_u64();
     let l4 = &mut *(l4_virt.as_mut_ptr());
     OffsetPageTable::new(l4, po)
-}
+}}
 
 /// Perform the COW fork page table operations:
 /// 1. Make all writable user leaf pages read-only in the parent
@@ -618,7 +618,7 @@ unsafe fn map_or_replace(
     frame: PhysFrame,
     page_flags: PageTableFlags,
     fa: &mut BootInfoFrameAllocator,
-) -> Result<(), &'static str> {
+) -> Result<(), &'static str> { unsafe {
     match mapper.map_to(page, frame, page_flags, fa) {
         Ok(flusher) => {
             flusher.flush();
@@ -631,7 +631,7 @@ unsafe fn map_or_replace(
         }
         Err(_) => Err("map failed"),
     }
-}
+}}
 
 pub fn map_elf_region(
     root_frame: Option<PhysFrame>,

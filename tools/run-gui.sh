@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 
 BOOTIMAGE="target/x86_64-unknown-none/release/bootimage-ziqa-kernel.bin"
 DISK="disk.img"
-ORBITAL_FEATURES="orbital skip-self-tests embed-orbital redox-debug ziqa-bga-direct"
+KERNEL_FEATURES="orbital skip-self-tests embed-orbital redox-debug"
+ORBITAL_FEATURES="ziqa-bga-direct"
 ORBITAL_BIN="gui/orbital-master/target/x86_64-unknown-redox/release/orbital"
 OLD_STTY=""
 QEMU_DONE=0
@@ -43,7 +44,7 @@ echo "═══ Building ZiqaKernel + Orbital  ═══"
      mv .cargo/config.toml .cargo/config.toml.temp
  fi
  cd gui/orbital-master
- redoxer build --release
+ redoxer build --release --features "$ORBITAL_FEATURES"
  cd - > /dev/null
  echo "Compressing Orbital GUI..."
  cargo run --release --example compress_orbital
@@ -54,11 +55,11 @@ echo "═══ Building ZiqaKernel + Orbital  ═══"
  # Build kernel with Orbital embedded so the GUI is available even when
  # the FAT disk is stale or the host-side Orbital rebuild fails.
  echo "Building kernel..."
- cargo build --release --bin ziqa-kernel --features "$ORBITAL_FEATURES"
+ cargo build --release --bin ziqa-kernel --features "$KERNEL_FEATURES"
  
  # Build bootimage with the same feature set.
  echo "Building bootimage..."
- cargo bootimage --release --bin ziqa-kernel --features "$ORBITAL_FEATURES"
+ cargo bootimage --release --bin ziqa-kernel --features "$KERNEL_FEATURES"
 
 
 # Create disk image if missing, then refresh the Orbital payload on every run.

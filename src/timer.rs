@@ -124,10 +124,27 @@ pub fn uptime_ms() -> u64 {
 /// Block a process for `ms` milliseconds
 pub fn sleep_ms(pid: Pid, ms: u64) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        // Mark process as Blocked first
-        crate::process::scheduler::with_process_mut(pid, |proc| {
-            proc.state = crate::process::ProcessState::Blocked;
-        });
+        let mut marked = false;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let raw = crate::arch::x86_64::per_cpu::current_cpu()
+                .current_process_raw
+                .load(core::sync::atomic::Ordering::Relaxed);
+            if raw != 0 {
+                let proc = unsafe { &mut *(raw as *mut crate::process::Process) };
+                if proc.pid == pid {
+                    proc.state = crate::process::ProcessState::Blocked;
+                    marked = true;
+                }
+            }
+        }
+
+        if !marked {
+            crate::process::scheduler::with_process_mut(pid, |proc| {
+                proc.state = crate::process::ProcessState::Blocked;
+            });
+        }
         TIMER.lock().sleep_ms(pid, ms);
     });
 }

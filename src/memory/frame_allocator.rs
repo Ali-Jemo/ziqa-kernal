@@ -46,7 +46,7 @@ pub fn _rmm_set_allocator(alloc: rmm::BuddyAllocator<rmm::x86_64::X8664Arch>) {
 }
 
 /// Init hook: initialize RMM from boot info
-pub unsafe fn rmm_init_from_bootinfo(boot_info: &'static bootloader::BootInfo) {
+pub unsafe fn rmm_init_from_bootinfo(boot_info: &'static bootloader::BootInfo) { unsafe {
     use rmm::{BumpAllocator, BuddyAllocator, MemoryArea};
     use bootloader::bootinfo::MemoryRegionType;
 
@@ -86,4 +86,4 @@ pub unsafe fn rmm_init_from_bootinfo(boot_info: &'static bootloader::BootInfo) {
 
     *RMM_ALLOC.lock() = Some(buddy);
     crate::println!("[RMM] Buddy allocator initialized successfully");
-}
+}}

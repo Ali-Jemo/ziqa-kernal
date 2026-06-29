@@ -10,19 +10,20 @@ use std::{
 use event::{EventQueue, user_data};
 use graphics_ipc::V2GraphicsHandle;
 use inputd::{ConsumerHandle, ConsumerHandleEvent};
-use log::error;
+use log::{error, info};
 use orbclient::{Color, Event, WindowDragKind, rect::Rect};
 use redox_scheme::{
     CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket,
     scheme::{IntoTag, Op, OpRead, SchemeState, SchemeSync, register_scheme_inner},
 };
 use syscall::{
-    EACCES, EAGAIN, EBADF, ECANCELED, EINVAL, EOPNOTSUPP, EWOULDBLOCK, flag::EventFlags,
+    EACCES, EAGAIN, EBADF, ECANCELED, EINVAL, EOPNOTSUPP, EWOULDBLOCK,
     schemev2::NewFdFlags,
+    flag::EventFlags,
 };
 
 use crate::window::WindowId;
-use crate::{core::display::Displays, scheme::OrbitalScheme};
+use crate::{core::display::{Display, DisplayHandle, Displays, SCALE_BASELINE}, scheme::OrbitalScheme};
 
 pub(crate) mod display;
 
@@ -42,7 +43,7 @@ impl From<syscall::Error> for Error {
 }
 
 pub struct Properties<'a> {
-    //TODO: avoid allocation
+    // TODO: avoid allocation
     pub flags: String,
     pub x: i32,
     pub y: i32,
@@ -52,44 +53,91 @@ pub struct Properties<'a> {
 }
 
 pub struct Orbital {
-    pub scheme: Socket,
+    pub scheme: Option<Socket>,
     pub delayed: VecDeque<(CallerCtx, OpRead)>,
-
     /// Handle to "/scheme/input/consumer" to receive input events.
     pub input: ConsumerHandle,
 }
 
 impl Orbital {
-    /// Open an orbital display and connect to the scheme
+    /// Open an orbital display — feature-gated path:
+    /// - Without "ziqa-bga-direct": Redox DRM via graphics-ipc
+    /// - With "ziqa-bga-direct": ZiqaKernel direct BGA framebuffer via SYS_FMAP
     pub fn open_display() -> io::Result<(Self, Displays)> {
+        // Open input for keyboard/mouse — OrbitalBridge handles /scheme/input/consumer
         let input_handle = ConsumerHandle::new_vt()?;
 
-        let display = input_handle.open_display_v2().map_err(|err| {
-            error!("failed to open display: {}", err);
-            err
-        })?;
+        #[cfg(not(feature = "ziqa-bga-direct"))]
+        {
+            let display = input_handle.open_display_v2().map_err(|err| {
+                error!("failed to open display: {}", err);
+                err
+            })?;
 
-        let scheme = Socket::nonblock().map_err(|err| {
-            error!("failed to create scheme: {}", err);
-            err
-        })?;
+            let scheme = Socket::nonblock().map_err(|err| {
+                error!("failed to create scheme: {}", err);
+                err
+            })?;
 
-        let displays = Displays::new(V2GraphicsHandle::from_file(display)?)?;
+            let display_handle = V2GraphicsHandle::from_file(display)?;
+            let displays = Displays::new(display_handle)?;
 
-        Ok((
-            Orbital {
-                scheme,
-                delayed: VecDeque::new(),
-                input: input_handle,
-            },
-            displays,
-        ))
+            Ok((
+                Orbital {
+                    scheme: Some(scheme),
+                    delayed: VecDeque::new(),
+                    input: input_handle,
+                },
+                displays,
+            ))
+        }
+
+        #[cfg(feature = "ziqa-bga-direct")]
+        {
+            info!("open_display: using ziqa-bga-direct path");
+            // Map BGA framebuffer via SYS_FMAP (kernel always returns BGA for any FMAP call)
+            let width = 1024u32;
+            let height = 768u32;
+            let fb_size = width as usize * height as usize * 4;
+            let map = syscall::data::Map {
+                offset: 0,
+                size: fb_size,
+                flags: syscall::flag::MapFlags::MAP_SHARED,
+                address: 0,
+            };
+            let fb_ptr = unsafe {
+                syscall::fmap(0, &map).map_err(|e| {
+                    error!("failed to map framebuffer: {}", e);
+                    io::Error::new(io::ErrorKind::Other, "framebuffer mmap failed")
+                })? as *mut u32
+            };
+            info!("syscall::fmap returned address=0x{:x}", fb_ptr as usize);
+
+            let displays = Displays::from_framebuffer(fb_ptr, width, height);
+            info!("Displays::from_framebuffer: addr=0x{:x}, size={:.1}MB", fb_ptr as usize, fb_size as f64 / 1024.0 / 1024.0);
+
+            // Try to create scheme socket for window operations — not critical for first display
+            let scheme = Socket::nonblock().ok();
+            if scheme.is_none() {
+                error!("scheme registration unavailable — running in display-only mode");
+            }
+
+            Ok((
+                Orbital {
+                    scheme,
+                    delayed: VecDeque::new(),
+                    input: input_handle,
+                },
+                displays,
+            ))
+        }
     }
 
-    /// Write a Packet to scheme I/O
+    /// Write a Packet to scheme I/O (no-op if scheme is None)
     pub fn scheme_write(&self, response: Response) -> io::Result<()> {
-        self.scheme
-            .write_response(response, SignalBehavior::Restart)?;
+        if let Some(scheme) = &self.scheme {
+            scheme.write_response(response, SignalBehavior::Restart)?;
+        }
         Ok(())
     }
 
@@ -108,11 +156,6 @@ impl Orbital {
 
         let event_queue = EventQueue::<Source>::new()?;
 
-        //TODO: Figure out why rand: gets opened after this: libredox::call::setrens(0, 0)?;
-
-        let scheme_fd = self.scheme.inner().raw();
-        let input_fd = self.input.event_handle().as_raw_fd();
-
         let mut state = SchemeState::new();
         let mut me = OrbitalHandler {
             orb: self,
@@ -120,20 +163,25 @@ impl Orbital {
             handles: HashMap::new(),
             next_id: 0,
         };
-        let cap_id = me.scheme_root()?;
-        register_scheme_inner(&mut me.orb.scheme, "orbital", cap_id)?;
 
-        unsafe {
-            // FIXME remove DISPLAY env var once orbclient no longer depends on it
-            std::env::set_var("DISPLAY", "orbital:99.0");
+        // Only register scheme and subscribe to scheme events if socket is available
+        if me.orb.scheme.is_some() {
+            let cap_id = me.scheme_root()?;
+            register_scheme_inner(me.orb.scheme.as_mut().unwrap(), "orbital", cap_id)?;
 
-            std::env::set_var("ORBITAL_DISPLAY", "/scheme/orbital")
-        };
+            unsafe {
+                // FIXME remove DISPLAY env var once orbclient no longer depends on it
+                std::env::set_var("DISPLAY", "orbital:99.0");
+                std::env::set_var("ORBITAL_DISPLAY", "/scheme/orbital");
+            };
+            let scheme_fd = me.orb.scheme.as_ref().unwrap().inner().raw();
+            event_queue.subscribe(scheme_fd, Source::Scheme, event::EventFlags::READ)?;
+        } else {
+            error!("No scheme socket available — running in display-only mode");
+        }
 
-        event_queue.subscribe(scheme_fd, Source::Scheme, event::EventFlags::READ)?;
+        let input_fd = me.orb.input.event_handle().as_raw_fd();
         event_queue.subscribe(input_fd as usize, Source::Input, event::EventFlags::READ)?;
-
-        login_cmd.spawn()?;
 
         let mut event_iter = event_queue.map(|e| e.map(|e| e.user_data));
         let mut fake_input_event = None; // TODO: a hack
@@ -142,12 +190,15 @@ impl Orbital {
         'events: while let Some(event_res) = fake_input_event.take().or_else(|| event_iter.next()) {
             match event_res? {
                 Source::Scheme => {
+                    if me.orb.scheme.is_none() {
+                        continue 'events;
+                    }
                     loop {
-                        match me
-                            .orb
-                            .scheme
-                            .read_requests(&mut request_buf, SignalBehavior::Restart)
-                        {
+                        let read_result = {
+                            let scheme = me.orb.scheme.as_ref().unwrap();
+                            scheme.read_requests(&mut request_buf, SignalBehavior::Restart)
+                        };
+                        match read_result {
                             Ok(()) => (),
                             Err(err) => {
                                 if err.errno == EWOULDBLOCK || err.errno == EAGAIN {
@@ -167,7 +218,6 @@ impl Orbital {
                                     me.on_close(id);
                                     continue;
                                 }
-                                // TODO: faster than search?
                                 RequestKind::Cancellation(req) => {
                                     if let Some(idx) = me
                                         .orb
@@ -200,9 +250,7 @@ impl Orbital {
                                 let res = me.read(
                                     read_op.fd,
                                     read_op.buf(),
-                                    // dont-care
                                     0,
-                                    // dont-care
                                     0,
                                     &caller_ctx,
                                 );
@@ -222,7 +270,7 @@ impl Orbital {
                 Source::Input => {
                     let mut events = [Event::new(); 16];
                     loop {
-                        match me.orb.input.read_events(&mut events)? {
+                        let event = match me.orb.input.read_events(&mut events)? {
                             ConsumerHandleEvent::Events(&[]) => break,
                             ConsumerHandleEvent::Events(events) => {
                                 let mut delayed_left = me.orb.delayed.len();
@@ -254,36 +302,38 @@ impl Orbital {
                                 me.handler.handle_input(events);
                             }
                             ConsumerHandleEvent::Handoff => {}
-                        }
+                        };
                     }
                     me.handler.handle_after(&mut me.orb, &me.handles)?;
                 }
             }
         }
-
-        //TODO: Cleanup and handle TODO
         Ok(())
     }
 }
+
 pub(crate) enum Handle {
     SchemeRoot,
     DisplaySize(usize),
     Window(WindowId),
     Clipboard(WindowId),
 }
+
 pub struct OrbitalHandler {
     orb: Orbital,
     handler: OrbitalScheme,
     handles: HashMap<usize, Handle>,
     next_id: usize,
 }
+
 impl SchemeSync for OrbitalHandler {
     fn scheme_root(&mut self) -> syscall::Result<usize> {
-        let new_id = self.next_id;
-        self.handles.insert(new_id, Handle::SchemeRoot);
+        let id = self.next_id;
         self.next_id += 1;
-        Ok(new_id)
+        self.handles.insert(id, Handle::SchemeRoot);
+        Ok(id)
     }
+
     fn openat(
         &mut self,
         dirfd: usize,
@@ -309,8 +359,9 @@ impl SchemeSync for OrbitalHandler {
             }
 
             let new_id = self.next_id;
-            self.handles.insert(new_id, Handle::DisplaySize(display));
             self.next_id += 1;
+            // Use display index for both paths
+            self.handles.insert(new_id, Handle::DisplaySize(display));
             return Ok(OpenResult::ThisScheme {
                 number: new_id,
                 flags: NewFdFlags::empty(),
@@ -349,6 +400,7 @@ impl SchemeSync for OrbitalHandler {
             flags: NewFdFlags::empty(),
         })
     }
+
     fn dup(&mut self, id: usize, buf: &[u8], _ctx: &CallerCtx) -> syscall::Result<OpenResult> {
         let Some(&Handle::Window(id) | &Handle::Clipboard(id)) = self.handles.get(&id) else {
             return Err(syscall::Error::new(EBADF));
@@ -367,6 +419,7 @@ impl SchemeSync for OrbitalHandler {
             Err(syscall::Error::new(EINVAL))
         }
     }
+
     fn read(
         &mut self,
         id: usize,
@@ -394,6 +447,7 @@ impl SchemeSync for OrbitalHandler {
         let n = self.handler.handle_window_read(id, slice)?;
         Ok(n * mem::size_of::<Event>())
     }
+
     fn write(
         &mut self,
         id: usize,
@@ -521,6 +575,7 @@ impl SchemeSync for OrbitalHandler {
             Err(syscall::Error::new(EINVAL))
         }
     }
+
     fn fevent(
         &mut self,
         id: usize,
@@ -534,38 +589,7 @@ impl SchemeSync for OrbitalHandler {
             .handle_window_clear_notified(id)
             .and(Ok(EventFlags::empty()))
     }
-    /*
-    fn fmap(&mut self, id: usize, map: &syscall::Map) -> syscall::Result<usize> {
-        let page_size = 4096;
-        let map_pages = (map.offset + map.size + page_size - 1)/page_size;
-        let data = self.handler.handle_window_map(&mut self.orb, id)?;
-        let data_addr = data.as_mut_ptr() as usize;
-        let data_size = data.len() * mem::size_of::<Color>();
-        // Do not allow leaking data before or after window to the user
-        if data_addr & (page_size - 1) == 0 && map_pages * page_size <= data_size {
-            let address = data_addr + map.offset;
-            self.orb.maps.insert(address, (id, map.size));
-            Ok(address)
-        } else {
-            self.handler.handle_window_unmap(&mut self.orb, id)?;
-            Err(syscall::Error::new(EINVAL))
-        }
-    }
-    fn funmap(&mut self, address: usize, size: usize) -> syscall::Result<usize> {
-        match self.orb.maps.remove(&address) {
-            Some((id, map_size)) => {
-                if size != map_size {
-                    log::warn!("orbital: mapping 0x{:x} has size {} instead of {}", address, map_size, size);
-                }
-                self.handler.handle_window_unmap(&mut self.orb, id)?;
-            },
-            None => {
-                error!("failed to found mapping 0x{:x}", address);
-            }
-        }
-        Ok(0)
-    }
-    */
+
     fn fpath(&mut self, id: usize, mut buf: &mut [u8], _ctx: &CallerCtx) -> syscall::Result<usize> {
         match self.handles.get(&id) {
             Some(&Handle::DisplaySize(display)) => {
@@ -588,12 +612,14 @@ impl SchemeSync for OrbitalHandler {
             _ => Err(syscall::Error::new(EBADF)),
         }
     }
+
     fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> syscall::Result<()> {
         let Some(&Handle::Window(id) | &Handle::Clipboard(id)) = self.handles.get(&id) else {
             return Err(syscall::Error::new(EBADF));
         };
         self.handler.handle_window_sync(id, None)
     }
+
     fn mmap_prep(
         &mut self,
         id: usize,
@@ -605,7 +631,7 @@ impl SchemeSync for OrbitalHandler {
         let Some(&Handle::Window(id) | &Handle::Clipboard(id)) = self.handles.get(&id) else {
             return Err(syscall::Error::new(EBADF));
         };
-        //TODO: handle offset, flags?
+        // TODO: handle offset, flags?
         let data = self.handler.handle_window_map(id, true)?;
 
         if size > data.len() * core::mem::size_of::<Color>() {
@@ -614,6 +640,7 @@ impl SchemeSync for OrbitalHandler {
 
         Ok(data.as_mut_ptr() as usize)
     }
+
     fn munmap(
         &mut self,
         id: usize,
@@ -625,13 +652,26 @@ impl SchemeSync for OrbitalHandler {
         let Some(&Handle::Window(id) | &Handle::Clipboard(id)) = self.handles.get(&id) else {
             return Err(syscall::Error::new(EBADF));
         };
-        //TODO: handle offset, size, flags?
+        // TODO: handle offset, size, flags?
         self.handler.handle_window_unmap(id)?;
 
         Ok(())
     }
 }
+
 impl OrbitalHandler {
+    fn on_close(&mut self, id: usize) {
+        let Some(handle) = self.handles.remove(&id) else {
+            return;
+        };
+        // TODO: implement better clipboard mechanism
+        match handle {
+            Handle::Clipboard(id) => self.handler.handle_clipboard_close(id),
+            Handle::Window(id) => self.handler.handle_window_close(id),
+            Handle::SchemeRoot | Handle::DisplaySize(_) => {}
+        };
+    }
+
     fn should_delay(&self, id: usize) -> bool {
         if let Some(handle) = self.handles.get(&id) {
             match *handle {
@@ -641,17 +681,5 @@ impl OrbitalHandler {
         } else {
             false
         }
-    }
-
-    fn on_close(&mut self, id: usize) {
-        let Some(handle) = self.handles.remove(&id) else {
-            return;
-        };
-        //TODO: implement better clipboard mechanism
-        match handle {
-            Handle::Clipboard(id) => self.handler.handle_clipboard_close(id),
-            Handle::Window(id) => self.handler.handle_window_close(id),
-            Handle::SchemeRoot | Handle::DisplaySize(_) => {}
-        };
     }
 }

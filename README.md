@@ -29,7 +29,7 @@ It is **not production-ready**. Treat it as an active architecture lab: useful f
 | Relationships / edges | 13,792 |
 | Communities | 192 |
 | Execution flows | 288 |
-| Index timestamp | 2026-06-28 |
+- **MCP Server**: Real tools for kernel diagnosis (`kernel.diagnose`, `kernel.analyze_serial`), incident tracking (`kernel.errmem_search/add`), architectural lookups (`kernel.project_rules`), knowledge graph queries (`kernel.graph_query`), and security auditing (`kernel.security_audit`, `kernel.invariant_check`, `kernel.patch_policy`).
 
 GitNexus currently highlights these project communities as major navigation points:
 
@@ -314,3 +314,15 @@ MIT
 _Last updated: 2026-06-28. GitNexus index: 5,976 nodes, 13,792 edges, 192 clusters, 288 flows. Graphify artifacts available under graphify-out/.
 
 ---
+
+## Advanced Examples & Troubleshooting
+
+### MCP Tool Usage Example
+To audit a subsystem for unsafe blocks, use the `kernel.security_audit` tool in your agent:
+```
+/mcp call kernel.security_audit '{"subsystem": "memory"}'
+```
+
+### Troubleshooting MCP
+- **Server not connecting?** Ensure the `command` path in `mcp.json` is absolute and the script is executable (`chmod +x run-mcp.sh`).
+- **Tools not appearing?** Verify that the MCP server script correctly outputs the JSON-RPC tool list when run directly with `node` or `python` (depending on implementation).

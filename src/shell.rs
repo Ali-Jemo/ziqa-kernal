@@ -447,9 +447,10 @@ impl Shell {
         // If the console is active, keep preemption disabled to avoid freezing.
         // Otherwise (GUI active), enable preemption so userspace GUI runs.
         if crate::drivers::fb_console::GPU_CONSOLE_ACTIVE.load(core::sync::atomic::Ordering::SeqCst) {
-            crate::process::scheduler::enable_preemption();
-        } else {
             crate::process::scheduler::disable_preemption();
+        } else {
+            crate::process::scheduler::enable_preemption();
+            crate::process::scheduler::yield_now();
         }
 
         crate::println!("[Diag Shell] interrupts_enabled = {}, cpu_id = {}, cpu_ticks = {}", 
