@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 
 BOOTIMAGE="target/x86_64-unknown-none/release/bootimage-ziqa-kernel.bin"
 DISK="disk.img"
-ORBITAL_FEATURES="orbital skip-self-tests embed-orbital redox-debug"
+ORBITAL_FEATURES="orbital skip-self-tests embed-orbital redox-debug ziqa-bga-direct"
 ORBITAL_BIN="gui/orbital-master/target/x86_64-unknown-redox/release/orbital"
 OLD_STTY=""
 QEMU_DONE=0
