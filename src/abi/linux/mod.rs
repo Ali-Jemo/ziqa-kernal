@@ -141,6 +141,10 @@ pub(crate) mod nr {
     pub const SYS_PIPE2: u64 = 293;
     pub const SYS_NICE: u64 = 34;
     pub const SYS_MKNOD: u64 = 133;
+    // x32 ABI syscalls (high bit 0x20000000)
+    pub const X32_BASE: u64 = 0x20000000;
+    pub const SYS_X32_IOPRIO_SET: u64 = X32_BASE + 87;  // 536870967
+    pub const SYS_X32_FORK: u64 = X32_BASE + 38;  // 536870918
     pub const SYS_PERSONALITY: u64 = 135;
     pub const SYS_SCHED_GETPARAM: u64 = 143;
     pub const SYS_SCHED_SETPARAM: u64 = 144;

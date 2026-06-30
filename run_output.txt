@@ -1,0 +1,183 @@
+pkill -9 qemu-system-x86_64 2>/dev/null; sleep 0.5; true
+./tools/run-gui.sh
+═══ Building ZiqaKernel + Orbital  ═══
+Building Orbital GUI...
+warning: unused import: `info`
+ --> src/compositor.rs:4:18
+  |
+4 | use log::{error, info};
+  |                  ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `graphics_ipc::V2GraphicsHandle`
+  --> src/core/mod.rs:11:5
+   |
+11 | use graphics_ipc::V2GraphicsHandle;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DisplayHandle`, `Display`, and `SCALE_BASELINE`
+  --> src/core/mod.rs:26:29
+   |
+26 | use crate::{core::display::{Display, DisplayHandle, Displays, SCALE_BASELINE}, scheme::OrbitalScheme};
+   |                             ^^^^^^^  ^^^^^^^^^^^^^            ^^^^^^^^^^^^^^
+
+warning: unused import: `log::error`
+ --> src/core/display/display_ziqa_bga.rs:8:5
+  |
+8 | use log::error;
+  |     ^^^^^^^^^^
+
+warning: unused import: `convert::TryInto`
+  --> src/core/display/display_ziqa_bga.rs:13:11
+   |
+13 | use std::{convert::TryInto, io};
+   |           ^^^^^^^^^^^^^^^^
+
+warning: unused variable: `login_cmd`
+   --> src/core/mod.rs:148:9
+    |
+148 |         login_cmd: &mut std::process::Command,
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_login_cmd`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `event`
+   --> src/core/mod.rs:273:29
+    |
+273 |                         let event = match me.orb.input.read_events(&mut events)? {
+    |                             ^^^^^ help: if this is intentional, prefix it with an underscore: `_event`
+
+warning: method `display_handle` is never used
+   --> src/compositor.rs:146:8
+    |
+ 27 | impl Compositor {
+    | --------------- method in this implementation
+...
+146 |     fn display_handle(&self) -> &DisplayHandle {
+    |        ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: type alias `DisplayHandle` is never used
+  --> src/core/display.rs:25:10
+   |
+25 | pub type DisplayHandle = ();
+   |          ^^^^^^^^^^^^^
+
+warning: `orbital` (bin "orbital") generated 9 warnings (run `cargo fix --bin "orbital" -p orbital` to apply 7 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.16s
+Compressing Orbital GUI...
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-06-29 for version 1.98.0-nightly (df6ee909e 2026-06-28)
+info: component llvm-tools is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+warn: skipping unavailable component rust-std for target i686-unknown-none
+warn: skipping unavailable component rust-std for target riscv64-unknown-none
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:390:41
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+390 |     let proc_ptr = if !raw.is_null() && unsafe { (*raw).pid == pid } {
+    |                                         ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:391:9
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+391 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: `ziqa-kernel` (lib) generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running `target/release/examples/compress_orbital`
+Compressed 2467280 -> 1413529 bytes
+Building kernel...
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-06-29 for version 1.98.0-nightly (df6ee909e 2026-06-28)
+info: component llvm-tools is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+warn: skipping unavailable component rust-std for target i686-unknown-none
+warn: skipping unavailable component rust-std for target riscv64-unknown-none
+   Compiling ziqa-kernel v0.1.0 (/home/jemo/Projects/my-os-reorganized)
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:390:41
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+390 |     let proc_ptr = if !raw.is_null() && unsafe { (*raw).pid == pid } {
+    |                                         ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:391:9
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+391 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: `ziqa-kernel` (lib) generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 22.08s
+Building bootimage...
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-06-29 for version 1.98.0-nightly (df6ee909e 2026-06-28)
+info: component llvm-tools is up to date
+info: component rust-src is up to date
+info: component rust-std for target aarch64-unknown-none is up to date
+info: component rust-std for target x86_64-unknown-none is up to date
+warn: skipping unavailable component rust-std for target i686-unknown-none
+warn: skipping unavailable component rust-std for target riscv64-unknown-none
+WARNING: `CARGO_MANIFEST_DIR` env variable not set
+Building kernel
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:390:41
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+390 |     let proc_ptr = if !raw.is_null() && unsafe { (*raw).pid == pid } {
+    |                                         ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src/arch/x86_64/switch.rs:391:9
+    |
+368 | pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuState) { unsafe {
+    |                                                                                       ------ because it's nested under this `unsafe` block
+...
+391 |         unsafe {
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: `ziqa-kernel` (lib) generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 0.05s
+Building bootloader
+   Compiling bootloader v0.9.34 (/home/jemo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bootloader-0.9.34)
+    Finished `release` profile [optimized + debuginfo] target(s) in 1.38s
+Created bootimage for `ziqa-kernel` at `/home/jemo/Projects/my-os-reorganized/target/x86_64-unknown-none/release/bootimage-ziqa-kernel.bin`
+Refreshing FAT32 disk payload...
+FAT32 disk payload refreshed.
+
+═══ Launching QEMU  ═══
+  • Display: none (override with ZIQA_QEMU_DISPLAY)
+  • Serial: TCP 127.0.0.1:4545 attached to this terminal
+  • Exit serial: Ctrl-]
+
+qemu-system-x86_64: -serial tcp:127.0.0.1:4545,server=on,wait=on: info: QEMU waiting for connection on: disconnected:tcp:127.0.0.1:4545,server=on
+qemu-system-x86_64: terminating on signal 15 from pid 2941460 (bash)
+
+QEMU stopped.

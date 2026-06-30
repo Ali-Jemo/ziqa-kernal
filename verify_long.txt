@@ -1,0 +1,123 @@
+=== KERNEL_MAIN ENTRY ===
+[RMM] Usable areas count: 2
+[RMM]   Area 0: base=0x380000 size=0x80000
+[RMM]   Area 1: base=0xb5e000 size=0x1f47f000
+[RMM] Buddy allocator initialized successfully
+[pci] 8 device(s) found
+ ~ xHCI (USB) ........................... stub (disabled)
+[HDA] Driver registered
+[ATA] Probing IDE/ATA controller at 00:01.1
+[ATA] Probing failed: Other("No ATA device found")
+[VirtIO-block-new] Initializing device at 00:03.0
+[VirtIO-block-new] Found MMIO BAR at 0xFEBD1000
+[VirtIO-block-new] Failed to create MmioTransport: BadMagic(0)
+[VirtIO-blk] Probing PCI device at 00:03.0
+[VirtIO-blk] MSI-X detect: 0x14=0000, 0x16=0002 -> config_off=0x14
+[VirtIO-blk] Virtqueue qsize=256 allocated at virt=0x444444451000, phys=0x396000, PFN=0x396, size=12288 bytes
+[VirtIO-blk] PCI Config space dump: config_off=0x14, 0x14=00020000, 0x18=00000000, 0x1C=00000000
+[VirtIO-blk] Device reports 131072 sectors (64 MB)
+[block] registered /dev/vda via virtio-blk (131072 sectors)
+[VirtIO-GPU] Initializing device at 00:04.0
+[VirtIO-GPU] Found MMIO BAR at 0xFEBD2000
+[VirtIO-GPU] Failed to create MmioTransport: BadMagic(0)
+[BGA] Found Bochs Graphics Adapter at PCI 00:02
+[BGA] Framebuffer configured at phys 0xFD000000, virt 0xFFFF8000FD000000
+[BGA] Mapped 1200 pages (4 MB)
+[acpi] Scanning BIOS area for RSDP...
+[acpi] ACPI revision 0
+[acpi] Discovered 4 SDT(s), DSDT present
+[acpi]   table: "APIC"
+[acpi]   table: "FACP"
+[acpi]   table: "HPET"
+[acpi]   table: "WAET"
+[acpi] Power profile: Unspecified
+[acpi] PM Timer: 32-bit=false
+[acpi] Local APIC at 0xfee00000
+[acpi] 1 I/O APIC(s) discovered:
+[acpi]   I/O APIC id=0 addr=0xfec00000 GSI base=0
+[acpi] 5 interrupt source override(s):
+[acpi]   ISA IRQ 0 -> GSI 2 (polarity=SameAsBus, trigger=SameAsBus)
+[acpi]   ISA IRQ 5 -> GSI 5 (polarity=ActiveHigh, trigger=Level)
+[acpi]   ISA IRQ 9 -> GSI 9 (polarity=ActiveHigh, trigger=Level)
+[acpi]   ISA IRQ 10 -> GSI 10 (polarity=ActiveHigh, trigger=Level)
+[acpi]   ISA IRQ 11 -> GSI 11 (polarity=ActiveHigh, trigger=Level)
+[acpi] Legacy 8259 PICs present (must be masked)
+[acpi] BSP: UID=0 LAPIC_ID=0
+[acpi] Total processors: 1
+[acpi] Initialisation complete.
+ ~ GDT, IDT, APIC, Heap, PCI, Sched ..... loaded
+ ~ Memory mapper ...................... initialized
+ ~ ABI plugins ........................ 2 registered
+DEBUG: Registering scheme debug
+DEBUG: Registering scheme pipe
+DEBUG: Registering scheme time
+DEBUG: Registering scheme proc
+DEBUG: Registering scheme irq
+DEBUG: Registering scheme keyboard
+DEBUG: Registering scheme acpi
+DEBUG: Registering scheme dtb
+DEBUG: Registering scheme memory
+DEBUG: Registering scheme event
+DEBUG: Registering scheme serio
+DEBUG: Registering scheme user
+DEBUG: Registering scheme 
+DEBUG: Registering scheme sys
+DEBUG: Registering scheme display_v2
+DEBUG: Registering scheme display
+DEBUG: Registering scheme input
+[NET] Network stack initialized (lo registered)
+[TCP/IP] Stack initialized (IP: 10.0.2.15, GW: 10.0.2.2)
+ ~ PS/2 Keyboard ........................ ready
+ ~ PS/2 Mouse ........................... ready
+
+── Self-tests ──
+ ~ skipped for GUI boot
+
+── Services ──
+[block] 1 block device(s):
+[block]   /dev/vda      driver=virtio-blk   sectors=131072
+ ~ root disk .......................... /dev/vda (virtio-blk)
+ ~ FAT32 partition found at sector 2048
+ ~ FAT32 BPB: bps=512 spc=1 reserved=32 fats=2 spf=993 root_cl=2
+ ~ FAT32 ............................. mounted at /fat
+ ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)
+ ~ DeviceIo Capability ................ granted to init
+
+── Display ──
+ ~ BGA Display .......................... ready
+
+── Verification ──
+
+── Startup ──
+[ELF] entry=0x1001d10 (base=0x0) phdrs=9 type=EXEC
+[ELF] 4 segments registered, brk=0x1018000 (demand paged)
+[ELF] entry=0x1000a4e8 (base=0x0) phdrs=6 type=EXEC
+[ELF] 2 segments registered, brk=0x101d0000 (demand paged)
+ ✓ Embedded Orbital GUI spawned (PID=5)
+ ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell
+[klog][INFO ][t=6] APIC: Local APIC at 0xfee00000 (virt 0xffff8000fee00000), I/O APIC at 0xfec00000 (virt 0xffff8000fec00000) (23 entries)
+[klog][INFO ][t=6] APIC: enabled (SVR=0x1ff)
+[klog][INFO ][t=6] IOAPIC: IRQ 1 -> vector 33 (dest APIC 0)
+[klog][INFO ][t=6] IOAPIC: IRQ 12 -> vector 44 (dest APIC 0)
+[klog][INFO ][t=6] IOAPIC: IRQ 2 -> vector 32 (dest APIC 0)
+[klog][INFO ][t=26] APIC: periodic timer started (init_count=68089717)
+[klog][INFO ][t=26] SMP: only 1 processor, skipping AP boot
+[klog][INFO ][t=26] ZiqaKernel v1.0 booting
+[klog][INFO ][t=26] init: ZiqaScheme registry initialized
+[klog][INFO ][t=26] Scheme: acpi, dtb, memory, event, serio, user, sys registered
+[Syscall Debug] PID 4: number=158 args=[1002, 1007000, 0, 0, 0, 0]
+[Syscall Debug] PID 4: res=Ok(0)
+[Syscall Debug] PID 4: number=131 args=[7ffffffef08, 0, 0, 0, 0, 0]
+[Syscall Debug] PID 4: res=Ok(0)
+EXCEPTION: GENERAL PROTECTION FAULT (code=0x402)
+InterruptStackFrame {
+    instruction_pointer: VirtAddr(
+        0x10020de,
+    ),
+    code_segment: 35,
+    cpu_flags: 0x10246,
+    stack_pointer: VirtAddr(
+        0x7ffffffeef0,
+    ),
+    stack_segment: 27,
+}

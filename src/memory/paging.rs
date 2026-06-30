@@ -842,14 +842,8 @@ pub fn handle_brk(
 
 /// Create a new page table for a process by copying kernel space L4 entries.
 /// 
-/// NOTE: Currently returns `None` because the kernel is linked at low-half
-/// virtual addresses (0x200000-0x600000) that fall in L4[0]'s range. Creating
-/// a new L3/L2 for L4[0] would unmap the kernel, causing an immediate page
-/// fault during context-switch CR3 reload. A full fix requires either:
-///   (a) remapping the kernel text/data into the process page table,
-///   (b) handling over-map conflicts with ELF segments at 0x400000,
-///   (c) or moving the kernel to the higher half.
-/// Until then, all processes share KERNEL_CR3 (no per-process page tables).
+/// Currently returns None to use shared kernel page table (KERNEL_CR3).
+/// This avoids kernel mapping conflicts since kernel is in low half.
 pub fn create_process_page_table() -> Option<PhysFrame> {
     None
 }

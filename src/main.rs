@@ -281,7 +281,7 @@ fn run_startup() {
 
 
     // Spawn the built-in test ELF as a user process during normal self-test boots.
-    #[cfg(not(feature = "skip-self-tests"))]
+    #[cfg(all(not(feature = "skip-self-tests"), not(feature = "orbital")))]
     {
         let binary = include_bytes!("../assets/test_elf.bin");
         ziqa_kernel::process::scheduler::spawn_elf(binary);
@@ -373,14 +373,17 @@ fn run_startup() {
             }
         }
     }
-    let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(include_bytes!("../assets/test_elf.bin"));
-    if restored > 0 {
-        set_fg(Color::LightGreen);
-        println!(
-            " ✓ Instant-on resume: {} processes restored from snapshot",
-            restored
-        );
-        set_fg(Color::White);
+    #[cfg(all(not(feature = "orbital"), not(feature = "skip-self-tests")))]
+    {
+        let restored = ziqa_kernel::process::snapshot::restore_all_at_boot(include_bytes!("../assets/test_elf.bin"));
+        if restored > 0 {
+            set_fg(Color::LightGreen);
+            println!(
+                " ✓ Instant-on resume: {} processes restored from snapshot",
+                restored
+            );
+            set_fg(Color::White);
+        }
     }
 
     println!(" ✓ ZiqaKernel v1.0 ready ................ type 'help' for shell");

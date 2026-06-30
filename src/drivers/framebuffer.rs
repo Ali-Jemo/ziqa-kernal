@@ -93,7 +93,7 @@ impl Framebuffer {
             }
             PixelFormat::XRGB8888 => {
                 let c32 = (color as u32) | ((color as u32) << 8) | ((color as u32) << 16);
-                self.fill32(c32);
+                unsafe { self.fill32(c32); }
             }
         }
     }
@@ -102,7 +102,7 @@ impl Framebuffer {
     pub unsafe fn fill32(&mut self, color: u32) {
         let total_bytes = self.pitch * self.height;
         #[cfg(feature = "zig-hotpaths")]
-        crate::zig_ffi::clear(self.ptr, total_bytes, color);
+        unsafe { crate::zig_ffi::clear(self.ptr, total_bytes, color); }
         #[cfg(not(feature = "zig-hotpaths"))]
         {
             // The slice is in bytes; cast to u32 elements so we can write the
@@ -118,7 +118,7 @@ impl Framebuffer {
     /// Fill a rectangle — dispatches to Zig blitter
     pub unsafe fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
         #[cfg(feature = "zig-hotpaths")]
-        crate::zig_ffi::fill_rect(self.ptr, self.pitch as u32, x, y, w, h, color);
+        unsafe { crate::zig_ffi::fill_rect(self.ptr, self.pitch as u32, x, y, w, h, color); }
         #[cfg(not(feature = "zig-hotpaths"))]
         {
             let pitch = self.pitch as u32;
@@ -137,14 +137,7 @@ impl Framebuffer {
     /// Scroll up by N pixel lines — dispatches to Zig blitter
     pub unsafe fn scroll_up(&mut self, lines: u32, fill_color: u32) {
         #[cfg(feature = "zig-hotpaths")]
-        crate::zig_ffi::scroll_up(
-            self.ptr,
-            self.pitch as u32,
-            self.width as u32,
-            self.height as u32,
-            lines,
-            fill_color,
-        );
+        unsafe { crate::zig_ffi::scroll_up(self.ptr, self.pitch as u32, self.width as u32, self.height as u32, lines, fill_color); }
         #[cfg(not(feature = "zig-hotpaths"))]
         {
             let pitch = self.pitch;

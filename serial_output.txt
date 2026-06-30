@@ -1,0 +1,1 @@
+error: command not found: ZIQA_QEMU_DISPLAY=none
