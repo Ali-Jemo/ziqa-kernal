@@ -324,6 +324,10 @@ pub struct Process {
     pub timed_out: bool,
     /// Path to the ELF interpreter (PT_INTERP)
     pub interpreter: Option<alloc::string::String>,
+    /// ELF program header table virtual address for initial auxv.
+    pub elf_phdr: u64,
+    pub elf_phent: u64,
+    pub elf_phnum: u64,
     /// Userspace argv strings copied to the initial stack.
     pub argv: alloc::vec::Vec<alloc::vec::Vec<u8>>,
     /// Userspace envp strings copied to the initial stack as `KEY=VALUE`.
@@ -382,6 +386,9 @@ impl Process {
             gs_base: 0,
             timed_out: false,
             interpreter: None,
+            elf_phdr: 0,
+            elf_phent: 0,
+            elf_phnum: 0,
             argv: alloc::vec::Vec::new(),
             envp: alloc::vec::Vec::new(),
         }

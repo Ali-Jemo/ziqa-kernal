@@ -28,6 +28,9 @@ pub struct Config {
     pub bottom_side: String,
     pub left_side: String,
     pub right_side: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub custom_cursor: String,
     pub window_max: String,
     pub window_max_unfocused: String,
     pub window_close: String,
@@ -74,6 +77,7 @@ impl Default for Config {
             bottom_side: String::default(),
             left_side: String::default(),
             right_side: String::default(),
+            custom_cursor: String::default(),
             window_max: String::default(),
             window_max_unfocused: String::default(),
             window_close: String::default(),
@@ -93,6 +97,10 @@ impl Default for Config {
 impl Config {
     // returns the default config if the string passed is not a valid config
     fn config_from_string(config: &str) -> Config {
+        if config.trim().is_empty() {
+            return Config::default();
+        }
+
         match toml::from_str(config) {
             Ok(config) => config,
             Err(err) => {

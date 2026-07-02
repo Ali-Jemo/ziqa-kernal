@@ -10,6 +10,7 @@ use ziqa_kernel::drivers::vga;
 use ziqa_kernel::drivers::vga::Color;
 use ziqa_kernel::fs::ramfs::RamFile;
 use ziqa_kernel::fs::vfs::VFS;
+#[cfg(feature = "ziqafs")]
 use ziqa_kernel::fs::ziqafs::ZiqaFs;
 use ziqa_kernel::klog::{Level, KLOG};
 use ziqa_kernel::println;
@@ -158,6 +159,12 @@ fn init_services() {
                 "/bin/orbital",
                 Arc::new(Mutex::new(RamFile::from_bytes(&decompressed))),
             );
+            vfs.mount(
+                "/bin/launcher",
+                Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
+                    concat!(env!("OUT_DIR"), "/launcher_patched.elf")
+                )))),
+            );
         }
         #[cfg(feature = "busybox")]
         vfs.mount(
@@ -214,18 +221,25 @@ fn init_services() {
             };
             #[cfg(not(feature = "fat32"))]
             let fat32_mounted = false;
-            let ziqafs_result = ZiqaFs::mount(disk.clone());
-            if let Ok(ziqafs) = ziqafs_result {
-                ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
-                println!(" ~ ZiqaFS ............................. mounted at /disk");
-            } else if !fat32_mounted {
-                let ziqafs = ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS");
-                ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
-                ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
-                println!(" ~ ZiqaFS ............................. formatted and mounted at /disk");
-            } else {
-                println!(" ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)");
+            #[cfg(feature = "ziqafs")]
+            {
+                let ziqafs_result = ZiqaFs::mount(disk.clone());
+                if let Ok(ziqafs) = ziqafs_result {
+                    ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
+                    ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                    println!(" ~ ZiqaFS ............................. mounted at /disk");
+                } else if !fat32_mounted {
+                    let ziqafs = ZiqaFs::format(disk.clone()).expect("Failed to format ZiqaFS");
+                    ziqa_kernel::fs::ziqafs::mount_into_vfs(&ziqafs);
+                    ziqa_kernel::fs::vfs::register_mount(&alloc::format!("/dev/{}", entry.name), "/disk", "ziqafs");
+                    println!(" ~ ZiqaFS ............................. formatted and mounted at /disk");
+                } else {
+                    println!(" ~ ZiqaFS ............................. skipped (FAT32 detected; disk protected from formatting)");
+                }
+            }
+            #[cfg(not(feature = "ziqafs"))]
+            if !fat32_mounted {
+                println!(" ~ ZiqaFS ............................. skipped (feature disabled)");
             }
         } else {
             println!(" ~ block devices ...................... none found; skipping disk FS");
@@ -259,6 +273,7 @@ fn run_verification() {
     // Verification logic omitted for brevity, but this is now encapsulated
 }
 
+#[cfg(feature = "games")]
 fn verify_logger(_arg: *const ()) {
     // Yield 10 times to let the compositor and demo client run
     for _ in 0..10 {
@@ -356,20 +371,31 @@ fn run_startup() {
     if !spawned_orbital {
         #[cfg(feature = "orbital")]
         {
-            let compressed = include_bytes!("../assets/orbital.elf.lz4");
-            if let Ok(decompressed) = lz4_flex::decompress_size_prepended(compressed) {
-                if let Some(pid) = ziqa_kernel::process::scheduler::spawn_elf_from_vec(decompressed) {
-                    ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
-                        let full = ziqa_kernel::capability::Permissions::full();
-                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
-                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
-                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
-                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
-                    });
-                    // Orbital owns the display — stop FbConsole writes.
-                    ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
-                    println!(" ✓ Embedded Orbital GUI spawned (PID={})", pid.0);
-                }
+            // ponytail: Skip Orbital userspace compositor — the launcher draws
+            // directly to BGA via mmap, and Orbital's fallback panel would
+            // overwrite it. The kernel compositor handles cursor + input routing.
+            ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
+
+            // Mount the launcher binary
+            let launcher_bytes = alloc::vec::Vec::from(include_bytes!(concat!(env!("OUT_DIR"), "/launcher_patched.elf")) as &[u8]);
+            if let Some(pid) = ziqa_kernel::process::scheduler::SCHEDULER.spawn_redox_elf_with_args(
+                launcher_bytes,
+                alloc::vec![alloc::vec::Vec::from(&b"launcher"[..])],
+                alloc::vec![
+                    alloc::vec::Vec::from(&b"DISPLAY=orbital:99.0"[..]),
+                    alloc::vec::Vec::from(&b"ORBITAL_DISPLAY=/scheme/orbital"[..]),
+                ],
+            ) {
+                ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                    let full = ziqa_kernel::capability::Permissions::full();
+                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
+                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
+                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
+                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
+                });
+                println!(" ✓ Desktop launcher spawned (PID={})", pid.0);
+            } else {
+                println!(" ✗ Failed to spawn desktop launcher");
             }
         }
     }

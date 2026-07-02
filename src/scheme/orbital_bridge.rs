@@ -18,14 +18,11 @@ use spin::Mutex;
 /// Compositor IPC channel — matches the channel the compositor_main listens on.
 const COMPOSITOR_CHAN: u32 = 3;
 
-/// ZiqaKernel's simplified Event structure (matches Redox syscall::data::Event)
-#[derive(Copy, Clone, Debug, Default)]
-#[repr(C)]
-pub struct Event {
-    pub id: usize,
-    pub flags: usize,
-    pub data: usize,
-}
+use crate::scheme::input_bridge::OrbitalEvent;
+
+/// Type alias for the event format used by the input consumer.
+/// Matches `orbclient::Event` (code, a, b) layout.
+pub type Event = OrbitalEvent;
 
 /// Single window state for Orbital — bridges display_v2 to Ziqa compositor
 pub struct WindowState {
@@ -46,6 +43,9 @@ pub struct WindowState {
     /// Owning process PID (0 = kernel)
     pub pid: usize,
 }
+
+/// Count of windows opened through OrbitalBridge (for compositor awareness).
+pub static WINDOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 impl WindowState {
     pub fn new(x: i32, y: i32, width: u32, height: u32, title: String) -> Self {
@@ -130,6 +130,23 @@ fn create_window_shm(width: u32, height: u32) -> Option<u32> {
     Some(shm_id)
 }
 
+fn parse_orbital_window_path(path: &str) -> Option<(i32, i32, u32, u32, String)> {
+    let rest = path.strip_prefix("orbital:")?.trim_start_matches('/');
+    if rest.is_empty() || !rest.contains('/') {
+        return None;
+    }
+
+    let mut parts = rest.splitn(6, '/');
+    let _flags = parts.next()?;
+    let x = parts.next()?.parse::<i32>().ok()?;
+    let y = parts.next()?.parse::<i32>().ok()?;
+    let w = parts.next()?.parse::<u32>().ok()?;
+    let h = parts.next()?.parse::<u32>().ok()?;
+    let title = parts.next().unwrap_or("").to_string();
+    Some((x, y, w, h, title))
+}
+
+
 impl Scheme for OrbitalBridge {
     fn open(&self, path: &str, _flags: usize) -> SchemeResult<usize> {
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
@@ -147,16 +164,27 @@ impl Scheme for OrbitalBridge {
                     let y = parts[1].parse::<i32>().unwrap_or(100);
                     let w = parts[2].parse::<u32>().unwrap_or(800);
                     let h = parts[3].parse::<u32>().unwrap_or(600);
-
                     let _ = WINDOWS.lock().insert(handle, Arc::new(Mutex::new(WindowState::new(
                         x, y, w, h, title.to_string()
                     ))));
+                    WINDOW_COUNT.fetch_add(1, Ordering::Relaxed);
                     crate::println!(
                         "[OrbitalBridge] open '{}' -> handle={} ({}x{} at {},{})",
                         path, handle, w, h, x, y
                     );
                 }
             }
+        } else if let Some((x, y, w, h, title)) = parse_orbital_window_path(path) {
+            let _ = WINDOWS.lock().insert(handle, Arc::new(Mutex::new(WindowState::new(
+                x, y, w, h, title,
+            ))));
+            WINDOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            crate::println!(
+                "[OrbitalBridge] open orbital '{}' -> handle={} ({}x{} at {},{})",
+                path, handle, w, h, x, y
+            );
+        } else if path == "orbital" || path.starts_with("orbital:") {
+            crate::println!("[OrbitalBridge] open orbital root '{}' -> handle={}", path, handle);
         } else if path == "input" || path.starts_with("input:") {
             crate::println!("[OrbitalBridge] open input '{}' -> handle={}", path, handle);
         }
@@ -186,21 +214,15 @@ impl Scheme for OrbitalBridge {
                 return Ok(count * event_size);
             }
         }
-
-        // Use the separate Orbital input buffer so we don't consume
-        // events before the kernel shell (read_stdin / INPUT_BUF) sees them.
-        let mut key_buf = [0u8; 4];
-        let n = crate::drivers::keyboard::read_editor_byte(&mut key_buf);
-        if n > 0 {
-            events_slice[0] = Event {
-                id: 0, // Keyboard
-                flags: 1, // EVENT_READ
-                data: key_buf[0] as usize,
-            };
-            return Ok(core::mem::size_of::<Event>());
+        // Pop from the shared Orbital input event queue
+        // (fed by keyboard driver → input_bridge)
+        let count = crate::scheme::input_bridge::pop_events(events_slice);
+        if count > 0 {
+            return Ok(count * event_size);
         }
 
-        // Try mouse
+        // Fallback: push a mouse motion event if position changed.
+        // Orbital expects absolute position in 0..65535 range.
         let (x, y) = crate::drivers::ps2_mouse::get_mouse_pos();
         let btn = crate::drivers::ps2_mouse::get_mouse_btn();
         if x != self.last_mouse_x.load(Ordering::Relaxed)
@@ -210,39 +232,22 @@ impl Scheme for OrbitalBridge {
             self.last_mouse_x.store(x, Ordering::Relaxed);
             self.last_mouse_y.store(y, Ordering::Relaxed);
             self.last_mouse_btn.store(btn, Ordering::Relaxed);
+            // Scale from mouse driver range (0..1023, 0..767) to 0..65535
+            let x_scaled = (x as u64 * 65535 / 1023).min(65535) as i32;
+            let y_scaled = (y as u64 * 65535 / 767).min(65535) as i32;
             events_slice[0] = Event {
-                id: 1, // Mouse
-                flags: 1, // EVENT_READ
-                data: ((x as usize) << 16) | (y as usize),
+                code: 2, // EVENT_MOUSE
+                a: x_scaled as i64,
+                b: y_scaled as i64,
             };
+            // Push button event if button state changed
+            if btn != 0 {
+                crate::scheme::input_bridge::push_mouse_button_event(btn, true);
+            }
             return Ok(event_size);
         }
 
         Ok(0)
-    }
-
-    fn fevent(&self, id: usize, flags: usize) -> SchemeResult<usize> {
-        let mut ready = 0usize;
-
-        let windows = WINDOWS.lock();
-        if let Some(window) = windows.get(&id) {
-            if !window.lock().events.is_empty() {
-                ready |= flags;
-                return Ok(ready);
-            }
-        }
-
-        if crate::drivers::keyboard::has_input() {
-            ready |= flags & 1;
-        }
-        let (mx, my) = crate::drivers::ps2_mouse::get_mouse_pos();
-        if mx != self.last_mouse_x.load(Ordering::Relaxed)
-            || my != self.last_mouse_y.load(Ordering::Relaxed)
-        {
-            ready |= flags & 1;
-        }
-
-        Ok(ready & flags)
     }
 
     fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize> {

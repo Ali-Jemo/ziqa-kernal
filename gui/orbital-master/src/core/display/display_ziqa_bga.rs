@@ -5,12 +5,11 @@
 
 #![cfg(feature = "ziqa-bga-direct")]
 
-use log::error;
 use orbclient::image::{Image, ImageRef, ImageRoiMut};
 use orbclient::rect::{Rect, RectEdge};
 use orbclient::{Color, Renderer};
 use std::slice;
-use std::{convert::TryInto, io};
+use std::io;
 
 pub const SCALE_BASELINE: u32 = 160;
 

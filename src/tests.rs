@@ -512,6 +512,7 @@ pub fn run_all() {
     crate::tests_net::run_socket_tests();
     }
 
+    #[cfg(feature = "ebpf")]
     crate::tests_fix::run_all();
 
     println!("[TEST] Results: {}/{} passed", passed, passed + failed);

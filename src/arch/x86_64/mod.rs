@@ -150,13 +150,11 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
             // - argv pointers (argv_ptrs.len() + 1 u64)
             // - envp pointers (envp_ptrs.len() + 1 u64)
             // - auxv entries:
-            //   - AT_RANDOM (tag 25, value: random_data_sp)
-            //   - AT_PAGESZ (tag 6, value: 4096)
-            //   - Redox magic tag 42 (tag 42, value: 31337)
-            //   - AT_NULL (tag 0, value: 0)
-            // Each auxv entry is 2 u64s (tag, value).
-            // Number of auxv entries = 4. So 4 * 2 = 8 u64s.
-            let ptrs_count = 1 + argv_ptrs.len() + 1 + envp_ptrs.len() + 1 + (4 * 2);
+            //   - AT_PHDR, AT_PHENT, AT_PHNUM (required by relibc static TLS init)
+            //   - AT_RANDOM, AT_PAGESZ
+            //   - Redox proc/thread/namespace FDs
+            //   - AT_NULL
+            let ptrs_count = 1 + argv_ptrs.len() + 1 + envp_ptrs.len() + 1 + (9 * 2);
             user_rsp = sp.saturating_sub((ptrs_count * 8) as u64) & !0xFu64;
 
             let mut ptr = (po + stack_frame_phys + (user_rsp - page_addr)).as_mut_ptr::<u64>();
@@ -181,6 +179,17 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
             ptr.write(0);
             ptr = ptr.add(1);
 
+            // AT_PHDR (3), AT_PHENT (4), AT_PHNUM (5)
+            ptr.write(3);
+            ptr.add(1).write(proc.elf_phdr);
+            ptr = ptr.add(2);
+            ptr.write(4);
+            ptr.add(1).write(proc.elf_phent);
+            ptr = ptr.add(2);
+            ptr.write(5);
+            ptr.add(1).write(proc.elf_phnum);
+            ptr = ptr.add(2);
+
             // auxv
             // AT_RANDOM (25)
             ptr.write(25);
@@ -192,9 +201,16 @@ pub fn init_process_stack(proc: &mut crate::process::Process) {
             ptr.add(1).write(4096);
             ptr = ptr.add(2);
 
-            // Redox magic tag 42 (42)
+            // Redox runtime FDs: AT_REDOX_PROC_FD=41, THR_FD=42, NS_FD=43.
+            // ponytail: one pseudo FD is enough for early Orbital runtime calls.
+            ptr.write(41);
+            ptr.add(1).write(0x7a69);
+            ptr = ptr.add(2);
             ptr.write(42);
-            ptr.add(1).write(31337);
+            ptr.add(1).write(0x7a69);
+            ptr = ptr.add(2);
+            ptr.write(43);
+            ptr.add(1).write(usize::MAX as u64);
             ptr = ptr.add(2);
 
             // AT_NULL (0)

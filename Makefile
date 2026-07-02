@@ -80,11 +80,11 @@ inc:
 
 # Boot image
 boot-gui:
-	cargo build --release --target x86_64-unknown-none --bin ziqa-kernel --features "skip-self-tests orbital embed-orbital"
-	cargo bootimage --release --target x86_64-unknown-none --bin ziqa-kernel --features "skip-self-tests orbital embed-orbital"
+	cargo build --release --target x86_64-unknown-none --bin ziqa-kernel --no-default-features --features "skip-self-tests orbital embed-orbital"
+	CARGO_MANIFEST_DIR="$(CURDIR)" cargo bootimage --release --target x86_64-unknown-none --bin ziqa-kernel --no-default-features --features "skip-self-tests orbital embed-orbital"
 
 boot: build
-	cargo bootimage
+	CARGO_MANIFEST_DIR="$(CURDIR)" cargo bootimage
 
 # Install sccache for faster rebuilds
 install-sccache:

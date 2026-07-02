@@ -194,15 +194,18 @@ fn push_to_buffers(b: u8) {
 pub fn push_scancode(scancode: u8) {
     let mut kb = KB.lock();
     if let Ok(Some(key_event)) = kb.add_byte(scancode) {
+        let pressed = key_event.state == pc_keyboard::KeyState::Down;
+        // For orbclient format, scancode is always the make scancode (bit 7 = release flag)
+        let make_scancode = scancode & 0x7F;
         if let Some(key) = kb.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(c) => {
                     if c.is_ascii() {
                         let b = c as u8;
                         push_to_buffers(b);
-                        // Notify compositor (ISR-safe atomic store)
                         COMPOSITOR_LAST_KEY.store(b as u16 | 0x100, Ordering::Release);
                     }
+                    crate::scheme::input_bridge::push_key_event(make_scancode, c, pressed);
                 }
                 DecodedKey::RawKey(k) => {
                     let code: u8 = match k {
@@ -217,19 +220,17 @@ pub fn push_scancode(scancode: u8) {
                         KeyCode::Delete => 0x88,
                         _ => return,
                     };
-                    // Pass navigation keys to shell for input handling
                     if code >= 0x80 && code <= 0x83 || code == 0x86 || code == 0x87 {
                         INPUT_BUF.lock().push(code);
                     }
                     EDITOR_BUF.lock().push(code);
-                    // Notify compositor (ISR-safe atomic store)
                     COMPOSITOR_LAST_KEY.store(code as u16, Ordering::Release);
+                    crate::scheme::input_bridge::push_key_event(make_scancode, '\0', pressed);
                 }
             }
         }
     }
 }
-
 /// Poll PS/2 controller for pending keyboard scancodes.
 ///
 /// QEMU GUI input is level-triggered through the i8042 output buffer.  Polling

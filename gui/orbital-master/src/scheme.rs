@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::num::NonZero;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -140,7 +139,8 @@ impl OrbitalScheme {
         cursors.insert(CursorKind::LeftSide, load_cursor(&config.left_side));
         cursors.insert(CursorKind::RightSide, load_cursor(&config.right_side));
 
-        let font = orbfont::Font::find(Some("Sans"), None, None)?;
+        let font = orbfont::Font::find(Some("Sans"), None, None)
+            .or_else(|_| orbfont::Font::from_data(include_bytes!("../../../assets/NotoSans-Regular.ttf")))?;
 
         let mut orbital_scheme = OrbitalScheme {
             compositor: Compositor::new(displays),
@@ -178,6 +178,7 @@ impl OrbitalScheme {
         };
 
         orbital_scheme.update_cursor(0, 0, CursorKind::LeftPtr);
+        orbital_scheme.compositor.schedule(orbital_scheme.compositor.screen_rect());
 
         Ok(orbital_scheme)
     }
@@ -261,7 +262,7 @@ impl OrbitalScheme {
     pub fn handle_after(
         &mut self,
         orb: &mut Orbital,
-        handles: &HashMap<usize, crate::core::Handle>,
+        handles: &BTreeMap<usize, crate::core::Handle>,
     ) -> io::Result<()> {
         for (handle_id, handle) in handles {
             let crate::core::Handle::Window(window_id) = handle else {
@@ -616,7 +617,56 @@ impl OrbitalScheme {
         }
 
         self.compositor.redraw(|display, rect| {
-            display.rect(&rect, self.config.background_color.into());
+            #[cfg(feature = "ziqa-bga-direct")]
+            let background = if self.windows.is_empty() {
+                Color::rgb(0x10, 0x18, 0x24)
+            } else {
+                self.config.background_color.into()
+            };
+            #[cfg(not(feature = "ziqa-bga-direct"))]
+            let background = self.config.background_color.into();
+            display.rect(&rect, background);
+
+            #[cfg(feature = "ziqa-bga-direct")]
+            if self.windows.is_empty() {
+                let bar = Rect::new(rect.left(), rect.top(), rect.width(), 32);
+                display.rect(&bar, Color::rgb(0x18, 0x22, 0x30));
+
+                let dock = Rect::new(
+                    rect.left() + 24,
+                    rect.top() + rect.height().saturating_sub(56) as i32,
+                    rect.width().saturating_sub(48),
+                    40,
+                );
+                display.rect(&dock, Color::rgb(0x18, 0x22, 0x30));
+                display.border_rect(&dock, Color::rgb(0x38, 0x4A, 0x62), 1);
+
+                let panel = Rect::new(
+                    rect.left() + (rect.width().saturating_sub(460) / 2) as i32,
+                    rect.top() + (rect.height().saturating_sub(128) / 2) as i32,
+                    cmp::min(rect.width(), 460),
+                    cmp::min(rect.height(), 128),
+                );
+                display.rect(&panel, Color::rgb(0x20, 0x2A, 0x38));
+                display.border_rect(&panel, Color::rgb(0x90, 0xA4, 0xB8), 1);
+
+                let mut draw_label = |text: &str, x: i32, y: i32, color: Color| {
+                    let label = self.font.render(text, 16.0);
+                    let mut image = Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
+                    image.mode().set(orbclient::Mode::Overwrite);
+                    label.draw(&mut image, 0, 0, color);
+                    let label_rect = Rect::new(x, y, image.width(), image.height());
+                    let clipped = rect.intersection(&label_rect);
+                    if !clipped.is_empty() {
+                        display
+                            .roi_mut(&clipped)
+                            .blend(&image.roi(&clipped.translate(-label_rect.left(), -label_rect.top())));
+                    }
+                };
+                draw_label("Ziqa Orbital", panel.left() + 20, panel.top() + 20, Color::rgb(0xE7, 0xE7, 0xE7));
+                draw_label("desktop active — launch orblauncher/file-manager/terminal", panel.left() + 20, panel.top() + 52, Color::rgb(0xB8, 0xC7, 0xD6));
+                draw_label("namespace ✓  input ✓  terminal (mount /bin/terminal)", panel.left() + 20, panel.top() + 78, Color::rgb(0xB8, 0xC7, 0xD6));
+            }
 
             for (id, focused) in self.order.iter_back_to_front() {
                 if let Some(window) = self.windows.get(&id) {

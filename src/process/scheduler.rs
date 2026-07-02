@@ -293,7 +293,7 @@ impl Scheduler {
         let mut proc = Process::new(pid, AbiKind::RedoxElf, entry, stack);
         proc.binary_data = binary;  // move, no copy
         proc.argv.push(alloc::vec::Vec::from(&b"orbital"[..]));
-        proc.argv.push(alloc::vec::Vec::from(&b"/bin/keyboard_driver"[..]));
+        proc.argv.push(alloc::vec::Vec::from(&b"/bin/launcher"[..]));
         proc.envp.push(alloc::vec::Vec::from(&b"VT=1"[..]));
 
         let kstack = alloc::vec![0u8; 65536];
@@ -321,6 +321,63 @@ impl Scheduler {
         // Temporarily take binary_data to avoid borrow conflict with &mut proc
         let binary = core::mem::take(&mut proc.binary_data);
         crate::println!("spawn_redox_elf: binary size={}", binary.len());
+        match plugin.load(&binary, &mut proc) {
+            Ok(()) => {
+                proc.binary_data = binary;
+                init_process_stack(&mut proc);
+                proc.set_state_ready();
+                let mut table = self.process_table.write();
+                table.tasks.insert(pid, Arc::new(Mutex::new(proc)));
+                self.ready_queues.lock().push(pid, 0);
+                Some(pid)
+            }
+            Err(e) => {
+                if binary.len() >= 4 {
+                    crate::println!("spawn_redox_elf: load error: {:?}, binary[0..4]={:02x} {:02x} {:02x} {:02x}", e, binary[0], binary[1], binary[2], binary[3]);
+                } else {
+                    crate::println!("spawn_redox_elf: load error: {:?}, binary size={}", e, binary.len());
+                }
+                None
+            },
+        }
+    }
+
+    /// Spawn a Redox ELF binary with custom argv and envp.
+    pub fn spawn_redox_elf_with_args(
+        &self, binary: Vec<u8>, argv: Vec<Vec<u8>>, envp: Vec<Vec<u8>>
+    ) -> Option<Pid> {
+        let plugin = &crate::abi::redox::REDOX_PLUGIN;
+        let pid = self.pid_allocator.lock().alloc_pid();
+        let entry = VirtAddr::new(0x1000000);
+        let stack = VirtAddr::new(0x7FFF_FFFF_000);
+        let mut proc = Process::new(pid, AbiKind::RedoxElf, entry, stack);
+        proc.binary_data = binary;
+        proc.argv = argv;
+        proc.envp = envp;
+
+        let kstack = alloc::vec![0u8; 65536];
+        let top = kstack.as_ptr() as u64 + 65536;
+        proc.kernel_stack = Some(kstack);
+        proc.kernel_stack_top = top;
+
+        if let Some(frame) = crate::memory::paging::create_process_page_table() {
+            proc.page_table_frame = Some(frame);
+        }
+
+        let stack_size = 256 * 1024;
+        let stack_start = stack.as_u64().checked_sub(stack_size as u64).unwrap_or(0);
+        proc.add_region(Vma::from(crate::memory::MemoryRegion {
+            start: VirtAddr::new(stack_start),
+            size: stack_size as usize,
+            flags: crate::memory::paging::MemoryRegionFlags::read_write(),
+            is_file_backed: false,
+            file_path: None,
+            file_offset: 0,
+            file_size: 0,
+            bco_hook: None,
+        }));
+
+        let binary = core::mem::take(&mut proc.binary_data);
         match plugin.load(&binary, &mut proc) {
             Ok(()) => {
                 proc.binary_data = binary;

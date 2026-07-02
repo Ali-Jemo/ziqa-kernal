@@ -45,7 +45,9 @@ pub mod zig_kernel_ops;
 
 // tests always available but some test bodies may be cfg-gated
 pub mod tests;
+#[cfg(feature = "net")]
 pub mod tests_net;
+#[cfg(feature = "ebpf")]
 pub mod tests_fix;
 
 pub use init::{init, init_abi_registry};

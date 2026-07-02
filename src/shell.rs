@@ -469,6 +469,7 @@ impl Shell {
         self.update_status_bar();
 
         loop {
+            #[cfg(feature = "net")]
             crate::net::stack::poll_network();
             self.poll_jobs();
 

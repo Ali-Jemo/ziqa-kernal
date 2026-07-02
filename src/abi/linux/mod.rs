@@ -25,6 +25,7 @@ pub(crate) mod memory;
 pub(crate) mod misc;
 #[cfg(feature = "net")]
 pub(crate) mod net;
+#[cfg(feature = "ebpf")]
 pub(crate) mod ebpf;
 pub(crate) mod process;
 pub(crate) mod time;
@@ -235,6 +236,7 @@ impl AbiPlugin for LinuxAbiPlugin {
         if let Some(result) = misc::handle(ctx) {
             return result;
         }
+        #[cfg(feature = "ebpf")]
         if let Some(result) = ebpf::handle(ctx) {
             return result;
         }
@@ -748,7 +750,6 @@ fn sys_fstat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
 /// sys_ioctl(fd, request, arg) → 0/-ENOTTY
 fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let request = ctx.args[1];
-    let arg = ctx.args[2] as *mut u8;
 
     // Safe ioctls (no capability check required)
     if request == 0x5413 || request == 0x5414 || request == 0x5401 || request == 0x5402 {
@@ -764,6 +765,7 @@ fn sys_ioctl(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     // DRM ioctls
     #[cfg(feature = "drm")]
     if (request & 0xFF00) == 0x6400 {
+        let arg = ctx.args[2] as *mut u8;
         return crate::drivers::drm::handle_ioctl(request, arg)
             .map(|v| v as u64)
             .map_err(|e| AbiError::Other(e));
@@ -862,7 +864,11 @@ fn sys_open(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
                 s.push_str(&rest[pos+1..]);
                 s
             }
-            None => alloc::string::String::from(rest),
+            None => {
+                let mut s = alloc::string::String::from(rest);
+                s.push(':');
+                s
+            }
         }
     } else {
         alloc::string::String::from(path_str)
@@ -1357,6 +1363,49 @@ fn sys_rt_sigaction(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     Ok(0)
 }
 
+/// sys_rt_sigprocmask(how, set, oldset, sigsetsize) → 0 / -EINVAL
+fn sys_rt_sigprocmask(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
+    use crate::process::signal::sig;
+    let how = ctx.args[0] as u32;
+    let set_ptr = ctx.args[1];
+    let oldset_ptr = ctx.args[2];
+
+    let old_mask = ctx.process.signals.blocked;
+
+    if oldset_ptr != 0 {
+        UserSliceWo::wo(oldset_ptr, 8)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_from_slice(&old_mask.to_ne_bytes())
+            .map_err(|_| AbiError::Other("EFAULT"))?;
+    }
+
+    if set_ptr != 0 {
+        let mut words = [0u8; 8];
+        UserSliceRo::ro(set_ptr, 8)
+            .map_err(|_| AbiError::Other("EFAULT"))?
+            .copy_to_slice(&mut words)
+            .map_err(|_| AbiError::Other("EFAULT"))?;
+        let new_mask = u32::from_ne_bytes(words[..4].try_into().unwrap());
+
+        match how {
+            0 => { // SIG_BLOCK
+                ctx.process.signals.blocked |= new_mask;
+            }
+            1 => { // SIG_UNBLOCK
+                ctx.process.signals.blocked &= !new_mask;
+            }
+            2 => { // SIG_SETMASK
+                ctx.process.signals.blocked = new_mask;
+            }
+            _ => return Ok((-22_i64) as u64), // -EINVAL
+        }
+        // Ensure unblockable signals are NOT blocked
+        ctx.process.signals.blocked &= !( (1 << (sig::SIGKILL-1)) | (1 << (sig::SIGSTOP-1)) );
+    }
+
+    Ok(0)
+}
+
 
 /// sys_clone(flags, stack, ptid, ctid, regs) → child_pid
 /// Clone flags:
@@ -1459,6 +1508,36 @@ fn sys_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     let path_buf = crate::abi::usercopy::read_user_string(ctx.args[1], 4096)
         .map_err(|_| AbiError::Other("EFAULT"))?;
     let path_str = core::str::from_utf8(&path_buf).unwrap_or("");
+
+    // Translate Redox-style scheme paths for Redox libc calls that use Linux openat.
+    let translated_path = if path_str.starts_with("/scheme/") {
+        let rest = path_str.strip_prefix("/scheme/").unwrap_or(path_str);
+        match rest.find('/') {
+            Some(pos) => {
+                let mut s = alloc::string::String::from(&rest[..pos]);
+                s.push(':');
+                s.push_str(&rest[pos + 1..]);
+                s
+            }
+            None => {
+                let mut s = alloc::string::String::from(rest);
+                s.push(':');
+                s
+            }
+        }
+    } else {
+        alloc::string::String::from(path_str)
+    };
+
+    if let Some(res) = crate::fs::vfs::VFS.read().handle_scheme(&translated_path, flags as usize) {
+        match res {
+            Ok(id) => {
+                let fd = ctx.process.fds.alloc_scheme(translated_path.as_bytes(), flags, id).ok_or(AbiError::Other("EMFILE"))?;
+                return Ok(fd as u64);
+            }
+            Err(e) => return Err(e),
+        }
+    }
 
     let is_known = known_path(path_str)
         || matches!(

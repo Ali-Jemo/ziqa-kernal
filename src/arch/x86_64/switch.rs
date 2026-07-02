@@ -387,10 +387,8 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
     let raw = cpu
         .current_process_raw
         .load(core::sync::atomic::Ordering::Relaxed) as *mut crate::process::Process;
-    let proc_ptr = if !raw.is_null() && unsafe { (*raw).pid == pid } {
-        unsafe {
-            (*raw).cpu_state = *frame;
-        }
+    let proc_ptr = if !raw.is_null() && (*raw).pid == pid {
+        (*raw).cpu_state = *frame;
         raw
     } else {
         let proc_arc = match crate::process::scheduler::SCHEDULER.get_process(pid) {

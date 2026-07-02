@@ -105,10 +105,11 @@ impl Framebuffer {
         unsafe { crate::zig_ffi::clear(self.ptr, total_bytes, color); }
         #[cfg(not(feature = "zig-hotpaths"))]
         {
-            // The slice is in bytes; cast to u32 elements so we can write the
-            // color directly. The framebuffer's mapped region is page-aligned
-            // and at least 4-byte aligned, so this cast is well-defined.
-            let p = core::slice::from_raw_parts_mut(self.ptr as *mut u32, total_bytes / 4);
+            // SAFETY: callers of unsafe fn fill32 must ensure self.ptr is valid
+            // for self.pitch * self.height bytes and 4-byte aligned for XRGB8888 writes.
+            let p = unsafe {
+                core::slice::from_raw_parts_mut(self.ptr as *mut u32, total_bytes / 4)
+            };
             for px in p.iter_mut() {
                 *px = color;
             }
@@ -125,7 +126,12 @@ impl Framebuffer {
             for row in y..y + h {
                 let row_start = (row * pitch + x) as usize;
                 let row_end = (row * pitch + x + w) as usize;
-                let slice = core::slice::from_raw_parts_mut(self.ptr.add(row_start), (row_end - row_start) * 4);
+                // SAFETY: callers of unsafe fn fill_rect must ensure the computed
+                // framebuffer row byte range is valid.
+                let slice = unsafe {
+                    let row_ptr = self.ptr.add(row_start);
+                    core::slice::from_raw_parts_mut(row_ptr, (row_end - row_start) * 4)
+                };
                 for px in slice.chunks_exact_mut(4) {
                     let bytes = color.to_le_bytes();
                     px.copy_from_slice(&bytes);
@@ -141,17 +147,18 @@ impl Framebuffer {
         #[cfg(not(feature = "zig-hotpaths"))]
         {
             let pitch = self.pitch;
-            let width = self.width as usize;
             let height = self.height as usize;
-            let bytes_per_pixel = if self.format == PixelFormat::XRGB8888 { 4 } else { 1 };
-            let line_bytes = width * bytes_per_pixel;
-            let src = self.ptr.add(lines as usize * pitch);
-            let dst = self.ptr;
-            let count = (height - lines as usize) * pitch;
-            core::ptr::copy(src, dst, count);
-            let fill_start = (height - lines as usize) * pitch;
-            let fill_size = lines as usize * pitch;
-            core::ptr::write_bytes(self.ptr.add(fill_start), fill_color as u8, fill_size);
+            // SAFETY: callers of unsafe fn scroll_up must ensure lines <= height
+            // and the framebuffer mapping is valid for height * pitch bytes.
+            unsafe {
+                let src = self.ptr.add(lines as usize * pitch);
+                let dst = self.ptr;
+                let count = (height - lines as usize) * pitch;
+                core::ptr::copy(src, dst, count);
+                let fill_start = (height - lines as usize) * pitch;
+                let fill_size = lines as usize * pitch;
+                core::ptr::write_bytes(self.ptr.add(fill_start), fill_color as u8, fill_size);
+            }
         }
     }
 }

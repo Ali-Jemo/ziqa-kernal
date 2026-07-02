@@ -783,12 +783,14 @@ pub fn compositor_main(_arg: *const ()) {
         }
 
         if needs_redraw {
-            if comp.surfaces.is_empty() {
+            if comp.surfaces.is_empty()
+                && crate::scheme::orbital_bridge::WINDOW_COUNT.load(core::sync::atomic::Ordering::Relaxed) == 0
+            {
                 let repaint = no_surface_repaint(wallpaper_drawn, comp.damage, fb_w, fb_h);
                 draw_wallpaper(fb_slice, fb_w, fb_h, &repaint);
                 wallpaper_drawn = true;
                 comp.damage = Rect::default();
-            } else {
+            } else if !comp.surfaces.is_empty() {
                 if !wallpaper_drawn {
                     let full_screen = Rect {
                         x: 0,
@@ -802,6 +804,17 @@ pub fn compositor_main(_arg: *const ()) {
                 }
 
                 let _composited = comp.composite(fb_slice, fb_w, fb_h, 32);
+            } else {
+                // OrbitalBridge windows exist — skip wallpaper to let direct-BGA
+                // clients render their own content. Just clear damage tracking.
+                if !wallpaper_drawn {
+                    let full_screen = Rect {
+                        x: 0, y: 0, w: fb_w, h: fb_h,
+                    };
+                    draw_wallpaper(fb_slice, fb_w, fb_h, &full_screen);
+                    wallpaper_drawn = true;
+                }
+                comp.damage = Rect::default();
             }
 
             draw_cursor(fb_slice, fb_w, fb_h, mx, my);

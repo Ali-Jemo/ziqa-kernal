@@ -187,7 +187,7 @@ extern "x86-interrupt" fn page_fault_handler(
         return;
     }
     
-    let handled = crate::process::scheduler::with_current_task(|proc| {
+    let handle_fault_for = |proc: &crate::process::Process| -> bool {
         // Bit 1 in page-fault error code = write access
         let is_write = (error_code.bits() & 2) != 0;
         let access_flags = if is_write {
@@ -196,11 +196,6 @@ extern "x86-interrupt" fn page_fault_handler(
             PageTableFlags::empty()
         };
         let is_instruction_fetch = (error_code.bits() & 16) != 0;
-        if is_instruction_fetch {
-            // There's no specific 'executable' access flag in PageTableFlags that we check this way,
-            // but we can use NO_EXECUTE conceptually, or just remember to check vma.flags.executable later.
-            // Let's just track it directly.
-        }
 
         // Find matching VMA
         let vma = match proc.vmas.iter().find(|v| v.contains(fault_addr)) {
@@ -216,18 +211,15 @@ extern "x86-interrupt" fn page_fault_handler(
             return false;
         }
 
-
-        let vma_flags = &vma.flags;
-        let page_flags = crate::memory::paging::region_flags_to_page_flags(vma_flags);
-
+        let page_flags = crate::memory::paging::region_flags_to_page_flags(&vma.flags);
         let page_addr = fault_addr.align_down(4096u64);
         let page_offset_in_vma = page_addr.as_u64() - vma.start.as_u64();
 
         let mut temp_buf = [0u8; 4096];
-         let mut init_data = None;
- 
-         if !proc.binary_data.is_empty() && page_offset_in_vma < vma.file_size {
-             let binary_offset = (vma.file_offset + page_offset_in_vma) as usize;
+        let mut init_data = None;
+
+        if !proc.binary_data.is_empty() && page_offset_in_vma < vma.file_size {
+            let binary_offset = (vma.file_offset + page_offset_in_vma) as usize;
             let copy_len = (vma.file_size - page_offset_in_vma).min(4096) as usize;
             if binary_offset < proc.binary_data.len() {
                 let available = proc.binary_data.len() - binary_offset;
@@ -243,7 +235,17 @@ extern "x86-interrupt" fn page_fault_handler(
             page_flags,
             init_data,
         )
-    }).unwrap_or(false);
+    };
+
+    let raw = crate::arch::x86_64::per_cpu::current_cpu()
+        .current_process_raw
+        .load(core::sync::atomic::Ordering::Acquire);
+    let handled = if raw != 0 {
+        let proc = unsafe { &*(raw as *const crate::process::Process) };
+        handle_fault_for(proc)
+    } else {
+        crate::process::scheduler::with_current_task(handle_fault_for).unwrap_or(false)
+    };
 
     if handled {
         return;
@@ -374,13 +376,11 @@ extern "x86-interrupt" fn syscall_handler(_frame: InterruptStackFrame) {
             }
         };
 
-        // Update the context with the return value for exit tracepoints
-        ctx.retval = retval;
-
         // Run exit tracepoints
         #[cfg(feature = "ebpf")]
         {
             use crate::ebpf::attach::{TracepointType, TracepointCtx};
+            ctx.retval = retval;
             crate::ebpf::attach::EBPF_ATTACHMENTS.run(TracepointType::SyscallExit, TracepointCtx::Syscall(ctx.info()));
         }
 

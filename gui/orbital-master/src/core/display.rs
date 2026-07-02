@@ -17,9 +17,3 @@ pub use graphics_ipc::V2GraphicsHandle;
 
 #[cfg(feature = "ziqa-bga-direct")]
 pub use display_ziqa_bga::{Display, Displays, SCALE_BASELINE};
-
-#[cfg(not(feature = "ziqa-bga-direct"))]
-pub type DisplayHandle = graphics_ipc::V2GraphicsHandle;
-
-#[cfg(feature = "ziqa-bga-direct")]
-pub type DisplayHandle = ();

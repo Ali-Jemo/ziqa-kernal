@@ -15,6 +15,45 @@ QEMU_PID=""
 SERIAL_PORT="${ZIQA_SERIAL_PORT:-4545}"
 QEMU_DISPLAY="${ZIQA_QEMU_DISPLAY:-gtk,gl=off}"
 
+ensure_rust_src_for_bootimage() {
+    local toolchain rust_sysroot rust_library_dir host_triple rust_llvm_tools_dir
+    toolchain="$(rustup show active-toolchain 2>/dev/null | tail -n 1)"
+    toolchain="${toolchain%% *}"
+    rust_sysroot="$(rustc +"$toolchain" --print sysroot)"
+    rust_library_dir="$rust_sysroot/lib/rustlib/src/rust/library"
+
+    if [ ! -f "$rust_library_dir/Cargo.lock" ]; then
+        echo "rust-src Cargo.lock missing; repairing rust-src for bootimage..."
+        rustup component remove rust-src --toolchain "$toolchain" >/dev/null 2>&1 || true
+        rustup component add rust-src --toolchain "$toolchain"
+
+        if [ -f "$rust_library_dir/Cargo.toml" ] && [ ! -f "$rust_library_dir/Cargo.lock" ]; then
+            cargo +"$toolchain" generate-lockfile --manifest-path "$rust_library_dir/Cargo.toml"
+        fi
+    fi
+
+    if [ ! -f "$rust_library_dir/Cargo.lock" ]; then
+        echo "Error: rust-src for $toolchain is missing $rust_library_dir/Cargo.lock after reinstall." >&2
+        echo "Do not fake this file. Pin rust-toolchain.toml to nightly-2026-06-20 and rerun rustup component add rust-src llvm-tools-preview for that toolchain." >&2
+        exit 1
+    fi
+
+    host_triple="$(rustc +"$toolchain" -vV | sed -n 's/^host: //p')"
+    rust_llvm_tools_dir="$rust_sysroot/lib/rustlib/$host_triple/bin"
+
+    if [ ! -x "$rust_llvm_tools_dir/llvm-objdump" ] || [ ! -x "$rust_llvm_tools_dir/llvm-objcopy" ]; then
+        echo "llvm-tools missing; repairing llvm-tools-preview for bootimage..."
+        rustup component remove llvm-tools-preview --toolchain "$toolchain" >/dev/null 2>&1 || true
+        rustup component add llvm-tools-preview --toolchain "$toolchain"
+    fi
+
+    if [ ! -x "$rust_llvm_tools_dir/llvm-objdump" ] || [ ! -x "$rust_llvm_tools_dir/llvm-objcopy" ]; then
+        echo "Error: llvm-tools for $toolchain is missing llvm-objdump or llvm-objcopy after reinstall." >&2
+        echo "Pin rust-toolchain.toml to nightly-2026-06-20 and rerun rustup component add rust-src llvm-tools-preview for that toolchain." >&2
+        exit 1
+    fi
+}
+
 cleanup() {
     if [ -n "$OLD_STTY" ]; then
         stty "$OLD_STTY" 2>/dev/null || true
@@ -38,6 +77,7 @@ pkill -9 qemu-system-x86_64 2>/dev/null || true
 sleep 0.5
 
 echo "═══ Building ZiqaKernel + Orbital  ═══"
+ensure_rust_src_for_bootimage
  # Build Orbital GUI FIRST so include_bytes! picks up the fresh binary
  echo "Building Orbital GUI..."
  if [ -f ".cargo/config.toml" ]; then
@@ -55,11 +95,11 @@ echo "═══ Building ZiqaKernel + Orbital  ═══"
  # Build kernel with Orbital embedded so the GUI is available even when
  # the FAT disk is stale or the host-side Orbital rebuild fails.
  echo "Building kernel..."
- cargo build --release --bin ziqa-kernel --features "$KERNEL_FEATURES"
+cargo build --release --bin ziqa-kernel --no-default-features --features "$KERNEL_FEATURES"
  
  # Build bootimage with the same feature set.
  echo "Building bootimage..."
- cargo bootimage --release --bin ziqa-kernel --features "$KERNEL_FEATURES"
+CARGO_MANIFEST_DIR="$PWD" cargo bootimage --release --bin ziqa-kernel --no-default-features --features "$KERNEL_FEATURES"
 
 
 # Create disk image if missing, then refresh the Orbital payload on every run.
@@ -81,6 +121,14 @@ if [ -f "$ORBITAL_BIN" ]; then
     mcopy -i "$DISK"@@1M -o fat-root/bin/orbital.elf ::/bin/orbital.elf < /dev/null 2>/dev/null || true
 else
     echo "Note: built Orbital binary not found; embedded Orbital asset will be used"
+fi
+# Copy terminal binary if available (from userspace/terminal build)
+TERMINAL_BIN="userspace/terminal/target/x86_64-unknown-redox/release/terminal"
+if [ -f "$TERMINAL_BIN" ]; then
+    cp "$TERMINAL_BIN" fat-root/bin/terminal
+    mcopy -i "$DISK"@@1M -o fat-root/bin/terminal ::/bin/terminal < /dev/null 2>/dev/null || true
+else
+    echo "Note: terminal binary not found; namespace will show as /bin/terminal (unmounted)"
 fi
 mcopy -i "$DISK"@@1M -o fat-root/README.TXT ::/README.TXT < /dev/null 2>/dev/null || true
 rm -rf fat-root

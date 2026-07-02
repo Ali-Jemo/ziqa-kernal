@@ -22,7 +22,10 @@ pub mod serio;
 pub mod memory;
 pub mod event;
 pub mod sys;
+pub mod rand;
 pub mod orbital_bridge;
+pub mod namespace;
+pub mod input_bridge;
 
 use self::debug::DebugScheme;
 use self::pipe::PipeScheme;
@@ -38,6 +41,8 @@ use self::event::EventScheme;
 use self::user::UserScheme;
 use self::orbital_bridge::OrbitalBridge;
 use self::sys::SysScheme;
+use self::rand::RandScheme;
+use self::namespace::NamespaceScheme;
 
 pub type SchemeResult<T> = Result<T, crate::abi::AbiError>;
 
@@ -88,6 +93,8 @@ impl SchemeRegistry {
 pub static SCHEME_REGISTRY: Mutex<SchemeRegistry> = Mutex::new(SchemeRegistry::new());
 
 pub fn init() {
+    // Initialize namespace service registry first
+    crate::scheme::namespace::init();
     let mut registry = SCHEME_REGISTRY.lock();
     registry.register("debug", Box::new(DebugScheme::new()));
     registry.register("pipe", Box::new(PipeScheme::new()));
@@ -103,10 +110,13 @@ pub fn init() {
     registry.register("user", Box::new(UserScheme::new()));
     registry.register("", Box::new(UserScheme::new()));
     registry.register("sys", Box::new(SysScheme::new()));
+    registry.register("rand", Box::new(RandScheme::new()));
+    registry.register("namespace", Box::new(NamespaceScheme::new()));
     registry.register("display_v2", Box::new(OrbitalBridge::new()));
     registry.register("display", Box::new(OrbitalBridge::new()));
+    registry.register("orbital", Box::new(OrbitalBridge::new()));
     registry.register("input", Box::new(OrbitalBridge::new()));
     // Log registered schemes
     crate::klog!(crate::klog::Level::Info, "init: ZiqaScheme registry initialized");
-    crate::klog!(crate::klog::Level::Info, "Scheme: acpi, dtb, memory, event, serio, user, sys registered");
+    crate::klog!(crate::klog::Level::Info, "Scheme: acpi, dtb, memory, event, serio, user, sys, namespace registered");
 }

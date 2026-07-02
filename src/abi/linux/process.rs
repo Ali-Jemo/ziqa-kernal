@@ -14,7 +14,7 @@ pub(crate) fn handle(ctx: &mut SyscallContext) -> Option<Result<u64, AbiError>> 
         nr::SYS_GETUID | nr::SYS_GETGID | nr::SYS_GETEUID | nr::SYS_GETEGID => Ok(0),
         nr::SYS_FUTEX => super::sys_futex(ctx),
         nr::SYS_RT_SIGACTION => super::sys_rt_sigaction(ctx),
-        nr::SYS_RT_SIGPROCMASK => Ok(0),
+        nr::SYS_RT_SIGPROCMASK => super::sys_rt_sigprocmask(ctx),
         nr::SYS_CLONE => super::sys_clone(ctx),
         nr::SYS_GETPPID => Ok(ctx.process.parent),
         nr::SYS_GETTID => Ok(ctx.process.pid.0),

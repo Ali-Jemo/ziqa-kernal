@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use log::{error, info};
+use log::error;
 use orbclient::rect::Rect;
 use orbclient::{Color, image::Image};
 
-use crate::core::display::{Display, Displays, DisplayHandle};
+use crate::core::display::{Display, Displays};
 
 pub struct Compositor {
     displays: Displays,
@@ -142,17 +142,6 @@ impl Compositor {
         )
     }
 
-    /// Get the display handle (feature-gated)
-    fn display_handle(&self) -> &DisplayHandle {
-        #[cfg(not(feature = "ziqa-bga-direct"))]
-        {
-            &self.displays.display_handle
-        }
-        #[cfg(feature = "ziqa-bga-direct")]
-        {
-            &()
-        }
-    }
 
     pub fn update_cursor(&mut self, x: i32, y: i32, hot_x: i32, hot_y: i32, cursor: &Arc<Image>) {
         if !self.hw_cursor {

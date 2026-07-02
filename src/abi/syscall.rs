@@ -114,6 +114,7 @@ impl<'a> SyscallContext<'a> {
     }
 
     /// Returns a decoupled info struct for eBPF tracepoints.
+    #[cfg(feature = "ebpf")]
     pub fn info(&self) -> crate::ebpf::attach::SyscallInfo {
         crate::ebpf::attach::SyscallInfo {
             number: self.number,

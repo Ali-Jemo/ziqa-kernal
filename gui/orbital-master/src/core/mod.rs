@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     io::{self, Write},
     mem,
     os::unix::io::AsRawFd,
@@ -8,6 +8,7 @@ use std::{
 };
 
 use event::{EventQueue, user_data};
+#[cfg(not(feature = "ziqa-bga-direct"))]
 use graphics_ipc::V2GraphicsHandle;
 use inputd::{ConsumerHandle, ConsumerHandleEvent};
 use log::{error, info};
@@ -23,7 +24,7 @@ use syscall::{
 };
 
 use crate::window::WindowId;
-use crate::{core::display::{Display, DisplayHandle, Displays, SCALE_BASELINE}, scheme::OrbitalScheme};
+use crate::{core::display::Displays, scheme::OrbitalScheme};
 
 pub(crate) mod display;
 
@@ -56,7 +57,7 @@ pub struct Orbital {
     pub scheme: Option<Socket>,
     pub delayed: VecDeque<(CallerCtx, OpRead)>,
     /// Handle to "/scheme/input/consumer" to receive input events.
-    pub input: ConsumerHandle,
+    pub input: Option<ConsumerHandle>,
 }
 
 impl Orbital {
@@ -64,11 +65,9 @@ impl Orbital {
     /// - Without "ziqa-bga-direct": Redox DRM via graphics-ipc
     /// - With "ziqa-bga-direct": ZiqaKernel direct BGA framebuffer via SYS_FMAP
     pub fn open_display() -> io::Result<(Self, Displays)> {
-        // Open input for keyboard/mouse — OrbitalBridge handles /scheme/input/consumer
-        let input_handle = ConsumerHandle::new_vt()?;
-
         #[cfg(not(feature = "ziqa-bga-direct"))]
         {
+            let input_handle = ConsumerHandle::new_vt()?;
             let display = input_handle.open_display_v2().map_err(|err| {
                 error!("failed to open display: {}", err);
                 err
@@ -86,7 +85,7 @@ impl Orbital {
                 Orbital {
                     scheme: Some(scheme),
                     delayed: VecDeque::new(),
-                    input: input_handle,
+                    input: Some(input_handle),
                 },
                 displays,
             ))
@@ -94,10 +93,17 @@ impl Orbital {
 
         #[cfg(feature = "ziqa-bga-direct")]
         {
+            let input_handle = match ConsumerHandle::new_vt() {
+                Ok(input_handle) => Some(input_handle),
+                Err(err) => {
+                    error!("input consumer unavailable — continuing without input events: {}", err);
+                    None
+                }
+            };
             info!("open_display: using ziqa-bga-direct path");
             // Map BGA framebuffer via SYS_FMAP (kernel always returns BGA for any FMAP call)
-            let width = 1024u32;
-            let height = 768u32;
+            let width = 1280u32;
+            let height = 960u32;
             let fb_size = width as usize * height as usize * 4;
             let map = syscall::data::Map {
                 offset: 0,
@@ -154,34 +160,51 @@ impl Orbital {
             }
         }
 
-        let event_queue = EventQueue::<Source>::new()?;
 
         let mut state = SchemeState::new();
         let mut me = OrbitalHandler {
             orb: self,
             handler,
-            handles: HashMap::new(),
+            handles: BTreeMap::new(),
             next_id: 0,
         };
+        unsafe {
+            // FIXME remove DISPLAY env var once orbclient no longer depends on it
+            std::env::set_var("DISPLAY", "orbital:99.0");
+            std::env::set_var("ORBITAL_DISPLAY", "/scheme/orbital");
+        };
+
+        if let Err(err) = login_cmd.spawn() {
+            error!("failed to start login command: {}", err);
+        }
+
+        if me.orb.scheme.is_none() && me.orb.input.is_none() {
+            me.handler.redraw();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+
+        let event_queue = EventQueue::<Source>::new()?;
 
         // Only register scheme and subscribe to scheme events if socket is available
         if me.orb.scheme.is_some() {
             let cap_id = me.scheme_root()?;
             register_scheme_inner(me.orb.scheme.as_mut().unwrap(), "orbital", cap_id)?;
 
-            unsafe {
-                // FIXME remove DISPLAY env var once orbclient no longer depends on it
-                std::env::set_var("DISPLAY", "orbital:99.0");
-                std::env::set_var("ORBITAL_DISPLAY", "/scheme/orbital");
-            };
             let scheme_fd = me.orb.scheme.as_ref().unwrap().inner().raw();
             event_queue.subscribe(scheme_fd, Source::Scheme, event::EventFlags::READ)?;
         } else {
             error!("No scheme socket available — running in display-only mode");
         }
 
-        let input_fd = me.orb.input.event_handle().as_raw_fd();
-        event_queue.subscribe(input_fd as usize, Source::Input, event::EventFlags::READ)?;
+        if let Some(input) = me.orb.input.as_ref() {
+            let input_fd = input.event_handle().as_raw_fd();
+            event_queue.subscribe(input_fd as usize, Source::Input, event::EventFlags::READ)?;
+        } else {
+            error!("No input consumer available — input events disabled");
+        }
+
 
         let mut event_iter = event_queue.map(|e| e.map(|e| e.user_data));
         let mut fake_input_event = None; // TODO: a hack
@@ -270,7 +293,11 @@ impl Orbital {
                 Source::Input => {
                     let mut events = [Event::new(); 16];
                     loop {
-                        let event = match me.orb.input.read_events(&mut events)? {
+                        let input_result = match me.orb.input.as_ref() {
+                            Some(input) => input.read_events(&mut events)?,
+                            None => break,
+                        };
+                        match input_result {
                             ConsumerHandleEvent::Events(&[]) => break,
                             ConsumerHandleEvent::Events(events) => {
                                 let mut delayed_left = me.orb.delayed.len();
@@ -322,7 +349,7 @@ pub(crate) enum Handle {
 pub struct OrbitalHandler {
     orb: Orbital,
     handler: OrbitalScheme,
-    handles: HashMap<usize, Handle>,
+    handles: BTreeMap<usize, Handle>,
     next_id: usize,
 }
 

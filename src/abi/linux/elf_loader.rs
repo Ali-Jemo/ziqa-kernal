@@ -126,6 +126,8 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
     process.entry_point = VirtAddr::new(hdr.e_entry + load_base);
     process.cpu_state.rip = hdr.e_entry + load_base;
 
+    process.elf_phent = hdr.e_phentsize as u64;
+    process.elf_phnum = hdr.e_phnum as u64;
     let mut load_count = 0u32;
     let mut max_vaddr: u64 = 0;
 
@@ -183,6 +185,9 @@ pub fn load_elf(binary: &[u8], process: &mut Process) -> Result<(), AbiError> {
                 .map_err(|_| AbiError::Other("ELF segment mapping failed"))?;
 
                 if end_vaddr > max_vaddr { max_vaddr = end_vaddr; }
+                if hdr.e_phoff >= phdr.p_offset && hdr.e_phoff < phdr.p_offset.saturating_add(phdr.p_filesz) {
+                    process.elf_phdr = vaddr + hdr.e_phoff - phdr.p_offset;
+                }
                 load_count += 1;
             }
             PT_INTERP => { 
