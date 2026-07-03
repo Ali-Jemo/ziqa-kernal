@@ -13,6 +13,8 @@ OLD_STTY=""
 QEMU_DONE=0
 QEMU_PID=""
 SERIAL_PORT="${ZIQA_SERIAL_PORT:-4545}"
+SERIAL_LOG="${ZIQA_SERIAL_LOG:-/tmp/ziqa-gui-serial.log}"
+ATTACH_SERIAL="${ZIQA_ATTACH_SERIAL:-0}"
 QEMU_DISPLAY="${ZIQA_QEMU_DISPLAY:-gtk,gl=off}"
 
 ensure_rust_src_for_bootimage() {
@@ -134,30 +136,40 @@ mcopy -i "$DISK"@@1M -o fat-root/README.TXT ::/README.TXT < /dev/null 2>/dev/nul
 rm -rf fat-root
 echo "FAT32 disk payload refreshed."
 
-if ! command -v socat >/dev/null 2>&1; then
-    echo "Error: socat is required for GUI serial attach." >&2
-    echo "Install socat, or use 'make run-vnc'/'make run-headless'." >&2
+if [ "$ATTACH_SERIAL" = "1" ] && ! command -v socat >/dev/null 2>&1; then
+    echo "Error: socat is required when ZIQA_ATTACH_SERIAL=1." >&2
+    echo "Install socat, or run GUI mode without serial attach." >&2
     exit 1
+fi
+
+if [ "$ATTACH_SERIAL" = "1" ]; then
+    SERIAL_ARG="tcp:127.0.0.1:${SERIAL_PORT},server=on"
+    SERIAL_NOTE="TCP 127.0.0.1:${SERIAL_PORT} attached to this terminal"
+else
+    rm -f "$SERIAL_LOG"
+    SERIAL_ARG="file:${SERIAL_LOG}"
+    SERIAL_NOTE="log file ${SERIAL_LOG} (set ZIQA_ATTACH_SERIAL=1 for shell)"
 fi
 
 echo ""
 echo "═══ Launching QEMU  ═══"
 echo "  • Display: $QEMU_DISPLAY (override with ZIQA_QEMU_DISPLAY)"
-echo "  • Serial: TCP 127.0.0.1:$SERIAL_PORT attached to this terminal"
-echo "  • Exit serial: Ctrl-]"
+echo "  • Serial: $SERIAL_NOTE"
+if [ "$ATTACH_SERIAL" = "1" ]; then
+    echo "  • Exit serial: Ctrl-]"
+fi
 echo ""
 
-# Run QEMU in the background and attach serial through TCP. Keeping QEMU off
-# stdio prevents GTK/Wayland keyboard grabs and raw terminal state from making
-# the runner look frozen after the boot image is built.
+# Run QEMU in the background. By default GUI mode writes serial to a log file
+# instead of attaching host stdin to the kernel shell; otherwise typing while
+# testing the GUI sends commands to the kernel serial console.
 qemu-system-x86_64 \
     -drive format=raw,file="$BOOTIMAGE" \
     -drive file="$DISK",if=none,format=raw,id=hdr0 \
     -device virtio-blk-pci,drive=hdr0 \
     -m 512M \
     -monitor none \
-    -serial "tcp:127.0.0.1:${SERIAL_PORT},server=on,wait=on" \
-    -device virtio-gpu-pci \
+    -serial "$SERIAL_ARG" \
     -display "$QEMU_DISPLAY" \
     -device virtio-net-pci,netdev=net0 \
     -netdev user,id=net0 &
@@ -172,23 +184,31 @@ if ! kill -0 "$QEMU_PID" 2>/dev/null; then
     exit "$QEMU_STATUS"
 fi
 
-if [ -t 0 ]; then
-    OLD_STTY="$(stty -g)"
-    SOCAT_STDIN="-,raw,echo=0,escape=0x1d"
-else
-    SOCAT_STDIN="-"
+if [ "$ATTACH_SERIAL" = "1" ]; then
+    if [ -t 0 ]; then
+        OLD_STTY="$(stty -g)"
+        SOCAT_STDIN="-,raw,echo=0,escape=0x1d"
+    else
+        SOCAT_STDIN="-"
+    fi
+
+    set +e
+    socat "$SOCAT_STDIN" "TCP:127.0.0.1:${SERIAL_PORT}"
+    SOCAT_STATUS=$?
+    set -e
+
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        set +e
+        wait "$QEMU_PID"
+        QEMU_STATUS=$?
+        set -e
+        exit "$QEMU_STATUS"
+    fi
+    exit "$SOCAT_STATUS"
 fi
 
 set +e
-socat "$SOCAT_STDIN" "TCP:127.0.0.1:${SERIAL_PORT}"
-SOCAT_STATUS=$?
+wait "$QEMU_PID"
+QEMU_STATUS=$?
 set -e
-
-if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-    set +e
-    wait "$QEMU_PID"
-    QEMU_STATUS=$?
-    set -e
-    exit "$QEMU_STATUS"
-fi
-exit "$SOCAT_STATUS"
+exit "$QEMU_STATUS"

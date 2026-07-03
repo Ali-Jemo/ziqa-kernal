@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "systems-programming@claude-code-workflows": true,
+    "ponytail@ponytail": true
+  }
+}

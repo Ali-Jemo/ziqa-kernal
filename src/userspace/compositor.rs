@@ -390,6 +390,7 @@ impl Compositor {
 
 /// Kernel-thread entry for the compositor main loop.
 /// Runs in kernel mode — accesses GPU globals and IPC directly.
+
 pub fn compositor_main(_arg: *const ()) {
     // 1. Get framebuffer info (try VirtIO GPU, fall back to BGA)
     // 1b. Get GPU IPC channel (optional, only needed for VirtIO GPU)

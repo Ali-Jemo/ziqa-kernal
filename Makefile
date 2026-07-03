@@ -14,9 +14,6 @@ BOOT_IMAGE := target/$(TARGET)/debug/bootimage-ziqa-kernel.bin
 # Default build
 default: build
 
-# Auto-update check
-	@npx zk-skill-package@latest --check || true
-
 # Fast debug build
 build:
 	cargo build --bin ziqa-kernel

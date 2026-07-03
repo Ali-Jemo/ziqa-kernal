@@ -303,6 +303,10 @@ impl Window {
         self.image.data_mut()
     }
 
+    pub fn image_mut(&mut self) -> &mut ImageAligned {
+        &mut self.image
+    }
+
     pub fn read(&mut self, buf: &mut [Event]) -> usize {
         for (i, event) in buf.iter_mut().enumerate() {
             *event = match self.events.pop_front() {

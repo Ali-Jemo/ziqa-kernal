@@ -15,14 +15,25 @@ use crate::compositor::Compositor;
 use crate::config::Config;
 use crate::core::display::{Displays, SCALE_BASELINE};
 use crate::core::{Orbital, Properties};
+#[cfg(feature = "ziqa-bga-direct")]
+use crate::native_shell::NativeShell;
 use crate::widget::fps::FpsWidget;
 use crate::window::{self, Window, WindowId};
 use crate::window_order::{WindowOrder, WindowZOrder};
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-enum CursorKind {
+#[allow(dead_code)] // nucleus cursor variants wired in draw_cursor, triggered progressively
+pub(crate) enum CursorKind {
     None,
-    LeftPtr,
+    LeftPtr,     // Normal nucleus
+    HoverButton, // Button magnet field
+    Pressed,     // Pulse animation state
+    Text,        // Text gate mode
+    Drag,        // Grip field mode
+    Loading,     // Orbit animation
+    NotAllowed,  // Collapse state
+    ResizeX,     // Horizontal resize
+    ResizeY,     // Vertical resize
     BottomLeftCorner,
     BottomRightCorner,
     BottomSide,
@@ -78,6 +89,7 @@ pub struct OrbitalScheme {
     cursors: BTreeMap<CursorKind, Arc<Image>>,
     cursor_x: i32,
     cursor_y: i32,
+    cursor_kind: CursorKind,
     cursor_left: bool,
     cursor_middle: bool,
     cursor_right: bool,
@@ -94,6 +106,8 @@ pub struct OrbitalScheme {
     font: orbfont::Font,
     clipboard: Vec<u8>,
     scale: u32,
+    #[cfg(feature = "ziqa-bga-direct")]
+    pub native_shell: NativeShell,
     factored_scale: u32,
     config: Rc<Config>,
     // Is the user currently switching windows with win-tab
@@ -139,8 +153,9 @@ impl OrbitalScheme {
         cursors.insert(CursorKind::LeftSide, load_cursor(&config.left_side));
         cursors.insert(CursorKind::RightSide, load_cursor(&config.right_side));
 
-        let font = orbfont::Font::find(Some("Sans"), None, None)
-            .or_else(|_| orbfont::Font::from_data(include_bytes!("../../../assets/NotoSans-Regular.ttf")))?;
+        let font = orbfont::Font::find(Some("Sans"), None, None).or_else(|_| {
+            orbfont::Font::from_data(include_bytes!("../../../assets/NotoSans-Regular.ttf"))
+        })?;
 
         let mut orbital_scheme = OrbitalScheme {
             compositor: Compositor::new(displays),
@@ -152,6 +167,7 @@ impl OrbitalScheme {
             cursors,
             cursor_x: 0,
             cursor_y: 0,
+            cursor_kind: CursorKind::LeftPtr,
             cursor_left: false,
             cursor_middle: false,
             cursor_right: false,
@@ -164,6 +180,8 @@ impl OrbitalScheme {
             next_id: 1,
             hover: None,
             order: WindowOrder::new(),
+            #[cfg(feature = "ziqa-bga-direct")]
+            native_shell: NativeShell::new(),
             windows: BTreeMap::new(),
             font,
             clipboard: Vec::new(),
@@ -178,7 +196,9 @@ impl OrbitalScheme {
         };
 
         orbital_scheme.update_cursor(0, 0, CursorKind::LeftPtr);
-        orbital_scheme.compositor.schedule(orbital_scheme.compositor.screen_rect());
+        orbital_scheme
+            .compositor
+            .schedule(orbital_scheme.compositor.screen_rect());
 
         Ok(orbital_scheme)
     }
@@ -214,20 +234,56 @@ impl OrbitalScheme {
         }
     }
 
-    //TODO: update cursor in more places to ensure consistency:
-    // - Window resizes
-    // - Window sets cursor on/off
-    // - Window moves
     fn update_cursor(&mut self, x: i32, y: i32, kind: CursorKind) {
         self.cursor_x = x;
         self.cursor_y = y;
 
-        let cursor = self.cursors.get(&kind).unwrap();
+        // Wire nucleus cursor mode from hit testing + button state.
+        // ponytail: pressed takes priority over hover; resize modes keep their kind.
+        #[cfg(feature = "ziqa-bga-direct")]
+        {
+            let is_resize = matches!(
+                kind,
+                CursorKind::LeftSide
+                    | CursorKind::RightSide
+                    | CursorKind::BottomSide
+                    | CursorKind::BottomLeftCorner
+                    | CursorKind::BottomRightCorner
+                    | CursorKind::ResizeX
+                    | CursorKind::ResizeY
+            );
+            let screen = self.compositor.screen_rect();
+            let over_button = matches!(
+                self.native_shell.hit_test(x, y, &screen),
+                crate::native_shell::ShellAction::Launch(_)
+            );
+            let kind = if is_resize {
+                kind
+            } else if self.cursor_left {
+                CursorKind::Pressed
+            } else if over_button {
+                CursorKind::HoverButton
+            } else {
+                kind
+            };
+            self.cursor_kind = kind;
+        }
+
+        #[cfg(not(feature = "ziqa-bga-direct"))]
+        {
+            self.cursor_kind = kind;
+        }
+
+        let cursor = self
+            .cursors
+            .get(&self.cursor_kind)
+            .or_else(|| self.cursors.get(&CursorKind::LeftPtr))
+            .unwrap();
 
         let w = cursor.width() as i32;
         let h = cursor.height() as i32;
 
-        let (hot_x, hot_y) = match kind {
+        let (hot_x, hot_y) = match self.cursor_kind {
             CursorKind::None => (0, 0),
             CursorKind::LeftPtr => (0, 0),
             CursorKind::BottomLeftCorner => (0, h),
@@ -235,6 +291,7 @@ impl OrbitalScheme {
             CursorKind::BottomSide => (w / 2, h),
             CursorKind::LeftSide => (0, h / 2),
             CursorKind::RightSide => (w, h / 2),
+            _ => (0, 0),
         };
 
         self.compositor
@@ -567,6 +624,10 @@ impl OrbitalScheme {
         //TODO: implement better clipboard mechanism
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.compositor.is_dirty()
+    }
+
     pub fn redraw(&mut self) {
         self.resize_if_necessary();
 
@@ -616,6 +677,24 @@ impl OrbitalScheme {
             }
         }
 
+        #[cfg(feature = "ziqa-bga-direct")]
+        let screen_rect = self.compositor.screen_rect();
+        #[cfg(feature = "ziqa-bga-direct")]
+        let focused_title = self
+            .order
+            .focused()
+            .and_then(|id| self.windows.get(&id))
+            .map(|w| w.title.as_str())
+            .unwrap_or("")
+            .to_string();
+        #[cfg(feature = "ziqa-bga-direct")]
+        let running_apps = self.native_shell.running_apps();
+        #[cfg(feature = "ziqa-bga-direct")]
+        let focused_app_kind = self
+            .order
+            .focused()
+            .and_then(|id| self.native_shell.app_kind_for_window(id));
+
         self.compositor.redraw(|display, rect| {
             #[cfg(feature = "ziqa-bga-direct")]
             let background = if self.windows.is_empty() {
@@ -628,44 +707,79 @@ impl OrbitalScheme {
             display.rect(&rect, background);
 
             #[cfg(feature = "ziqa-bga-direct")]
+            self.native_shell.draw_desktop(
+                display,
+                &rect,
+                &screen_rect,
+                &self.font,
+                &self.config,
+                self.windows.is_empty(),
+                self.cursor_x,
+                self.cursor_y,
+                &focused_title,
+                &running_apps,
+                focused_app_kind,
+            );
+
+            #[cfg(feature = "ziqa-bga-direct")]
             if self.windows.is_empty() {
-                let bar = Rect::new(rect.left(), rect.top(), rect.width(), 32);
-                display.rect(&bar, Color::rgb(0x18, 0x22, 0x30));
-
-                let dock = Rect::new(
-                    rect.left() + 24,
-                    rect.top() + rect.height().saturating_sub(56) as i32,
-                    rect.width().saturating_sub(48),
-                    40,
-                );
-                display.rect(&dock, Color::rgb(0x18, 0x22, 0x30));
-                display.border_rect(&dock, Color::rgb(0x38, 0x4A, 0x62), 1);
-
+                let panel_w = cmp::min(screen_rect.width().saturating_sub(64), 460);
+                let panel_h = cmp::min(screen_rect.height().saturating_sub(96), 128);
                 let panel = Rect::new(
-                    rect.left() + (rect.width().saturating_sub(460) / 2) as i32,
-                    rect.top() + (rect.height().saturating_sub(128) / 2) as i32,
-                    cmp::min(rect.width(), 460),
-                    cmp::min(rect.height(), 128),
+                    screen_rect.left() + (screen_rect.width().saturating_sub(panel_w) / 2) as i32,
+                    screen_rect.top() + (screen_rect.height().saturating_sub(panel_h) / 2) as i32,
+                    panel_w,
+                    panel_h,
                 );
-                display.rect(&panel, Color::rgb(0x20, 0x2A, 0x38));
-                display.border_rect(&panel, Color::rgb(0x90, 0xA4, 0xB8), 1);
+                let panel_clip = rect.intersection(&panel);
+                if !panel_clip.is_empty() {
+                    display.rect(&panel_clip, Color::rgb(0x20, 0x2A, 0x38));
+                }
+                let border_color = Color::rgb(0x90, 0xA4, 0xB8);
+                for border in [
+                    Rect::new(panel.left(), panel.top(), panel.width(), 1),
+                    Rect::new(panel.left(), panel.bottom() - 1, panel.width(), 1),
+                    Rect::new(panel.left(), panel.top(), 1, panel.height()),
+                    Rect::new(panel.right() - 1, panel.top(), 1, panel.height()),
+                ] {
+                    let clipped = rect.intersection(&border);
+                    if !clipped.is_empty() {
+                        display.rect(&clipped, border_color);
+                    }
+                }
 
                 let mut draw_label = |text: &str, x: i32, y: i32, color: Color| {
                     let label = self.font.render(text, 16.0);
-                    let mut image = Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
+                    let mut image =
+                        Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
                     image.mode().set(orbclient::Mode::Overwrite);
                     label.draw(&mut image, 0, 0, color);
                     let label_rect = Rect::new(x, y, image.width(), image.height());
                     let clipped = rect.intersection(&label_rect);
                     if !clipped.is_empty() {
-                        display
-                            .roi_mut(&clipped)
-                            .blend(&image.roi(&clipped.translate(-label_rect.left(), -label_rect.top())));
+                        display.roi_mut(&clipped).blend(
+                            &image.roi(&clipped.translate(-label_rect.left(), -label_rect.top())),
+                        );
                     }
                 };
-                draw_label("Ziqa Orbital", panel.left() + 20, panel.top() + 20, Color::rgb(0xE7, 0xE7, 0xE7));
-                draw_label("desktop active — launch orblauncher/file-manager/terminal", panel.left() + 20, panel.top() + 52, Color::rgb(0xB8, 0xC7, 0xD6));
-                draw_label("namespace ✓  input ✓  terminal (mount /bin/terminal)", panel.left() + 20, panel.top() + 78, Color::rgb(0xB8, 0xC7, 0xD6));
+                draw_label(
+                    "Ziqa Orbital",
+                    panel.left() + 20,
+                    panel.top() + 20,
+                    Color::rgb(0xE7, 0xE7, 0xE7),
+                );
+                draw_label(
+                    "desktop active — launch orblauncher/file-manager/terminal",
+                    panel.left() + 20,
+                    panel.top() + 52,
+                    Color::rgb(0xB8, 0xC7, 0xD6),
+                );
+                draw_label(
+                    "namespace ✓  input ✓  terminal (mount /bin/terminal)",
+                    panel.left() + 20,
+                    panel.top() + 78,
+                    Color::rgb(0xB8, 0xC7, 0xD6),
+                );
             }
 
             for (id, focused) in self.order.iter_back_to_front() {
@@ -1727,17 +1841,25 @@ impl OrbitalScheme {
         match event_union.to_option() {
             EventOption::Key(event) => self.key_event(event),
             EventOption::Mouse(MouseEvent { x, y }) => {
-                // ps2d gives us absolute mouse events with x and y in the range 0..65535.
-                // We need to translate this back to screen coordinates. We are using the
-                // size of the first display here as the only multi-display system supported
-                // by qemu doesn't produce absolute mouse events using vmmouse at all.
-                // FIXME once we have usb tablet support add a new event like MouseEvent
-                // which indicates the input device from which the event originated to use
-                // the correct display for getting the size.
-                self.mouse_event(MouseEvent {
-                    x: x * self.compositor.screen_rect().iwidth() / 65536,
-                    y: y * self.compositor.screen_rect().iheight() / 65536,
-                });
+                #[cfg(feature = "ziqa-bga-direct")]
+                {
+                    self.mouse_event(MouseEvent { x, y });
+                }
+
+                #[cfg(not(feature = "ziqa-bga-direct"))]
+                {
+                    // ps2d gives us absolute mouse events with x and y in the range 0..65535.
+                    // We need to translate this back to screen coordinates. We are using the
+                    // size of the first display here as the only multi-display system supported
+                    // by qemu doesn't produce absolute mouse events using vmmouse at all.
+                    // FIXME once we have usb tablet support add a new event like MouseEvent
+                    // which indicates the input device from which the event originated to use
+                    // the correct display for getting the size.
+                    self.mouse_event(MouseEvent {
+                        x: x * self.compositor.screen_rect().iwidth() / 65536,
+                        y: y * self.compositor.screen_rect().iheight() / 65536,
+                    });
+                }
             }
             EventOption::MouseRelative(event) => self.mouse_relative_event(event),
             EventOption::Button(event) => self.button_event(event),

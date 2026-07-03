@@ -1,7 +1,10 @@
+#[cfg(not(feature = "ziqa-bga-direct"))]
 use log::{debug, error};
 use orbclient::Color;
 use serde_derive::Deserialize;
+#[cfg(not(feature = "ziqa-bga-direct"))]
 use std::fs::File;
+#[cfg(not(feature = "ziqa-bga-direct"))]
 use std::io::Read;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
@@ -31,12 +34,23 @@ pub struct Config {
     #[allow(dead_code)]
     #[serde(default)]
     pub custom_cursor: String,
+    // Nucleus cursor accessibility options
+    #[allow(dead_code)]
+    #[serde(default = "cursor_style_default")]
+    pub cursor_style: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub cursor_large: bool,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub cursor_no_animation: bool,
     pub window_max: String,
     pub window_max_unfocused: String,
     pub window_close: String,
     pub window_close_unfocused: String,
 
     #[serde(default = "background_color_default")]
+    #[allow(dead_code)] // only read on the non-ziqa-bga-direct path
     pub background_color: ConfigColor,
     #[serde(default = "bar_color_default")]
     pub bar_color: ConfigColor,
@@ -64,6 +78,10 @@ fn text_highlight_color_default() -> ConfigColor {
     Color::rgb(0xE7, 0xE7, 0xE7).into()
 }
 
+fn cursor_style_default() -> String {
+    "nucleus".to_string()
+}
+
 /// Create a sane default Orbital [Config] in case none is supplied or it is unreadable
 impl Default for Config {
     fn default() -> Self {
@@ -78,6 +96,9 @@ impl Default for Config {
             left_side: String::default(),
             right_side: String::default(),
             custom_cursor: String::default(),
+            cursor_style: cursor_style_default(),
+            cursor_large: false,
+            cursor_no_animation: false,
             window_max: String::default(),
             window_max_unfocused: String::default(),
             window_close: String::default(),
@@ -93,6 +114,7 @@ impl Default for Config {
     }
 }
 
+#[cfg(not(feature = "ziqa-bga-direct"))]
 /// [Config] holds configuration information for Orbital, such as colors, cursors etc.
 impl Config {
     // returns the default config if the string passed is not a valid config

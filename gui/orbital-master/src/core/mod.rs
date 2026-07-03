@@ -18,9 +18,8 @@ use redox_scheme::{
     scheme::{IntoTag, Op, OpRead, SchemeState, SchemeSync, register_scheme_inner},
 };
 use syscall::{
-    EACCES, EAGAIN, EBADF, ECANCELED, EINVAL, EOPNOTSUPP, EWOULDBLOCK,
+    EACCES, EAGAIN, EBADF, ECANCELED, EINVAL, EOPNOTSUPP, EWOULDBLOCK, flag::EventFlags,
     schemev2::NewFdFlags,
-    flag::EventFlags,
 };
 
 use crate::window::WindowId;
@@ -93,13 +92,6 @@ impl Orbital {
 
         #[cfg(feature = "ziqa-bga-direct")]
         {
-            let input_handle = match ConsumerHandle::new_vt() {
-                Ok(input_handle) => Some(input_handle),
-                Err(err) => {
-                    error!("input consumer unavailable — continuing without input events: {}", err);
-                    None
-                }
-            };
             info!("open_display: using ziqa-bga-direct path");
             // Map BGA framebuffer via SYS_FMAP (kernel always returns BGA for any FMAP call)
             let width = 1280u32;
@@ -120,19 +112,19 @@ impl Orbital {
             info!("syscall::fmap returned address=0x{:x}", fb_ptr as usize);
 
             let displays = Displays::from_framebuffer(fb_ptr, width, height);
-            info!("Displays::from_framebuffer: addr=0x{:x}, size={:.1}MB", fb_ptr as usize, fb_size as f64 / 1024.0 / 1024.0);
+            info!(
+                "Displays::from_framebuffer: addr=0x{:x}, size={:.1}MB",
+                fb_ptr as usize,
+                fb_size as f64 / 1024.0 / 1024.0
+            );
 
-            // Try to create scheme socket for window operations — not critical for first display
-            let scheme = Socket::nonblock().ok();
-            if scheme.is_none() {
-                error!("scheme registration unavailable — running in display-only mode");
-            }
+            let scheme = None;
 
             Ok((
                 Orbital {
                     scheme,
                     delayed: VecDeque::new(),
-                    input: input_handle,
+                    input: None,
                 },
                 displays,
             ))
@@ -151,7 +143,7 @@ impl Orbital {
     pub fn run(
         self,
         handler: OrbitalScheme,
-        login_cmd: &mut std::process::Command,
+        _login_cmd: &mut std::process::Command,
     ) -> Result<(), Error> {
         user_data! {
             enum Source {
@@ -160,7 +152,6 @@ impl Orbital {
             }
         }
 
-
         let mut state = SchemeState::new();
         let mut me = OrbitalHandler {
             orb: self,
@@ -168,14 +159,80 @@ impl Orbital {
             handles: BTreeMap::new(),
             next_id: 0,
         };
-        unsafe {
-            // FIXME remove DISPLAY env var once orbclient no longer depends on it
-            std::env::set_var("DISPLAY", "orbital:99.0");
-            std::env::set_var("ORBITAL_DISPLAY", "/scheme/orbital");
-        };
 
-        if let Err(err) = login_cmd.spawn() {
-            error!("failed to start login command: {}", err);
+        #[cfg(feature = "ziqa-bga-direct")]
+        if me.orb.scheme.is_none() && me.orb.input.is_none() {
+            let mut ziqa_input = crate::ziqa_input::ZiqaInput::open();
+            let mut events = [orbclient::Event::new(); 16];
+            let mut coalesced = [orbclient::Event::new(); 512];
+
+            // ponytail: software frame pacing. BGA exposes no vsync/pageflip IRQ, so the
+            // old `sleep(16ms)` after redraw made the period = redraw_time + 16ms (irregular
+            // sub-60 judder). Compensating for elapsed redraw time holds the period at the
+            // target. Idle (no input, no damage) drops to ~10Hz to save CPU.
+            let input_frame = std::time::Duration::from_nanos(8_333_333); // ~120 Hz while input is flowing
+            let active_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz dirty redraw without input
+            let idle_frame = std::time::Duration::from_millis(100); // ~10 Hz idle
+            loop {
+                let frame_start = std::time::Instant::now();
+                // Drain the whole kernel input ring once per frame. Reading only
+                // 16 events per 16 ms lets high-rate mouse input build a permanent
+                // backlog; then clicks/keys arrive late and the GUI feels frozen.
+                //
+                // Mouse moves are absolute positions, so a run of moves can be
+                // collapsed to its final event. Non-mouse events flush the pending
+                // mouse first, preserving button/key ordering.
+                let mut n = 0;
+                let mut pending_mouse = None;
+                for _ in 0..32 {
+                    let count = ziqa_input.read_events(&mut events);
+                    if count == 0 {
+                        break;
+                    }
+
+                    for event in events[..count].iter().copied() {
+                        if event.code == orbclient::EVENT_MOUSE {
+                            pending_mouse = Some(event);
+                            continue;
+                        }
+
+                        if let Some(mouse) = pending_mouse.take() {
+                            if n < coalesced.len() {
+                                coalesced[n] = mouse;
+                                n += 1;
+                            }
+                        }
+                        if n < coalesced.len() {
+                            coalesced[n] = event;
+                            n += 1;
+                        }
+                    }
+                }
+
+                if let Some(mouse) = pending_mouse {
+                    if n < coalesced.len() {
+                        coalesced[n] = mouse;
+                        n += 1;
+                    }
+                }
+                let had_input = n > 0;
+                if had_input {
+                    me.handler.handle_input(&coalesced[..n]);
+                }
+                let dirty = me.handler.is_dirty();
+                me.handler.redraw();
+                let target = if had_input {
+                    input_frame
+                } else if dirty {
+                    active_frame
+                } else {
+                    idle_frame
+                };
+                let elapsed = frame_start.elapsed();
+                if elapsed < target {
+                    std::thread::sleep(target - elapsed);
+                }
+            }
         }
 
         if me.orb.scheme.is_none() && me.orb.input.is_none() {
@@ -204,7 +261,6 @@ impl Orbital {
         } else {
             error!("No input consumer available — input events disabled");
         }
-
 
         let mut event_iter = event_queue.map(|e| e.map(|e| e.user_data));
         let mut fake_input_event = None; // TODO: a hack
@@ -270,13 +326,7 @@ impl Orbital {
                             };
                             if let Op::Read(mut read_op) = op {
                                 let should_delay = me.should_delay(read_op.fd);
-                                let res = me.read(
-                                    read_op.fd,
-                                    read_op.buf(),
-                                    0,
-                                    0,
-                                    &caller_ctx,
-                                );
+                                let res = me.read(read_op.fd, read_op.buf(), 0, 0, &caller_ctx);
                                 if should_delay && res == Ok(0) {
                                     me.orb.delayed.push_back((caller_ctx, read_op));
                                 } else {

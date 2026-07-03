@@ -325,6 +325,31 @@ pub static mut KERNEL_STACK: u64 = 0;
 #[unsafe(no_mangle)]
 pub static mut KERNEL_STACK_SAVE: u64 = 0;
 
+/// Bounded debug-log budget for PID 2 (the embedded Orbital compositor).
+/// Orbital issues a high volume of syscalls in its ~16 ms render loop; logging
+/// all of them floods the serial console. After this many non-essential lines,
+/// the debug prints stop — errors are still always logged by the caller's
+/// `else if res.is_err()` branch.
+const PID2_DEBUG_CAP: u64 = 30;
+static PID2_DEBUG_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn should_log_syscall(pid: u64, number: u64) -> bool {
+    if pid != 2 {
+        return true;
+    }
+
+    // Hot render-loop syscalls (read / clock / nanosleep) are never logged.
+    if matches!(number, 162 | 265 | 570_425_347) {
+        return false;
+    }
+
+    // Every other PID 2 syscall counts against the bounded budget above so the
+    // console shows Orbital's startup (display fmap, input open, …) and then
+    // goes quiet instead of streaming forever.
+    let prev = PID2_DEBUG_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    prev < PID2_DEBUG_CAP
+}
+
 pub fn set_kernel_stack(stack: u64) {
     unsafe {
         KERNEL_STACK = stack;
@@ -407,9 +432,16 @@ pub unsafe extern "C" fn rust_syscall_handler(frame: &mut crate::process::CpuSta
         let proc = &mut *proc_ptr;
         let pid_val = proc.pid.0;
         let mut ctx = crate::abi::syscall::SyscallContext::new(num, args, proc);
-        crate::println!("[Syscall Debug] PID {}: number={} args={:x?}", pid_val, num, args);
+        let log_syscall = should_log_syscall(pid_val, num);
+        if log_syscall {
+            crate::println!("[Syscall Debug] PID {}: number={} args={:x?}", pid_val, num, args);
+        }
         let res = crate::abi::syscall::dispatch_syscall(&registry, &handler, &mut ctx);
-        crate::println!("[Syscall Debug] PID {}: res={:?}", pid_val, res);
+        if log_syscall {
+            crate::println!("[Syscall Debug] PID {}: res={:?}", pid_val, res);
+        } else if res.is_err() {
+            crate::println!("[Syscall Debug] PID {}: number={} res={:?}", pid_val, num, res);
+        }
 
         match res {
             Ok(v) => {

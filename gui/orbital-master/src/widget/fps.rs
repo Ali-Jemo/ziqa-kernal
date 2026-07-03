@@ -9,6 +9,7 @@ pub struct FpsWidget {
     pub enabled: bool,
     fps_counted: u64,
     fps_cputime: u64,
+    frame_time_total_us: u64,
     fps_measured: String,
     fps_instant: Instant,
     fps_popup_image: Option<Image>,
@@ -23,6 +24,7 @@ impl FpsWidget {
             fps_measured: "-".to_string(),
             fps_counted: 0,
             fps_cputime: 0,
+            frame_time_total_us: 0,
             fps_instant: Instant::now(),
             fps_popup_image: None,
             fps_popup_rect: None,
@@ -39,7 +41,9 @@ impl FpsWidget {
     pub fn end_measure(&mut self) {
         if self.enabled {
             if let Some(time) = self.fps_measure_instant.take() {
-                self.fps_cputime += time.elapsed().as_micros() as u64;
+                let elapsed = time.elapsed().as_micros() as u64;
+                self.fps_cputime += elapsed;
+                self.frame_time_total_us += elapsed;
             }
         }
     }
@@ -53,18 +57,16 @@ impl FpsWidget {
         self.fps_counted += 1;
         // update atleast every 330ms
         if self.fps_cputime > 0 && fps_totaltime > 330_000 {
+            let avg_ms = self.frame_time_total_us / self.fps_counted.max(1) / 1000;
             self.fps_measured = format!(
-                // uncomment to debug (adjust row_width as well)
-                // "{} F for {}ms of {}ms = {} FPS {}% CPU",
-                // self.fps_counted,
-                // self.fps_cputime / 1000,
-                // fps_totaltime / 1000,
-                "{} FPS {}% CPU",
+                "{} FPS {}ms {}% CPU",
                 self.fps_counted * 1_000_000 / fps_totaltime,
+                avg_ms,
                 self.fps_cputime * 100 / fps_totaltime,
             );
             self.fps_counted = 0;
             self.fps_cputime = 0;
+            self.frame_time_total_us = 0;
             self.fps_instant = std::time::Instant::now();
         } else {
             return None;
@@ -77,7 +79,7 @@ impl FpsWidget {
             ..
         } = &config;
 
-        let row_width: u32 = 120 * scale;
+        let row_width: u32 = 160 * scale;
         let popup_border: u32 = 5 * scale as u32;
         let font_height: f32 = (18 * scale) as f32;
         let row_height: u32 = 18 * scale + 8;
@@ -122,6 +124,7 @@ impl FpsWidget {
 
         self.fps_counted = 0;
         self.fps_cputime = 0;
+        self.frame_time_total_us = 0;
         self.fps_instant = std::time::Instant::now();
         self.fps_popup_image = None;
         self.fps_popup_rect.take()

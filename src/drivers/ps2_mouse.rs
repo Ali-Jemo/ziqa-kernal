@@ -5,6 +5,15 @@
 use x86_64::instructions::port::Port;
 use spin::Mutex;
 
+/// Native desktop screen size (BGA framebuffer). The PS/2 driver tracks the
+/// cursor in raw screen-pixel coordinates so the OrbitalBridge can forward
+/// them to `orbclient::MouseEvent` unchanged — no HID 0..65535 scaling.
+/// TODO: read dynamically from the framebuffer driver if multi-resolution
+/// support is added.
+const SCREEN_W: i32 = 1280;
+const SCREEN_H: i32 = 960;
+const MOUSE_GAIN: i32 = 1;
+
 static MOUSE_STATE: Mutex<MouseState> = Mutex::new(MouseState::new());
 
 pub struct MouseState {
@@ -38,7 +47,7 @@ pub fn get_mouse_pos() -> (i32, i32) {
 
 pub fn get_mouse_btn() -> u8 {
     let state = MOUSE_STATE.lock();
-    (state.left_pressed as u8) | ((state.right_pressed as u8) << 1)
+    (state.left_pressed as u8) | ((state.right_pressed as u8) << 2)
 }
 
 /// Initialize PS/2 Mouse
@@ -55,7 +64,7 @@ pub fn init() {
         wait_write();
         port_64.write(0x20);
         wait_read();
-        let status = port_60.read() | 2;
+        let status = (port_60.read() | 2) & !0x20;
         wait_write();
         port_64.write(0x60);
         wait_write();
@@ -113,8 +122,10 @@ pub fn apply_usb_report(buttons: u8, dx: i8, dy: i8) {
     let mut state = MOUSE_STATE.lock();
     state.left_pressed = (buttons & 0x01) != 0;
     state.right_pressed = (buttons & 0x02) != 0;
-    state.x = state.x.saturating_add(dx as i32).clamp(0, 1023);
-    state.y = state.y.saturating_add(dy as i32).clamp(0, 767);
+    let dx = (dx as i32).saturating_mul(MOUSE_GAIN);
+    let dy = (dy as i32).saturating_mul(MOUSE_GAIN);
+    state.x = state.x.saturating_add(dx).clamp(0, SCREEN_W - 1);
+    state.y = state.y.saturating_add(dy).clamp(0, SCREEN_H - 1);
 }
 fn mouse_read() -> u8 {
     let mut port = Port::<u8>::new(0x60);
@@ -124,6 +135,10 @@ fn mouse_read() -> u8 {
 
 /// Called from the keyboard/mouse interrupt handler
 pub fn on_interrupt() {
+    let mut port_64 = Port::<u8>::new(0x64);
+    if (unsafe { port_64.read() } & 0x21) != 0x21 {
+        return;
+    }
     let mut port = Port::<u8>::new(0x60);
     let b = unsafe { port.read() };
     
@@ -133,8 +148,10 @@ pub fn on_interrupt() {
     let mut state = MOUSE_STATE.lock();
     match state.cycle {
         0 => {
-            state.data[0] = b;
-            if (b & 0x08) != 0 { state.cycle = 1; } // Check bit 3 is set (alignment)
+            if (b & 0x08) != 0 && (b & 0xC0) == 0 {
+                state.data[0] = b;
+                state.cycle = 1;
+            }
         }
         1 => {
             state.data[1] = b;
@@ -143,16 +160,30 @@ pub fn on_interrupt() {
         2 => {
             state.data[2] = b;
             state.cycle = 0;
-            
             // Process packet
+            let old_btn_mask = (if state.left_pressed { 1 } else { 0 })
+                | (if state.right_pressed { 4 } else { 0 });
+
             state.left_pressed = (state.data[0] & 1) != 0;
             state.right_pressed = (state.data[0] & 2) != 0;
-            
-            let dx = state.data[1] as i32 - (((state.data[0] as i32) << 4) & 0x100);
-            let dy = state.data[2] as i32 - (((state.data[0] as i32) << 3) & 0x100);
-            
-            state.x = (state.x + dx).clamp(0, 1023);
-            state.y = (state.y - dy).clamp(0, 767);
+
+            let dx = (state.data[1] as i32 - (((state.data[0] as i32) << 4) & 0x100))
+                .saturating_mul(MOUSE_GAIN);
+            let dy = (state.data[2] as i32 - (((state.data[0] as i32) << 3) & 0x100))
+                .saturating_mul(MOUSE_GAIN);
+
+            state.x = (state.x + dx).clamp(0, SCREEN_W - 1);
+            state.y = (state.y - dy).clamp(0, SCREEN_H - 1);
+
+            // Push current position for every complete packet, including
+            // button-only packets, so Orbital always has the position that
+            // belongs to the following button state.
+            crate::scheme::input_bridge::push_mouse_screen_event(state.x, state.y);
+            let btn_mask = (if state.left_pressed { 1 } else { 0 })
+                | (if state.right_pressed { 4 } else { 0 });
+            if btn_mask != old_btn_mask {
+                crate::scheme::input_bridge::push_mouse_button_event(btn_mask);
+            }
         }
         _ => state.cycle = 0,
     }

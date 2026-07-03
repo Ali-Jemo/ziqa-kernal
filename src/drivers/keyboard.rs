@@ -70,6 +70,11 @@ lazy_static! {
     ));
 }
 
+#[inline]
+fn route_ps2_to_kernel_shell() -> bool {
+    !cfg!(feature = "orbital")
+}
+
 fn wait_controller_write_ready() -> bool {
     let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
     for _ in 0..1_000_000 {
@@ -150,7 +155,11 @@ pub fn init() {
     } else {
         0
     };
-    config &= !0x01; // IRQ1 disabled; shell/readers poll the controller directly.
+    if cfg!(feature = "orbital") {
+        config |= 0x01; // IRQ1 enabled: GUI PS/2 keys go to Orbital input:.
+    } else {
+        config &= !0x01; // Text shell path polls PS/2 from read_stdin().
+    }
     config |= 0x40; // Translate device scancodes to set 1 for pc-keyboard.
     config &= !0x10; // First PS/2 port clock enabled.
 
@@ -200,7 +209,7 @@ pub fn push_scancode(scancode: u8) {
         if let Some(key) = kb.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(c) => {
-                    if c.is_ascii() {
+                    if route_ps2_to_kernel_shell() && c.is_ascii() {
                         let b = c as u8;
                         push_to_buffers(b);
                         COMPOSITOR_LAST_KEY.store(b as u16 | 0x100, Ordering::Release);
@@ -220,11 +229,13 @@ pub fn push_scancode(scancode: u8) {
                         KeyCode::Delete => 0x88,
                         _ => return,
                     };
-                    if code >= 0x80 && code <= 0x83 || code == 0x86 || code == 0x87 {
-                        INPUT_BUF.lock().push(code);
+                    if route_ps2_to_kernel_shell() {
+                        if code >= 0x80 && code <= 0x83 || code == 0x86 || code == 0x87 {
+                            INPUT_BUF.lock().push(code);
+                        }
+                        EDITOR_BUF.lock().push(code);
+                        COMPOSITOR_LAST_KEY.store(code as u16, Ordering::Release);
                     }
-                    EDITOR_BUF.lock().push(code);
-                    COMPOSITOR_LAST_KEY.store(code as u16, Ordering::Release);
                     crate::scheme::input_bridge::push_key_event(make_scancode, '\0', pressed);
                 }
             }
@@ -280,7 +291,9 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
             }
         }
 
-        poll_ps2_keyboard();
+        if route_ps2_to_kernel_shell() {
+            poll_ps2_keyboard();
+        }
     });
 
     let mut ring = INPUT_BUF.lock();

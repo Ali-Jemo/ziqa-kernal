@@ -1,11 +1,11 @@
-//! Redox Orbital Scheme Protocol Implementation for ZiqaKernel
+//! Ziqa Orbital compatibility scheme.
 //!
 //! This module implements the display_v2 and input schemes that Orbital expects.
 //! Bridges Orbital's display_v2 commands to the Ziqa kernel compositor (IPC channel 3).
 //! Each window gets a SHM region (backing the pixel buffer) + a compositor surface.
 //! Orbital writes pixels via shm_at; flip triggers a compositor Flush.
 
-use crate::scheme::{Scheme, SchemeResult};
+use crate::{abi::AbiError, scheme::{Scheme, SchemeResult}};
 
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicUsize, Ordering};
 use alloc::collections::VecDeque;
@@ -131,7 +131,9 @@ fn create_window_shm(width: u32, height: u32) -> Option<u32> {
 }
 
 fn parse_orbital_window_path(path: &str) -> Option<(i32, i32, u32, u32, String)> {
-    let rest = path.strip_prefix("orbital:")?.trim_start_matches('/');
+    // VFS strips the scheme prefix (/scheme/orbital/ → path is "FLAGS/X/Y/W/H/TITLE"),
+    // but orbital:elf may pass it with the "orbital:" prefix. Handle both.
+    let rest = path.strip_prefix("orbital:").unwrap_or(path).trim_start_matches('/');
     if rest.is_empty() || !rest.contains('/') {
         return None;
     }
@@ -221,33 +223,49 @@ impl Scheme for OrbitalBridge {
             return Ok(count * event_size);
         }
 
-        // Fallback: push a mouse motion event if position changed.
-        // Orbital expects absolute position in 0..65535 range.
+        // Fallback: emit mouse motion and button events directly if position/button changed.
+        // orbclient::MouseEvent stores pixel coordinates, not HID 0..65535 values.
         let (x, y) = crate::drivers::ps2_mouse::get_mouse_pos();
         let btn = crate::drivers::ps2_mouse::get_mouse_btn();
+        let mut written = 0;
+
         if x != self.last_mouse_x.load(Ordering::Relaxed)
             || y != self.last_mouse_y.load(Ordering::Relaxed)
-            || btn != self.last_mouse_btn.load(Ordering::Relaxed)
         {
-            self.last_mouse_x.store(x, Ordering::Relaxed);
-            self.last_mouse_y.store(y, Ordering::Relaxed);
-            self.last_mouse_btn.store(btn, Ordering::Relaxed);
-            // Scale from mouse driver range (0..1023, 0..767) to 0..65535
-            let x_scaled = (x as u64 * 65535 / 1023).min(65535) as i32;
-            let y_scaled = (y as u64 * 65535 / 767).min(65535) as i32;
-            events_slice[0] = Event {
-                code: 2, // EVENT_MOUSE
-                a: x_scaled as i64,
-                b: y_scaled as i64,
-            };
-            // Push button event if button state changed
-            if btn != 0 {
-                crate::scheme::input_bridge::push_mouse_button_event(btn, true);
+            if written < events_to_read {
+                self.last_mouse_x.store(x, Ordering::Relaxed);
+                self.last_mouse_y.store(y, Ordering::Relaxed);
+                // PS/2 driver already tracks pixel-space coords (clamped to the
+                // BGA framebuffer), so forward unchanged. Matches the ring path.
+                let x_px = x;
+                let y_px = y;
+                events_slice[written] = Event {
+                    code: 2, // EVENT_MOUSE
+                    a: x_px as i64,
+                    b: y_px as i64,
+                };
+                written += 1;
             }
-            return Ok(event_size);
         }
 
-        Ok(0)
+        if btn != self.last_mouse_btn.load(Ordering::Relaxed) {
+            if written < events_to_read {
+                self.last_mouse_btn.store(btn, Ordering::Relaxed);
+                // Emit button bitmask directly in event.a (matches orbclient::ButtonEvent::from_event)
+                events_slice[written] = Event {
+                    code: 3, // EVENT_BUTTON
+                    a: btn as i64,
+                    b: 0,
+                };
+                written += 1;
+            }
+        }
+
+        if written > 0 {
+            return Ok(written * event_size);
+        }
+
+        Err(AbiError::Other("EAGAIN"))
     }
 
     fn write(&self, id: usize, buf: &[u8]) -> SchemeResult<usize> {

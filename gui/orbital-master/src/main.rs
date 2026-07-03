@@ -2,9 +2,11 @@
 #![forbid(clippy::expect_used)]
 
 use crate::core::Orbital;
-use log::{debug, error, info, warn};
+#[cfg(not(feature = "ziqa-bga-direct"))]
+use log::warn;
+use log::{debug, error, info};
 use redox_log::{OutputBuilder, RedoxLogger};
-use std::{env, process::Command, rc::Rc};
+use std::{process::Command, rc::Rc};
 
 use config::Config;
 use scheme::OrbitalScheme;
@@ -12,12 +14,16 @@ use scheme::OrbitalScheme;
 mod compositor;
 mod config;
 mod core;
+#[cfg(feature = "ziqa-bga-direct")]
+mod native_shell;
 mod scheme;
 mod widget;
 mod window;
 mod window_order;
+#[cfg(feature = "ziqa-bga-direct")]
+mod ziqa_input;
 
-/// Run orbital main event loop, starting a login command before entering the event loop.
+/// Run Orbital's main event loop.
 fn orbital() -> Result<(), String> {
     // Ignore possible errors while enabling logging
     let _ = RedoxLogger::new()
@@ -30,37 +36,50 @@ fn orbital() -> Result<(), String> {
         .with_process_name("orbital".into())
         .enable();
 
-    let mut args = env::args().skip(1);
-    let vt = env::var("VT").expect("`VT` environment variable not set");
-    unsafe {
-        env::remove_var("VT");
-    }
-    let login_cmd = args.next().ok_or("no login manager argument")?;
+    #[cfg(feature = "ziqa-bga-direct")]
+    let mut login_cmd = Command::new("ziqa-native-shell");
+
+    #[cfg(not(feature = "ziqa-bga-direct"))]
+    let mut login_cmd = {
+        let mut args = std::env::args().skip(1);
+        let vt = std::env::var("VT").expect("`VT` environment variable not set");
+        unsafe {
+            std::env::remove_var("VT");
+        }
+        let login_cmd = args.next().ok_or("no login manager argument")?;
+
+        match Command::new("inputd").arg("-A").arg(&vt).status() {
+            Ok(status) => {
+                if !status.success() {
+                    warn!("inputd -A '{}' exited with status: {:?}", vt, status);
+                }
+            }
+            Err(err) => {
+                warn!("inputd -A '{}' failed to run with error: {}", vt, err);
+            }
+        }
+
+        let mut command = Command::new(login_cmd);
+        command.args(args);
+        command
+    };
 
     let (orbital, displays) =
         Orbital::open_display().map_err(|e| format!("could not open display, caused by: {}", e))?;
-
-    match Command::new("inputd").arg("-A").arg(&vt).status() {
-        Ok(status) => {
-            if !status.success() {
-                warn!("inputd -A '{}' exited with status: {:?}", vt, status);
-            }
-        }
-        Err(err) => {
-            warn!("inputd -A '{}' failed to run with error: {}", vt, err);
-        }
-    }
 
     debug!(
         "found display {}x{}",
         displays.displays[0].screen_rect().width(),
         displays.displays[0].screen_rect().height()
     );
+    #[cfg(feature = "ziqa-bga-direct")]
+    let config = Rc::new(Config::default());
+    #[cfg(not(feature = "ziqa-bga-direct"))]
     let config = Rc::new(Config::from_path("/ui/orbital.toml"));
     let scheme = OrbitalScheme::new(displays, config)?;
 
     orbital
-        .run(scheme, Command::new(login_cmd).args(args))
+        .run(scheme, &mut login_cmd)
         .map_err(|e| format!("error in main loop, caused by {}", e))
 }
 

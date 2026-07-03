@@ -459,8 +459,8 @@ impl File for Fat32File {
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> Result<usize, AbiError> {
-        crate::println!("DEBUG: file_size={}, offset={}, buf_len={}", self.file_size, offset, buf.len());
-        crate::println!("DEBUG: bpb: bytes_per_sector={}, sectors_per_cluster={}", self.bpb.bytes_per_sector, self.bpb.sectors_per_cluster);
+        crate::klog!(crate::klog::Level::Debug, "fat32 write: file_size={} offset={} buf_len={}", self.file_size, offset, buf.len());
+        crate::klog!(crate::klog::Level::Debug, "fat32 bpb: bytes_per_sector={} sectors_per_cluster={}", self.bpb.bytes_per_sector, self.bpb.sectors_per_cluster);
         let new_size = self.file_size.max((offset + buf.len()) as u32);
         let bytes_per_cluster =
             (self.bpb.sectors_per_cluster as usize) * (self.bpb.bytes_per_sector as usize);
@@ -1133,7 +1133,7 @@ pub fn create_file_on_disk(path: &str) -> Result<Fat32File, &'static str> {
     write_dir_entry(&*fs.disk, &fs.bpb, &slot, short_name, 0x20, 0, 0)
         .map_err(|_| "Failed to write directory entry")?;
 
-    crate::println!("DEBUG create_file_on_disk: fs.bpb.bytes_per_sector={}, fs.bpb.sectors_per_cluster={}", fs.bpb.bytes_per_sector, fs.bpb.sectors_per_cluster);
+    crate::klog!(crate::klog::Level::Debug, "fat32 create_file_on_disk: bytes_per_sector={} sectors_per_cluster={}", fs.bpb.bytes_per_sector, fs.bpb.sectors_per_cluster);
 
     let fat_file = Fat32File {
         disk: fs.disk.clone(),
@@ -1145,7 +1145,7 @@ pub fn create_file_on_disk(path: &str) -> Result<Fat32File, &'static str> {
         cluster_chain: Mutex::new(None),
     };
 
-    crate::println!("DEBUG create_file_on_disk: fat_file.bpb.bytes_per_sector={}, fat_file.bpb.sectors_per_cluster={}", fat_file.bpb.bytes_per_sector, fat_file.bpb.sectors_per_cluster);
+    crate::klog!(crate::klog::Level::Debug, "fat32 create_file_on_disk: fat_file bytes_per_sector={} sectors_per_cluster={}", fat_file.bpb.bytes_per_sector, fat_file.bpb.sectors_per_cluster);
 
     Ok(fat_file)
 }

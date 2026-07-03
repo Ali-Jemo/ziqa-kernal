@@ -73,10 +73,12 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         crate::println!(" ~ VirtIO GPU / BGA Display ............ not available");
         false
     };
+    // When the `orbital` feature is enabled, the embedded Orbital userspace
+    // compositor owns the BGA framebuffer directly (ziqa-bga-direct). Spawning
+    // the in-kernel compositor here too leaves both renderers painting the same
+    // framebuffer → flicker/tearing and two cursors fighting over the cursor
+    // sprite. Only spawn the kernel compositor for the headless/no-orbital path.
     if compositor_display && !cfg!(feature = "orbital") {
-        // Compositor owns only a working VirtIO GPU framebuffer.  When the
-        // display is the BGA framebuffer, keep the framebuffer console active
-        // so the QEMU GUI window remains an interactive shell.
         ziqa_kernel::process::scheduler::spawn_kthread(
             ziqa_kernel::userspace::compositor::compositor_main,
             core::ptr::null(),
@@ -158,12 +160,6 @@ fn init_services() {
             vfs.mount(
                 "/bin/orbital",
                 Arc::new(Mutex::new(RamFile::from_bytes(&decompressed))),
-            );
-            vfs.mount(
-                "/bin/launcher",
-                Arc::new(Mutex::new(RamFile::from_bytes(include_bytes!(
-                    concat!(env!("OUT_DIR"), "/launcher_patched.elf")
-                )))),
             );
         }
         #[cfg(feature = "busybox")]
@@ -371,31 +367,21 @@ fn run_startup() {
     if !spawned_orbital {
         #[cfg(feature = "orbital")]
         {
-            // ponytail: Skip Orbital userspace compositor — the launcher draws
-            // directly to BGA via mmap, and Orbital's fallback panel would
-            // overwrite it. The kernel compositor handles cursor + input routing.
-            ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
-
-            // Mount the launcher binary
-            let launcher_bytes = alloc::vec::Vec::from(include_bytes!(concat!(env!("OUT_DIR"), "/launcher_patched.elf")) as &[u8]);
-            if let Some(pid) = ziqa_kernel::process::scheduler::SCHEDULER.spawn_redox_elf_with_args(
-                launcher_bytes,
-                alloc::vec![alloc::vec::Vec::from(&b"launcher"[..])],
-                alloc::vec![
-                    alloc::vec::Vec::from(&b"DISPLAY=orbital:99.0"[..]),
-                    alloc::vec::Vec::from(&b"ORBITAL_DISPLAY=/scheme/orbital"[..]),
-                ],
-            ) {
-                ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
-                    let full = ziqa_kernel::capability::Permissions::full();
-                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
-                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
-                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
-                    proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
-                });
-                println!(" ✓ Desktop launcher spawned (PID={})", pid.0);
-            } else {
-                println!(" ✗ Failed to spawn desktop launcher");
+            let compressed = include_bytes!("../assets/orbital.elf.lz4");
+            if let Ok(decompressed) = lz4_flex::decompress_size_prepended(compressed) {
+                if let Some(pid) = ziqa_kernel::process::scheduler::spawn_redox_elf_from_vec(decompressed) {
+                    ziqa_kernel::process::scheduler::with_process_mut(pid, |proc| {
+                        let full = ziqa_kernel::capability::Permissions::full();
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::File, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::Memory, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::DeviceIo, full, 0, None);
+                        proc.capabilities.grant(ziqa_kernel::capability::ResourceKind::IpcChannel, full, 0, None);
+                    });
+                    ziqa_kernel::drivers::fb_console::GPU_CONSOLE_ACTIVE.store(false, core::sync::atomic::Ordering::SeqCst);
+                    println!(" ✓ Embedded Ziqa Orbital GUI spawned (PID={})", pid.0);
+                } else {
+                    println!(" ✗ Failed to spawn embedded Ziqa Orbital GUI");
+                }
             }
         }
     }

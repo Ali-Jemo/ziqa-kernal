@@ -12,6 +12,7 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub static PICS: Mutex<ChainedPics> =
     Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
+
 lazy_static! {
     pub static ref IRQ_WAITERS: Mutex<BTreeMap<u8, crate::process::Pid>> = Mutex::new(BTreeMap::new());
 }
@@ -302,8 +303,8 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
-    notify_irq(InterruptIndex::Mouse as u8);
     crate::drivers::ps2_mouse::on_interrupt();
+    notify_irq(InterruptIndex::Mouse as u8);
     send_eoi(InterruptIndex::Mouse as u8);
 }
 

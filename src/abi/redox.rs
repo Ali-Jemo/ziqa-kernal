@@ -501,6 +501,19 @@ fn handle_openat(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
         };
     }
 
+    if crate::fs::vfs::VFS
+        .read()
+        .read_raw(&translated_path, &mut [0u8; 1], 0)
+        .is_ok()
+    {
+        let fd = ctx
+            .process
+            .fds
+            .alloc_file(translated_path.as_bytes(), flags as u32)
+            .ok_or(AbiError::Other("EMFILE"))?;
+        return Ok(fd as u64);
+    }
+
     Ok((-2_i64) as u64)
 }
 

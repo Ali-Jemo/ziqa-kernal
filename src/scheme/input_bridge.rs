@@ -85,29 +85,33 @@ pub fn has_events() -> bool {
 }
 
 /// Push a mouse motion event with screen-pixel coordinates.
-/// Converts screen pixels to the 0..65535 range Orbital expects.
-pub fn push_mouse_screen_event(x: i32, y: i32, screen_w: u32, screen_h: u32) {
-    let x_scaled = if screen_w > 0 { (x as u64) * 65535 / screen_w as u64 } else { 0 };
-    let y_scaled = if screen_h > 0 { (y as u64) * 65535 / screen_h as u64 } else { 0 };
+///
+/// `x`/`y` are already in screen-pixel space: the PS/2 driver clamps the
+/// cursor to the BGA framebuffer dimensions before pushing, so the values are
+/// forwarded to `orbclient::MouseEvent` unchanged (no HID 0..65535 scaling).
+pub fn push_mouse_screen_event(x: i32, y: i32) {
     let mut events = INPUT_EVENTS.lock();
     if events.len() >= 256 {
         events.pop_front();
     }
     events.push_back(OrbitalEvent {
         code: EVENT_MOUSE,
-        a: x_scaled as i64,
-        b: y_scaled as i64,
+        a: x as i64,
+        b: y as i64,
     });
 }
-/// `pressed`: true = press, false = release
-pub fn push_mouse_button_event(button: u8, pressed: bool) {
+/// Push a mouse button event into the shared queue.
+///
+/// `button_mask` is the current button state bitmask (left=1, right=4, middle=2).
+/// This matches `orbclient::ButtonEvent::from_event` which reads the bitmask from `event.a`.
+pub fn push_mouse_button_event(button_mask: u8) {
     let mut events = INPUT_EVENTS.lock();
     if events.len() >= 256 {
         events.pop_front();
     }
     events.push_back(OrbitalEvent {
         code: EVENT_BUTTON,
-        a: button as i64,
-        b: if pressed { 1 } else { 0 },
+        a: button_mask as i64,
+        b: 0,
     });
 }

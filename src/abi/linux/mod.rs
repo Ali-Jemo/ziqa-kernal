@@ -1177,7 +1177,18 @@ fn sys_nanosleep(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     } else {
         1
     };
-    crate::timer::sleep_ms(ctx.process.pid, ms.max(1));
+    let pid = ctx.process.pid;
+    crate::timer::sleep_ms(pid, ms.max(1));
+    // sleep_ms marked us Blocked and registered a timer wake, but a blocking
+    // syscall MUST yield — otherwise the process stays Blocked forever (the
+    // syscall return path only re-schedules on exit/cancel). Same pattern as
+    // sys_futex. When the timer wake fires, schedule() returns here.
+    crate::process::scheduler::SCHEDULER.schedule();
+    // schedule() returns either because the timer wake re-ran us, or because
+    // no other task was ready and it no-op'd (leaving us still marked Blocked).
+    // Either way the sleep is over and we're executing again — be Running.
+    ctx.process.state = crate::process::ProcessState::Running;
+    ctx.process.timed_out = false;
     Ok(0)
 }
 
@@ -1200,6 +1211,11 @@ fn sys_poll(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     // Handle timeout
     if timeout_ms > 0 {
         crate::timer::sleep_ms(ctx.process.pid, timeout_ms as u64);
+        // Blocking poll must yield like nanosleep/futex; otherwise the
+        // process is marked Blocked but never descheduled.
+        crate::process::scheduler::SCHEDULER.schedule();
+        ctx.process.state = crate::process::ProcessState::Running;
+        ctx.process.timed_out = false;
     } else if timeout_ms == 0 {
         // poll with timeout=0 is non-blocking
     }

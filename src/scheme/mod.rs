@@ -81,7 +81,7 @@ impl SchemeRegistry {
     }
     
     pub fn register(&mut self, name: &str, scheme: Box<dyn Scheme>) {
-        crate::println!("DEBUG: Registering scheme {}", name);
+        crate::klog!(crate::klog::Level::Debug, "scheme: registered {}", name);
         self.schemes.insert(name.to_string(), scheme);
     }
     
