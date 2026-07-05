@@ -1,5 +1,5 @@
 # ZiqaKernel / Axiq-IQ: Status & Engineering Roadmap
-*Updated: Tuesday, June 17, 2026*
+*Updated: Sunday, July 5, 2026*
 This document provides a comprehensive overview of the current state of the ZiqaKernel, its features from the low-level base to the high-level services, and the roadmap of what has been implemented and what remains for the future.
 
 ---
