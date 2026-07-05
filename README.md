@@ -32,6 +32,20 @@ make test      # Run project-wide cargo tests
 make clean     # Clean build artifacts
 ```
 
+## Cargo Features
+
+The kernel provides several features for customization. The `default` feature set is `full`.
+
+| Feature | Description |
+| :--- | :--- |
+| `full` | Enables all features (default). |
+| `fast-dev` | Lightweight build (shell, vfs). |
+| `net` | Enables networking stack (`smoltcp`). |
+| `ebpf` | Enables eBPF VM support. |
+| `wasm` | Enables WebAssembly ABI support. |
+| `games` | Includes demo games. |
+| `orbital` | Includes Orbital GUI compositor. |
+
 ## Project Structure
 
 | Directory | Description |
