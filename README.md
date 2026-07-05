@@ -19,6 +19,17 @@ An experimental bare-metal operating-system kernel for `x86_64` written in Rust 
 - **Hybrid Architecture:** Rust kernel with Zig hot paths for performance.
 - **VFS System:** URL-based scheme resource system (Redox-inspired).
 
+## Architecture Highlights
+
+ZiqaKernel is a bare-metal OS designed for flexibility:
+
+- **Target:** Built for `x86_64-unknown-none`.
+- **Hybrid:** Rust core with Zig hot paths (e.g., blitter).
+- **Boot:** Booted via `bootimage` and QEMU.
+- **Memory:** Custom memory management with page-table and heap abstractions.
+
+For deep dives, see `conductor/docs/ARCHITECTURE_TARGET.md`.
+
 ## Getting Started
 
 ### Prerequisites
@@ -86,6 +97,12 @@ The kernel provides several features for customization. The `default` feature se
 
 - **QEMU locks:** If `make run` fails with write-lock errors, run `make kill-qemu` to clear zombie processes.
 - **Disk images:** If disk operations fail, run `make clean` and `make fat-disk` to rebuild the FAT32 disk image.
+
+## Known Limitations
+
+- **Experimental ABI:** Syscall implementations are incomplete and subject to change.
+- **Hardware Support:** Driver support is limited to essential QEMU-emulated hardware.
+- **Stability:** The kernel is not hardened; expect panics during advanced feature testing.
 
 ## Documentation
 
