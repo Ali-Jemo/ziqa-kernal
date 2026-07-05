@@ -32,6 +32,14 @@ make test      # Run project-wide cargo tests
 make clean     # Clean build artifacts
 ```
 
+## Development Environment
+
+The repository includes a `Dockerfile` for a consistent build environment:
+
+```bash
+docker compose run dev
+```
+
 ## Cargo Features
 
 The kernel provides several features for customization. The `default` feature set is `full`.
