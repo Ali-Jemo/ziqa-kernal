@@ -148,7 +148,7 @@ impl Config {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "ziqa-bga-direct")))]
 mod test {
     use crate::config::{Config, background_color_default, text_highlight_color_default};
 

@@ -151,19 +151,59 @@ impl Window {
         !self.borderless && self.btn_contains(x, y, 2)
     }
 
+    pub fn min_contains(&self, x: i32, y: i32) -> bool {
+        !self.borderless && self.btn_contains(x, y, 3)
+    }
+
     pub fn close_contains(&self, x: i32, y: i32) -> bool {
         !self.borderless && self.btn_contains(x, y, 1)
     }
 
     fn btn_contains(&self, x: i32, y: i32, nth: u32) -> bool {
-        x >= self.x.saturating_add_unsigned(max(
+        let x_min = self.x.saturating_add_unsigned(max(
             6 * self.scale,
             self.width().saturating_sub(18 * nth * self.scale),
-        )) && y >= self.y.saturating_sub_unsigned(TITLE_HEIGHT * self.scale)
-            && x < self
-                .x
-                .saturating_add_unsigned(self.width().saturating_sub(18 * (nth - 1) * self.scale))
-            && y < self.y
+        ));
+        let x_max = self.x.saturating_add_unsigned(self.width().saturating_sub(18 * (nth - 1) * self.scale));
+        let y_min = self.y.saturating_sub_unsigned(TITLE_HEIGHT * self.scale);
+        let y_max = self.y;
+        x >= x_min && x < x_max && y >= y_min && y < y_max
+    }
+
+    fn draw_diamond(display: &mut Display, clip: &Rect, cx: i32, cy: i32, size: u32, color: Color) {
+        let half = (size / 2) as i32;
+        let top = cy - half;
+        let row_start = (clip.top() - top).max(0).min(size as i32);
+        let row_end = (clip.bottom() - top).max(0).min(size as i32);
+        if row_start >= row_end {
+            return;
+        }
+
+        for row in row_start..row_end {
+            let offset = if row <= half { half - row } else { row - half };
+            let line_w = size as i32 - offset * 2;
+            if line_w > 0 {
+                let band = Rect::new(cx - half + offset, top + row, line_w as u32, 1);
+                let band_intersect = clip.intersection(&band);
+                if !band_intersect.is_empty() {
+                    display.rect(&band_intersect, color);
+                }
+            }
+        }
+    }
+
+    fn draw_x(display: &mut Display, clip: &Rect, cx: i32, cy: i32, size: u32, color: Color) {
+        let half = (size / 2) as i32;
+        for i in 0..size as i32 {
+            let left = Rect::new(cx - half + i, cy - half + i, 1, 1);
+            let right = Rect::new(cx + half - i, cy - half + i, 1, 1);
+            for stroke in [left, right] {
+                let stroke_intersect = clip.intersection(&stroke);
+                if !stroke_intersect.is_empty() {
+                    display.rect(&stroke_intersect, color);
+                }
+            }
+        }
     }
 
     pub fn draw_title(
@@ -176,7 +216,8 @@ impl Window {
     ) {
         let bar_color = Color::from(self.config.bar_color);
         let bar_highlight_color = Color::from(self.config.bar_highlight_color);
-
+        let text_color = Color::from(self.config.text_color);
+        let text_highlight_color = Color::from(self.config.text_highlight_color);
         let title_rect = self.title_rect();
         let title_intersect = rect.intersection(&title_rect);
         if !title_intersect.is_empty() {
@@ -190,8 +231,20 @@ impl Window {
                 },
             );
 
-            let mut x = self.x + 6 * scale;
-            let w = max(self.x + 6 * scale, self.x + self.iwidth() - 18 * scale) - x;
+            if focused {
+                let cy = title_rect.top() + (TITLE_HEIGHT as i32 * scale) / 2;
+                Self::draw_diamond(
+                    display,
+                    rect,
+                    self.x + 10 * scale,
+                    cy,
+                    5 * self.scale,
+                    text_highlight_color,
+                );
+            }
+
+            let mut x = self.x + 18 * scale;
+            let w = max(x, self.x + self.iwidth() - 54 * scale) - x;
             if w > 0 {
                 let title_image = if focused {
                     &self.title_image
@@ -211,6 +264,37 @@ impl Window {
                         .blend(&title_image.roi(
                             &image_intersect.translate(-image_rect.left(), -image_rect.top()),
                         ));
+                }
+            }
+
+            if focused {
+                let accent = Rect::new(title_rect.left(), title_rect.bottom() - 1, title_rect.width(), 1);
+                let accent_intersect = rect.intersection(&accent);
+                if !accent_intersect.is_empty() {
+                    display.rect(&accent_intersect, text_highlight_color);
+                }
+            }
+
+            x = max(self.x + 6 * scale, self.x + self.iwidth() - 54 * scale);
+            if x + 18 * scale <= self.x + self.iwidth() {
+                let line_w = 10 * self.scale;
+                let line_h = max(1, 2 * self.scale);
+                let line_rect = Rect::new(
+                    x + ((18 * scale - line_w as i32) / 2),
+                    title_rect.top() + ((TITLE_HEIGHT * self.scale) as i32 - line_h as i32) / 2,
+                    line_w,
+                    line_h,
+                );
+                let line_intersect = rect.intersection(&line_rect);
+                if !line_intersect.is_empty() {
+                    display.rect(
+                        &line_intersect,
+                        if focused {
+                            text_highlight_color
+                        } else {
+                            text_color
+                        },
+                    );
                 }
             }
 
@@ -247,6 +331,39 @@ impl Window {
                             &image_intersect.translate(-image_rect.left(), -image_rect.top()),
                         ));
                     }
+                }
+            }
+
+            let glyph_color = if focused {
+                text_highlight_color
+            } else {
+                text_color
+            };
+            let glyph_y = title_rect.top() + (TITLE_HEIGHT as i32 * scale) / 2;
+            if self.resizable {
+                let max_x = max(self.x + 6 * scale, self.x + self.iwidth() - 36 * scale);
+                if max_x + 18 * scale <= self.x + self.iwidth() {
+                    Self::draw_diamond(
+                        display,
+                        rect,
+                        max_x + 9 * scale,
+                        glyph_y,
+                        7 * self.scale,
+                        glyph_color,
+                    );
+                }
+            }
+            if !self.unclosable {
+                let close_x = max(self.x + 6 * scale, self.x + self.iwidth() - 18 * scale);
+                if close_x + 18 * scale <= self.x + self.iwidth() {
+                    Self::draw_x(
+                        display,
+                        rect,
+                        close_x + 9 * scale,
+                        glyph_y,
+                        9 * self.scale,
+                        glyph_color,
+                    );
                 }
             }
         }
@@ -434,30 +551,11 @@ impl Window {
 mod test {
     use crate::config::Config;
     use crate::window::Window;
-    use orbclient::{Color, Event};
+    use orbclient::Event;
     use std::rc::Rc;
 
-    // create a default config that can be used to create Windows for testing
-    // TODO implement or derive Default for orbclient::Color and then just use Config::default()
     fn test_config() -> Config {
-        Config {
-            cursor: String::default(),
-            bottom_left_corner: String::default(),
-            bottom_right_corner: String::default(),
-            bottom_side: String::default(),
-            left_side: String::default(),
-            right_side: String::default(),
-            window_max: String::default(),
-            window_max_unfocused: String::default(),
-            window_close: String::default(),
-            window_close_unfocused: String::default(),
-
-            background_color: Color::rgba(1, 2, 3, 200).into(),
-            bar_color: Color::rgba(1, 2, 3, 200).into(),
-            bar_highlight_color: Color::rgba(1, 2, 3, 200).into(),
-            text_color: Color::rgba(1, 2, 3, 200).into(),
-            text_highlight_color: Color::rgba(1, 2, 3, 200).into(),
-        }
+        Config::default()
     }
 
     #[test]
@@ -557,5 +655,15 @@ mod test {
             0,
             "Did not expect to read any events"
         );
+    }
+
+    #[test]
+    fn min_contains_uses_third_titlebar_slot() {
+        let dummy_config = test_config();
+        let window = Window::new(10, 50, 200, 100, 1, Rc::new(dummy_config));
+
+        assert!(window.min_contains(162, 36));
+        assert!(!window.max_contains(162, 36));
+        assert!(!window.close_contains(162, 36));
     }
 }

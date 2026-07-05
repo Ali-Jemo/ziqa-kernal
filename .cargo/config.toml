@@ -1,5 +1,12 @@
+[build]
+target = "x86_64-unknown-none"
+
 [target.x86_64-unknown-none]
 rustflags = ["-C", "linker=rust-lld", "-C", "link-arg=-Tlinker.ld", "-C", "relocation-model=static"]
 
-[build]
-target = "x86_64-unknown-none"
+[target.'cfg(target_os = "none")']
+runner = "bootimage runner"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

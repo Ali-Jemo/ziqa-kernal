@@ -16,6 +16,8 @@ mod config;
 mod core;
 #[cfg(feature = "ziqa-bga-direct")]
 mod native_shell;
+#[cfg(feature = "ziqa-bga-direct")]
+mod prof; // PROF-TEMP: remove to revert instrumentation
 mod scheme;
 mod widget;
 mod window;

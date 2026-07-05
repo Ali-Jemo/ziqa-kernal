@@ -2,7 +2,6 @@
 
 #![cfg(feature = "ziqa-bga-direct")]
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -24,8 +23,19 @@ const BAR_H: u32 = 32;
 const DOCK_H: u32 = 40;
 const DOCK_PAD: u32 = 24;
 const DOCK_BOTTOM_GAP: u32 = 16;
-const DOCK_SPACING: u32 = 40;
+const DOCK_SPACING: u32 = 80;
 const DOCK_ICON_SIZE: u32 = 24;
+
+pub fn workspace_rect(screen: &Rect) -> Rect {
+    Rect::new(
+        screen.left(),
+        screen.top() + BAR_H as i32,
+        screen.width(),
+        screen
+            .height()
+            .saturating_sub(BAR_H + DOCK_H + DOCK_BOTTOM_GAP),
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum NativeAppKind {
@@ -68,7 +78,6 @@ impl NativeShell {
         screen: &Rect,
         font: &Font,
         config: &Config,
-        show_welcome: bool,
         cursor_x: i32,
         cursor_y: i32,
         focused_title: &str,
@@ -220,20 +229,15 @@ impl NativeShell {
 
         let icon_y = dock.top() + 8;
         let start_x = dock.left() + 14;
+        let icon_x = |i: i32| {
+            start_x
+                + DOCK_SPACING as i32 * i
+                + ((DOCK_SPACING - DOCK_ICON_SIZE) / 2) as i32
+        };
 
-        let term_icon = Rect::new(start_x, icon_y, DOCK_ICON_SIZE, DOCK_ICON_SIZE);
-        let files_icon = Rect::new(
-            start_x + DOCK_SPACING as i32,
-            icon_y,
-            DOCK_ICON_SIZE,
-            DOCK_ICON_SIZE,
-        );
-        let settings_icon = Rect::new(
-            start_x + DOCK_SPACING as i32 * 2,
-            icon_y,
-            DOCK_ICON_SIZE,
-            DOCK_ICON_SIZE,
-        );
+        let term_icon = Rect::new(icon_x(0), icon_y, DOCK_ICON_SIZE, DOCK_ICON_SIZE);
+        let files_icon = Rect::new(icon_x(1), icon_y, DOCK_ICON_SIZE, DOCK_ICON_SIZE);
+        let settings_icon = Rect::new(icon_x(2), icon_y, DOCK_ICON_SIZE, DOCK_ICON_SIZE);
 
         // Dock icon data for unified iteration
         let app_icons: [(NativeAppKind, Rect, Color, &str); 3] = [
@@ -291,12 +295,12 @@ impl NativeShell {
             );
 
             // Label
-            Self::draw_label(
+            Self::draw_label_centered(
                 display,
                 clip,
                 font,
                 label,
-                icon_rect.left(),
+                icon_cx,
                 icon_rect.bottom() + 2,
                 text_color,
             );
@@ -311,55 +315,6 @@ impl NativeShell {
                 // Running app: dot • below icon
                 Self::draw_dot(display, clip, dot_cx, dot_cy, 3, icon_color);
             }
-        }
-
-        if show_welcome {
-            let panel_w = cmp::min(screen.width().saturating_sub(64), 620);
-            let panel_h = cmp::min(screen.height().saturating_sub(96), 154);
-            let panel = Rect::new(
-                screen.left() + (screen.width().saturating_sub(panel_w) / 2) as i32,
-                screen.top() + (screen.height().saturating_sub(panel_h) / 2) as i32,
-                panel_w,
-                panel_h,
-            );
-            Self::draw_rect(display, clip, panel, Color::rgb(0x20, 0x2A, 0x38));
-            Self::draw_border_rect(display, clip, panel, Color::rgb(0x90, 0xA4, 0xB8), 1);
-            Self::draw_label(
-                display,
-                clip,
-                font,
-                "Ziqa Native Desktop",
-                panel.left() + 20,
-                panel.top() + 20,
-                Color::rgb(0xE7, 0xE7, 0xE7),
-            );
-            Self::draw_label(
-                display,
-                clip,
-                font,
-                "Orbital renderer is now the Ziqa GUI shell.",
-                panel.left() + 20,
-                panel.top() + 52,
-                Color::rgb(0xB8, 0xC7, 0xD6),
-            );
-            Self::draw_label(
-                display,
-                clip,
-                font,
-                "No Redox launcher, inputd, or namespace server is required here.",
-                panel.left() + 20,
-                panel.top() + 78,
-                Color::rgb(0xB8, 0xC7, 0xD6),
-            );
-            Self::draw_label(
-                display,
-                clip,
-                font,
-                "Click Terminal, Files, or Settings in the dock.",
-                panel.left() + 20,
-                panel.top() + 104,
-                Color::rgb(0x8E, 0xA7, 0xC2),
-            );
         }
     }
 
@@ -488,6 +443,10 @@ impl NativeShell {
                 input: String::new(),
             },
         );
+    }
+
+    pub fn remove_app(&mut self, id: WindowId) {
+        self.apps.remove(&id);
     }
 
     pub fn has_app(&self, id: WindowId) -> bool {
@@ -678,15 +637,40 @@ impl NativeShell {
         y: i32,
         color: Color,
     ) {
-        // Cheap reject before `font.render()`: cursor damage is usually a tiny
-        // rect nowhere near desktop labels. Rendering every label for every
-        // mouse move allocates images and makes the cursor lag badly.
-        let approx = Rect::new(x, y, (text.len() as u32).saturating_mul(16), 22);
-        if clip.intersection(&approx).is_empty() {
+        let rough_rect = Rect::new(
+            x,
+            y,
+            (text.len() as u32).saturating_mul(12).saturating_add(32),
+            32,
+        );
+        if clip.intersection(&rough_rect).is_empty() {
             return;
         }
 
         let label = font.render(text, 16.0);
+        let mut image = Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
+        image.mode().set(Mode::Overwrite);
+        label.draw(&mut image, 0, 0, color);
+        let label_rect = Rect::new(x, y, image.width(), image.height());
+        let clipped = clip.intersection(&label_rect);
+        if !clipped.is_empty() {
+            display
+                .roi_mut(&clipped)
+                .blend(&image.roi(&clipped.translate(-label_rect.left(), -label_rect.top())));
+        }
+    }
+
+    fn draw_label_centered(
+        display: &mut Display,
+        clip: &Rect,
+        font: &Font,
+        text: &str,
+        center_x: i32,
+        y: i32,
+        color: Color,
+    ) {
+        let label = font.render(text, 16.0);
+        let x = center_x - label.width() as i32 / 2;
         let mut image = Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
         image.mode().set(Mode::Overwrite);
         label.draw(&mut image, 0, 0, color);
@@ -738,14 +722,20 @@ impl NativeShell {
     /// Size should be odd (3 or 5). With size=5 it's a clear diamond ◆.
     fn draw_diamond(display: &mut Display, clip: &Rect, cx: i32, cy: i32, size: u32, color: Color) {
         let half = (size / 2) as i32;
-        for row in 0..size as i32 {
+        let top = cy - half;
+        let row_start = (clip.top() - top).max(0).min(size as i32);
+        let row_end = (clip.bottom() - top).max(0).min(size as i32);
+        if row_start >= row_end {
+            return;
+        }
+        for row in row_start..row_end {
             let offset = if row <= half { half - row } else { row - half };
             let line_w = (size as i32) - offset * 2;
             if line_w > 0 {
                 Self::draw_rect(
                     display,
                     clip,
-                    Rect::new(cx - half + offset, cy - half + row, line_w as u32, 1),
+                    Rect::new(cx - half + offset, top + row, line_w as u32, 1),
                     color,
                 );
             }
@@ -754,5 +744,26 @@ impl NativeShell {
 
     pub fn app_kind_for_window(&self, id: WindowId) -> Option<NativeAppKind> {
         self.apps.get(&id).map(|a| a.kind)
+    }
+
+    pub fn window_for_app(&self, kind: NativeAppKind) -> Option<WindowId> {
+        self.apps
+            .iter()
+            .find_map(|(&id, app)| (app.kind == kind).then_some(id))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::workspace_rect;
+    use orbclient::rect::Rect;
+
+    #[test]
+    fn workspace_rect_reserves_shell_chrome() {
+        let rect = workspace_rect(&Rect::new(0, 0, 1280, 960));
+        assert_eq!(rect.left(), 0);
+        assert_eq!(rect.top(), 32);
+        assert_eq!(rect.width(), 1280);
+        assert_eq!(rect.height(), 872);
     }
 }

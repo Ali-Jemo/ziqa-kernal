@@ -3,6 +3,12 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# Ensure the rustup-managed nightly toolchain is used. On systems where the
+# distro cargo/rustc (/usr/bin) shadows rustup's (~/.cargo/bin), the stable
+# compiler is picked up instead and the no_std kernel build fails with
+# "can't find crate for core" (missing -Z build-std support).
+export PATH="$HOME/.cargo/bin:$PATH"
+hash -r
 
 BOOTIMAGE="target/x86_64-unknown-none/release/bootimage-ziqa-kernel.bin"
 DISK="disk.img"

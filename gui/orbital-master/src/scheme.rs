@@ -234,10 +234,83 @@ impl OrbitalScheme {
         }
     }
 
+    fn focus_window(&mut self, id: WindowId) {
+        if let Some(old_id) = self.order.focused() {
+            if old_id != id {
+                self.focus(old_id, false);
+            }
+        }
+
+        let can_focus = self
+            .windows
+            .get(&id)
+            .map_or(false, |window| window.zorder != WindowZOrder::Back);
+        if can_focus {
+            self.order.make_focused(id);
+        }
+
+        if let Some(new_focused_id) = self.order.focused() {
+            self.focus(new_focused_id, true);
+        }
+    }
+
+    fn focus_next_visible_window(&mut self) {
+        let next_id = self.order.focus_order().find(|id| {
+            self.windows
+                .get(id)
+                .map_or(false, |window| !window.hidden && window.zorder != WindowZOrder::Back)
+        });
+
+        if let Some(id) = next_id {
+            self.focus_window(id);
+        } else if let Some(old_id) = self.order.focused() {
+            self.focus(old_id, false);
+        }
+    }
+
+    fn minimize_window(&mut self, id: WindowId) {
+        let was_focused = self.order.focused() == Some(id);
+        let Some(window) = self.windows.get_mut(&id) else {
+            return;
+        };
+
+        Self::update_window(&mut self.compositor, window, |_compositor, window| {
+            window.hidden = true;
+            if was_focused {
+                window.event(FocusEvent { focused: false }.to_event());
+            }
+        });
+
+        if was_focused {
+            self.focus_next_visible_window();
+        }
+        self.mouse_event(MouseEvent {
+            x: self.cursor_x,
+            y: self.cursor_y,
+        });
+    }
+
+    fn restore_or_focus_window(&mut self, id: WindowId) {
+        let Some(window) = self.windows.get_mut(&id) else {
+            return;
+        };
+
+        if window.hidden {
+            Self::update_window(&mut self.compositor, window, |_compositor, window| {
+                window.hidden = false;
+            });
+        }
+
+        self.focus_window(id);
+        self.mouse_event(MouseEvent {
+            x: self.cursor_x,
+            y: self.cursor_y,
+        });
+    }
+
     fn update_cursor(&mut self, x: i32, y: i32, kind: CursorKind) {
         self.cursor_x = x;
         self.cursor_y = y;
-
         // Wire nucleus cursor mode from hit testing + button state.
         // ponytail: pressed takes priority over hover; resize modes keep their kind.
         #[cfg(feature = "ziqa-bga-direct")]
@@ -463,9 +536,15 @@ impl OrbitalScheme {
                 window.restore.is_some()
             };
             if toggle_tile {
+                #[cfg(feature = "ziqa-bga-direct")]
+                let is_native = self.native_shell.has_app(id);
+                #[cfg(not(feature = "ziqa-bga-direct"))]
+                let is_native = false;
+
                 Self::tile_window(
                     &mut self.compositor,
                     &mut self.windows,
+                    is_native,
                     id,
                     if flag == window::ORBITAL_FLAG_FULLSCREEN {
                         TilePosition::FullScreen
@@ -566,6 +645,9 @@ impl OrbitalScheme {
             self.compositor.schedule(window.rect());
         }
 
+        #[cfg(feature = "ziqa-bga-direct")]
+        self.native_shell.remove_app(id);
+
         // Focus current front window
         if let Some(id) = self.order.focused() {
             self.focus(id, true);
@@ -627,8 +709,19 @@ impl OrbitalScheme {
     pub fn is_dirty(&self) -> bool {
         self.compositor.is_dirty()
     }
+    // PROF-TEMP: phase-bucket classifiers for the run loop
+    #[cfg(feature = "ziqa-bga-direct")]
+    pub fn is_dragging(&self) -> bool {
+        !matches!(self.dragging, DragMode::None)
+    }
+    #[cfg(feature = "ziqa-bga-direct")]
+    pub fn screen_area(&self) -> u64 {
+        let r = self.compositor.screen_rect();
+        (r.width() as u64) * (r.height() as u64)
+    }
 
     pub fn redraw(&mut self) {
+        let _prof_t0 = crate::prof::tsc(); // PROF-TEMP
         self.resize_if_necessary();
 
         self.fps_widget.start_measure();
@@ -695,6 +788,8 @@ impl OrbitalScheme {
             .focused()
             .and_then(|id| self.native_shell.app_kind_for_window(id));
 
+        // PROF-TEMP: end of pre-phase (resize/fps/rezbuffer/OSD/title/running_apps)
+        let _prof_pre = crate::prof::since(_prof_t0);
         self.compositor.redraw(|display, rect| {
             #[cfg(feature = "ziqa-bga-direct")]
             let background = if self.windows.is_empty() {
@@ -707,79 +802,39 @@ impl OrbitalScheme {
             display.rect(&rect, background);
 
             #[cfg(feature = "ziqa-bga-direct")]
-            self.native_shell.draw_desktop(
-                display,
-                &rect,
-                &screen_rect,
-                &self.font,
-                &self.config,
-                self.windows.is_empty(),
-                self.cursor_x,
-                self.cursor_y,
-                &focused_title,
-                &running_apps,
-                focused_app_kind,
-            );
+            {
+                // PROF-TEMP: isolate desktop chrome (bar/dock/labels + font.render)
+                let _c = crate::prof::tsc();
+                self.native_shell.draw_desktop(
+                    display,
+                    &rect,
+                    &screen_rect,
+                    &self.font,
+                    &self.config,
+                    self.cursor_x,
+                    self.cursor_y,
+                    &focused_title,
+                    &running_apps,
+                    focused_app_kind,
+                );
+                crate::prof::add_chrome(crate::prof::since(_c));
+            }
 
+            // Render native_shell app content into window image buffers before
+            // compositing them onto the display.
             #[cfg(feature = "ziqa-bga-direct")]
-            if self.windows.is_empty() {
-                let panel_w = cmp::min(screen_rect.width().saturating_sub(64), 460);
-                let panel_h = cmp::min(screen_rect.height().saturating_sub(96), 128);
-                let panel = Rect::new(
-                    screen_rect.left() + (screen_rect.width().saturating_sub(panel_w) / 2) as i32,
-                    screen_rect.top() + (screen_rect.height().saturating_sub(panel_h) / 2) as i32,
-                    panel_w,
-                    panel_h,
-                );
-                let panel_clip = rect.intersection(&panel);
-                if !panel_clip.is_empty() {
-                    display.rect(&panel_clip, Color::rgb(0x20, 0x2A, 0x38));
-                }
-                let border_color = Color::rgb(0x90, 0xA4, 0xB8);
-                for border in [
-                    Rect::new(panel.left(), panel.top(), panel.width(), 1),
-                    Rect::new(panel.left(), panel.bottom() - 1, panel.width(), 1),
-                    Rect::new(panel.left(), panel.top(), 1, panel.height()),
-                    Rect::new(panel.right() - 1, panel.top(), 1, panel.height()),
-                ] {
-                    let clipped = rect.intersection(&border);
-                    if !clipped.is_empty() {
-                        display.rect(&clipped, border_color);
+            {
+                let native_ids: Vec<WindowId> = self
+                    .order
+                    .iter_back_to_front()
+                    .filter(|(id, _)| self.native_shell.has_app(*id))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in native_ids {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        self.native_shell.render_app(id, window, &self.font);
                     }
                 }
-
-                let mut draw_label = |text: &str, x: i32, y: i32, color: Color| {
-                    let label = self.font.render(text, 16.0);
-                    let mut image =
-                        Image::from_color(label.width(), label.height(), Color::rgba(0, 0, 0, 0));
-                    image.mode().set(orbclient::Mode::Overwrite);
-                    label.draw(&mut image, 0, 0, color);
-                    let label_rect = Rect::new(x, y, image.width(), image.height());
-                    let clipped = rect.intersection(&label_rect);
-                    if !clipped.is_empty() {
-                        display.roi_mut(&clipped).blend(
-                            &image.roi(&clipped.translate(-label_rect.left(), -label_rect.top())),
-                        );
-                    }
-                };
-                draw_label(
-                    "Ziqa Orbital",
-                    panel.left() + 20,
-                    panel.top() + 20,
-                    Color::rgb(0xE7, 0xE7, 0xE7),
-                );
-                draw_label(
-                    "desktop active — launch orblauncher/file-manager/terminal",
-                    panel.left() + 20,
-                    panel.top() + 52,
-                    Color::rgb(0xB8, 0xC7, 0xD6),
-                );
-                draw_label(
-                    "namespace ✓  input ✓  terminal (mount /bin/terminal)",
-                    panel.left() + 20,
-                    panel.top() + 78,
-                    Color::rgb(0xB8, 0xC7, 0xD6),
-                );
             }
 
             for (id, focused) in self.order.iter_back_to_front() {
@@ -818,6 +873,9 @@ impl OrbitalScheme {
                 )));
             }
         });
+        // PROF-TEMP: publish pre-phase timing (resize/fps/rezbuffer/OSD/title/running_apps)
+        #[cfg(feature = "ziqa-bga-direct")]
+        crate::prof::add_pre(_prof_pre);
 
         self.fps_widget.end_measure();
     }
@@ -1160,13 +1218,19 @@ impl OrbitalScheme {
     /// Tile the focused window to a defined position.
     fn tile_focused_window(&mut self, position: TilePosition) {
         if let Some(id) = self.order.focused() {
-            Self::tile_window(&mut self.compositor, &mut self.windows, id, position);
+            #[cfg(feature = "ziqa-bga-direct")]
+            let is_native = self.native_shell.has_app(id);
+            #[cfg(not(feature = "ziqa-bga-direct"))]
+            let is_native = false;
+
+            Self::tile_window(&mut self.compositor, &mut self.windows, is_native, id, position);
         }
     }
 
     fn tile_window(
         compositor: &mut Compositor,
         windows: &mut BTreeMap<WindowId, Window>,
+        is_native: bool,
         window_id: WindowId,
         position: TilePosition,
     ) {
@@ -1181,7 +1245,14 @@ impl OrbitalScheme {
                         let window_rect = if matches!(position, TilePosition::FullScreen) {
                             screen_rect
                         } else {
-                            compositor.get_window_rect_from_screen_rect(&screen_rect)
+                            #[cfg(feature = "ziqa-bga-direct")]
+                            {
+                                crate::native_shell::workspace_rect(&screen_rect)
+                            }
+                            #[cfg(not(feature = "ziqa-bga-direct"))]
+                            {
+                                compositor.get_window_rect_from_screen_rect(&screen_rect)
+                            }
                         };
                         let top = window_rect.top() + window.title_rect().iheight();
                         let left = window_rect.left();
@@ -1220,7 +1291,11 @@ impl OrbitalScheme {
                 window.y = y;
                 window.event(MoveEvent { x, y }.to_event());
 
-                window.event(ResizeEvent { width, height }.to_event());
+                if is_native {
+                    window.set_size(width, height);
+                } else {
+                    window.event(ResizeEvent { width, height }.to_event());
+                }
             });
         }
     }
@@ -1305,6 +1380,18 @@ impl OrbitalScheme {
         // send non-Super key events to the front window
         if self.modifier_state & SUPER_MODIFIER == 0 {
             if let Some(id) = self.order.focused() {
+                // Native apps handle keys in-process (no client reads the queue).
+                #[cfg(feature = "ziqa-bga-direct")]
+                if self.native_shell.has_app(id) {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        if self.native_shell.handle_key(id, event, window, &self.font) {
+                            if let Some(w) = self.windows.get(&id) {
+                                self.compositor.schedule(w.rect());
+                            }
+                        }
+                    }
+                    return;
+                }
                 if let Some(window) = self.windows.get_mut(&id) {
                     // TODO: ALT GR mapping is not handled
                     if event.pressed
@@ -1678,6 +1765,8 @@ impl OrbitalScheme {
         match self.dragging {
             DragMode::None => {
                 let mut focus = WindowId(0);
+                let mut close_id: Option<WindowId> = None;
+                let mut minimize_id: Option<WindowId> = None;
                 for id in self.order.iter_front_to_back() {
                     if let Some(window) = self.windows.get(&id) {
                         if window.rect().contains(self.cursor_x, self.cursor_y) {
@@ -1700,21 +1789,35 @@ impl OrbitalScheme {
                         } else if window.title_rect().contains(self.cursor_x, self.cursor_y) {
                             //TODO: Trigger max and exit on release
                             if event.left && !self.cursor_left {
+                                let hit_min = window.min_contains(self.cursor_x, self.cursor_y);
+                                let hit_max =
+                                    window.max_contains(self.cursor_x, self.cursor_y) && window.resizable;
+                                let hit_close = window.close_contains(self.cursor_x, self.cursor_y)
+                                    && !window.unclosable;
                                 focus = id;
-                                if (window.max_contains(self.cursor_x, self.cursor_y))
-                                    && (window.resizable)
-                                {
+                                if hit_min {
+                                    minimize_id = Some(id);
+                                    focus = WindowId(0);
+                                } else if hit_max {
+                                    #[cfg(feature = "ziqa-bga-direct")]
+                                    let is_native = self.native_shell.has_app(id);
+                                    #[cfg(not(feature = "ziqa-bga-direct"))]
+                                    let is_native = false;
+
                                     Self::tile_window(
                                         &mut self.compositor,
                                         &mut self.windows,
+                                        is_native,
                                         id,
                                         TilePosition::Maximized,
                                     );
-                                } else if (window.close_contains(self.cursor_x, self.cursor_y))
-                                    && (!window.unclosable)
-                                {
+                                } else if hit_close {
                                     if let Some(window) = self.windows.get_mut(&id) {
                                         window.event(QuitEvent.to_event());
+                                    }
+                                    #[cfg(feature = "ziqa-bga-direct")]
+                                    if self.native_shell.has_app(id) {
+                                        close_id = Some(id);
                                     }
                                 } else {
                                     self.dragging =
@@ -1771,6 +1874,10 @@ impl OrbitalScheme {
                     }
                 }
 
+                if let Some(id) = minimize_id {
+                    self.minimize_window(id);
+                }
+
                 if focus.0 > 0 {
                     // Redraw old focused window
                     if let Some(id) = self.order.focused() {
@@ -1787,6 +1894,41 @@ impl OrbitalScheme {
                     if let Some(id) = self.order.focused() {
                         self.focus(id, true);
                     }
+                }
+
+                // Dock icon click → restore/focus a running native app, or launch it.
+                #[cfg(feature = "ziqa-bga-direct")]
+                if focus.0 == 0 && event.left && !self.cursor_left {
+                    let screen = self.compositor.screen_rect();
+                    if let crate::native_shell::ShellAction::Launch(kind) =
+                        self.native_shell.hit_test(self.cursor_x, self.cursor_y, &screen)
+                    {
+                        if let Some(existing_id) = self.native_shell.window_for_app(kind) {
+                            self.restore_or_focus_window(existing_id);
+                        } else {
+                            let (w, h, title) = match kind {
+                                crate::native_shell::NativeAppKind::Terminal => {
+                                    (600, 400, "Terminal")
+                                }
+                                crate::native_shell::NativeAppKind::Files => {
+                                    (500, 350, "Files")
+                                }
+                                crate::native_shell::NativeAppKind::Settings => {
+                                    (400, 300, "Settings")
+                                }
+                            };
+                            if let Ok(id) = self.window_new(-1, -1, w, h, "r", title.to_string()) {
+                                self.native_shell.register_app(id, kind);
+                            }
+                        }
+                    }
+                }
+
+                // Close native app windows immediately (no client to read QuitEvent).
+                if let Some(id) = close_id {
+                    #[cfg(feature = "ziqa-bga-direct")]
+                    self.native_shell.remove_app(id);
+                    self.handle_window_close(id);
                 }
             }
             _ => {

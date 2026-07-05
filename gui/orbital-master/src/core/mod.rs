@@ -166,15 +166,20 @@ impl Orbital {
             let mut events = [orbclient::Event::new(); 16];
             let mut coalesced = [orbclient::Event::new(); 512];
 
-            // ponytail: software frame pacing. BGA exposes no vsync/pageflip IRQ, so the
-            // old `sleep(16ms)` after redraw made the period = redraw_time + 16ms (irregular
-            // sub-60 judder). Compensating for elapsed redraw time holds the period at the
-            // target. Idle (no input, no damage) drops to ~10Hz to save CPU.
-            let input_frame = std::time::Duration::from_nanos(8_333_333); // ~120 Hz while input is flowing
+            // ponytail: software frame pacing. BGA exposes no vsync/pageflip IRQ, so hold a
+            // steady 60 Hz while input or damage is active and coalesce extra mouse packets.
+            // Trying to paint mouse input at 120 Hz just doubles framebuffer work on QEMU.
+            // Idle (no input, no damage) drops to ~10Hz to save CPU.
+            let input_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz while input is flowing
             let active_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz dirty redraw without input
             let idle_frame = std::time::Duration::from_millis(100); // ~10 Hz idle
+            // PROF-TEMP: record full-screen area for dirty/screen ratio reporting
+            crate::prof::set_screen_area(me.handler.screen_area());
+            // PROF-TEMP: calibrate TSC->us using a 100ms sleep (Instant is ~1s-granular here)
+            crate::prof::calibrate();
             loop {
                 let frame_start = std::time::Instant::now();
+                let _ft0 = crate::prof::tsc(); // PROF-TEMP: frame work-interval TSC origin
                 // Drain the whole kernel input ring once per frame. Reading only
                 // 16 events per 16 ms lets high-rate mouse input build a permanent
                 // backlog; then clicks/keys arrive late and the GUI feels frozen.
@@ -215,12 +220,25 @@ impl Orbital {
                         n += 1;
                     }
                 }
+                let _prof_in = crate::prof::tsc(); // PROF-TEMP
                 let had_input = n > 0;
                 if had_input {
                     me.handler.handle_input(&coalesced[..n]);
                 }
+                let _prof_input_us = crate::prof::since(_prof_in); // PROF-TEMP
                 let dirty = me.handler.is_dirty();
                 me.handler.redraw();
+                // PROF-TEMP: fold this frame into its phase bucket (idle=0/move=1/drag=2)
+                let _prof_total_us = crate::prof::since(_ft0); // PROF-TEMP
+                let _prof_bucket = if me.handler.is_dragging() {
+                    2
+                } else if had_input {
+                    1
+                } else {
+                    0
+                };
+                crate::prof::commit(_prof_bucket, _prof_total_us, _prof_input_us);
+                crate::prof::maybe_flush();
                 let target = if had_input {
                     input_frame
                 } else if dirty {

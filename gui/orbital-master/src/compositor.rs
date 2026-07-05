@@ -352,10 +352,20 @@ impl Compositor {
         let raw_cursor_rect = self.cursor_rect();
         let redraws = std::mem::take(&mut self.redraws);
 
+        // PROF-TEMP: per-frame sub-phase accumulators (microseconds)
+        let mut dw_us: u64 = 0;
+        let mut cur_us: u64 = 0;
+        let mut syn_us: u64 = 0;
+        let mut dirty_area: u64 = 0;
+        let mut rect_count: u32 = 0;
+
         for original_rect in redraws {
             if original_rect.is_empty() {
                 continue;
             }
+            // PROF-TEMP: dirty scope (rects are already screen-clipped by schedule)
+            rect_count += 1;
+            dirty_area += (original_rect.width() as u64) * (original_rect.height() as u64);
 
             for (i, display) in self.displays.displays.iter_mut().enumerate() {
                 let screen = display.screen_rect();
@@ -363,11 +373,17 @@ impl Compositor {
                     continue;
                 };
 
+                // PROF-TEMP: time the window-compositing closure
+                let _t = crate::prof::tsc();
                 draw_windows(display, rect);
+                dw_us += crate::prof::since(_t);
 
                 if let Some(cursor_rect) = Self::clip_rect_to_rect(&raw_cursor_rect, &screen) {
                     if Self::clip_rect_to_rect(&cursor_rect, &rect).is_some() {
+                        // PROF-TEMP: time software cursor overlay redraw
+                        let _t = crate::prof::tsc();
                         Self::draw_cursor_overlay(display, &rect, self.cursor_x, self.cursor_y);
+                        cur_us += crate::prof::since(_t);
                     }
                 }
 
@@ -375,14 +391,25 @@ impl Compositor {
                     const DAMAGE_COLOR: Color = Color::rgba(255, 0, 255, 80);
                     display.border_rect(&rect, DAMAGE_COLOR, 2);
                 }
+                // PROF-TEMP: time the BGA backbuffer->scanout flush
+                let _t = crate::prof::tsc();
                 match display.sync_rect(&(), &rect) {
                     Ok(()) => (),
                     Err(err) => error!("failed to sync display {}: {}", i, err),
                 }
+                syn_us += crate::prof::since(_t);
             }
+        }
+
+        // PROF-TEMP: publish this frame's compositor breakdown (no-op when idle)
+        if rect_count > 0 {
+            crate::prof::add_drawwin(dw_us);
+            crate::prof::add_cursor(cur_us);
+            crate::prof::add_sync(syn_us, dirty_area, rect_count);
         }
     }
 
+    #[cfg(not(feature = "ziqa-bga-direct"))]
     fn redraw_windows(&mut self, mut draw_windows: impl FnMut(&mut Display, Rect)) -> Option<Rect> {
         let mut total_redraw_opt: Option<Rect> = None;
 
@@ -410,6 +437,7 @@ impl Compositor {
         total_redraw_opt
     }
 
+    #[cfg(not(feature = "ziqa-bga-direct"))]
     fn redraw_cursor(&mut self, total_redraw: Option<Rect>) {
         #[cfg(feature = "ziqa-bga-direct")]
         {
@@ -483,6 +511,7 @@ impl Compositor {
         }
     }
 
+    #[cfg(not(feature = "ziqa-bga-direct"))]
     pub fn sync_rect(&mut self, total_redraw: Rect) {
         // Sync any parts of displays that changed
         for (i, display) in self.displays.displays.iter_mut().enumerate() {

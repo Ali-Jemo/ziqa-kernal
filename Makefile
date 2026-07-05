@@ -3,6 +3,8 @@
 SHELL := /bin/zsh
 
 .PHONY: build run run-gui run-headless run-vnc clean test profile fat-disk
+# Ensure rustup nightly is used (distro cargo/rustc may shadow it).
+export PATH := $(HOME)/.cargo/bin:$(PATH)
 
 # Build targets
 TARGET := x86_64-unknown-none
