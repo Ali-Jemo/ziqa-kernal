@@ -100,9 +100,9 @@ The Zig build file defines how Zig components are compiled and linked into the k
 
 The `Cargo.toml` defines the Rust project structure:
 
-- **Package name**: `my_os` (the kernel crate)
-- **Edition**: 2021
-- **Dependencies**: Includes `bootloader`, `x86_64`, `uart_16550`, `lazy_static`, `spin`, `pic8259`, `pc-keyboard`, `linked_list_allocator`, and others.
+- **Package name**: `ziqa-kernel` (the kernel crate)
+- **Edition**: 2024
+- **Dependencies**: Includes `bootloader`, `x86_64`, `uart_16550`, `lazy_static`, `spin`, `pic8259`, `pc-keyboard`, `linked_list_allocator`, `rmm`, `virtio-drivers`, and others.
 - **Profile**: Custom release profile for kernel binary size optimization.
 - **Dependencies**: Various crates for OS development including:
   - `bootloader` - for creating bootable kernel images
