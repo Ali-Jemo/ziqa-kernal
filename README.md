@@ -5,6 +5,13 @@ An experimental bare-metal operating-system kernel for `x86_64` written in Rust 
 > [!WARNING]
 > **Experimental Sandbox:** Not production-ready. Active architecture lab for exploring OS design.
 
+## Project Status
+
+![Rust Nightly](https://img.shields.io/badge/rust-nightly-orange?logo=rust)
+![Zig](https://img.shields.io/badge/zig-★-gold?logo=zig)
+![x86_64](https://img.shields.io/badge/arch-x86__64-purple)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 ## Features
 
 - **Pluggable ABI:** Supports Linux and WASM ABI plugins.
