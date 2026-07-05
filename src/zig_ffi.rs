@@ -10,8 +10,9 @@ unsafe extern "C" {
 
     fn zig_blit_bitmap(
         dst: *mut u8,
-        pitch: u32,
+        dst_pitch: u32,
         src: *const u8,
+        src_pitch: u32,
         sx: u32,
         sy: u32,
         sw: u32,
@@ -169,12 +170,13 @@ pub extern "C" fn ziqa_syscall(num: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5:
 pub unsafe fn fill_rect(fb: *mut u8, pitch: u32, x: u32, y: u32, w: u32, h: u32, color: u32) {
     unsafe { zig_fill_rect(fb, pitch, x, y, w, h, color) }
 }
-
 /// Copy a rectangular sprite from `src` to `dst` framebuffer.
+/// `dst_pitch` and `src_pitch` are the byte stride per row of each buffer.
 pub unsafe fn blit_bitmap(
     dst: *mut u8,
-    pitch: u32,
+    dst_pitch: u32,
     src: *const u8,
+    src_pitch: u32,
     sx: u32,
     sy: u32,
     sw: u32,
@@ -182,7 +184,7 @@ pub unsafe fn blit_bitmap(
     dx: u32,
     dy: u32,
 ) {
-    unsafe { zig_blit_bitmap(dst, pitch, src, sx, sy, sw, sh, dx, dy) }
+    unsafe { zig_blit_bitmap(dst, dst_pitch, src, src_pitch, sx, sy, sw, sh, dx, dy) }
 }
 
 /// Scroll framebuffer up by `lines` rows, filling the bottom with `fill_color`.

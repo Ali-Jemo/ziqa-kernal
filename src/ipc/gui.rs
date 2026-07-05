@@ -19,6 +19,8 @@ pub enum OpCode {
     DestroySurface = 9,
     LowerSurface = 10,
     FocusNotify = 11,
+    SetWindowKind = 12,
+    SetCursorShape = 13,
 }
 
 #[repr(C)]
@@ -101,3 +103,15 @@ pub struct FocusNotifyMsg {
     pub focused_id: u32,
 }
 
+
+#[repr(C)]
+pub struct SetWindowKindMsg {
+    pub surface_id: u32,
+    pub kind: u8, // 0=Floating, 1=Tiled, 2=Dialog, 3=Popup
+}
+
+#[repr(C)]
+pub struct SetCursorShapeMsg {
+    pub surface_id: u32,
+    pub shape: u8, // 0=Default, 1=Text, 2=Hidden
+}

@@ -25,6 +25,9 @@ make boot && make run
 - **Capability-based Security:** Resource access managed via capabilities.
 - **Hybrid Architecture:** Rust kernel with Zig hot paths for performance.
 - **VFS System:** URL-based scheme resource system (Redox-inspired).
+- **Orbital GUI Compositor:** Full windowing system with TSC-based 60 Hz frame pacing.
+- **Visual Effects:** CRT scanline and vignette effects (toggle via Super+1 / Super+2).
+- **Performance Profiler:** Built-in per-frame instrumentation for compositor performance analysis.
 
 ## Architecture Highlights
 
@@ -114,11 +117,13 @@ The kernel provides several features for customization. The `default` feature se
 
 ## Troubleshooting
 
+- **Orbital build:** Requires `redoxer` or manual cargo-config management; `.cargo/config.toml` must be temporarily removed for host-side tool builds.
 - **QEMU locks:** If `make run` fails with write-lock errors, run `make kill-qemu` to clear zombie processes.
 - **Disk images:** If disk operations fail, run `make clean` and `make fat-disk` to rebuild the FAT32 disk image.
 
 ## Known Limitations
 
+- **Frame pacing:** Busy-spin used for precise 60 Hz timing when APIC timer granularity limits `thread::sleep()` resolution.
 - **Experimental ABI:** Syscall implementations are incomplete and subject to change.
 - **Hardware Support:** Driver support is limited to essential QEMU-emulated hardware.
 - **Stability:** The kernel is not hardened; expect panics during advanced feature testing.
@@ -130,6 +135,7 @@ Detailed documentation is available in the `conductor/` directory:
 - [Architecture Specs](conductor/docs/ARCHITECTURE_TARGET.md)
 - [Syscall ABI](conductor/SYSCALLS.md)
 - [Project Roadmap](conductor/ZIQA_KERNEL_ROADMAP.md)
+- [Changelog](conductor/docs/CHANGELOG.md)
 
 ## Contributing
 
@@ -148,6 +154,10 @@ If you encounter bugs, please open a GitHub issue with the following information
 ## Security
 
 This is an experimental OS. We do not have a formal security disclosure policy yet. If you find critical vulnerabilities, please open an issue or contact the maintainer directly.
+
+## Community & Support
+
+For questions or discussions, please open a GitHub issue. We appreciate community engagement.
 
 ## Acknowledgments
 

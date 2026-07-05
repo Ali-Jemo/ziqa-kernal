@@ -212,14 +212,15 @@ fn wait_icr_idle() {
     }
 }
 
-pub fn calibrate_timer(_pit_ticks_ms: u64) -> u32 {
+pub fn calibrate_timer(pit_ticks_ms: u64) -> u32 {
     write_lapic(LAPIC_TIMER_DIV, 0x03);
     write_lapic(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | (3 << 17));
     write_lapic(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
 
     // Spin delay for rough calibration. Cannot use PIT-based waiting
     // because TIMER.lock() deadlocks against the timer ISR.
-    for _ in 0..5_000_000 {
+    let loop_count = pit_ticks_ms * 500_000;
+    for _ in 0..loop_count {
         core::hint::spin_loop();
     }
 

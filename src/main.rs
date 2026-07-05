@@ -408,6 +408,7 @@ fn run_startup() {
 
     ziqa_kernel::boot_screen::show_boot_screen();
 }
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("\n[PANIC] {}", info);

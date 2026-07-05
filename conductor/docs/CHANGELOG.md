@@ -1,3 +1,24 @@
+# 2026-07-05 — Shell Architecture, Typed IDs, and Cursor States
+
+| Issue / Gap | Fix / Implementation |
+| :--- | :--- |
+| **Compositor raw keyboard forwarding** | Shifted keycode handling from raw passthrough to typed Event mapping in `keyboard.rs`. Decodes key modifiers and packs them into a single `AtomicU32` event preventing input drop. |
+| **Lack of shell keybinding control** | Added static keybindings for window control (Super+Q to close focused window, Super+Tab/Super+Shift+Tab to cycle focus, Super+F to toggle fullscreen). |
+| **Un-typed surface/SHM/IPC identifiers** | Replaced u32 identities with `SurfaceId`, `ShmId`, and `EventChannelId` newtypes to prevent ID mix-ups. |
+| **Low compositor/GUI frame rate** | Upgraded APIC timer tick frequency from 100Hz to 1000Hz (1ms resolution) by adjusting spin loop calibration count, allowing exact frame budget sleeps. |
+| **Frame damage not flushed to screen** | Kernel compositor's `composite()` cleared damage before main loop read it → cursor-only updates reached screen. Changed return type from `bool` to `Rect` to preserve damage. |
+| **Triple-buffer desync causing flicker** | Incorrect triple-buffering in `display_ziqa_bga.rs` alternated 3 out-of-sync buffers. Reverted to single-backbuffer design. |
+| **Instant::now() 1s granularity limits fps** | Replaced `std::time::Instant`-based frame pacing with TSC (RDTSC) calibrated busy-spin, targeting exact 60 Hz regardless of APIC timer tick resolution. |
+| **TSC calibration accuracy** | Extended calibration sleep from 100ms to 500ms for 5× better cycles-per-us measurement. |
+
+| Feature | Description |
+| :--- | :--- |
+| **Fullscreen Toggle & Window Rules** | Added VFS window kinds (Floating, Tiled, Dialog, Popup, Fullscreen). Compositor skips shadows for popups and supports saving/restoring geometry on Super+F. |
+| **Cursor Shape State Machine** | Added `CursorShape` support (Default, Text/I-beam, Hidden). Compositor auto-detects hover region to set text vs arrow cursors, damage-tracking both boundaries. |
+| **1ms Sleep Resolution** | Upgraded monotonic system clock (`TICKS_PER_SEC` = 1000) and `sleep_ms` resolution to 1ms to eliminate frame pacing caps. |
+
+---
+
 # 2026-06-20 — QEMU input ownership and BGA console fallback
 
 | Issue | Fix |

@@ -26,13 +26,13 @@ unsafe impl core::alloc::GlobalAlloc for TrackedAllocator {
     }}
 }
 
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 static ALLOCATOR: TrackedAllocator = TrackedAllocator(LockedHeap::empty());
-static mut EARLY_HEAP: [u8; 1048576] = [0; 1048576]; // 1 MiB
+static mut EARLY_HEAP: [u8; 262144] = [0; 262144]; // 256 KiB
 
 pub unsafe fn init_early_heap() { unsafe {
     let ptr = core::ptr::addr_of_mut!(EARLY_HEAP) as *mut u8;
-    ALLOCATOR.0.lock().init(ptr, 1048576);
+    ALLOCATOR.0.lock().init(ptr, 262144);
 }}
 
 pub fn init_heap(

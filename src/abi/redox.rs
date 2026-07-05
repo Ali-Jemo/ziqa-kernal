@@ -596,11 +596,12 @@ fn handle_fmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
             unsafe { crate::memory::paging::current_mapper() }
         }
     };
-
-    let flags = PageTableFlags::PRESENT
+    // ponytail: Write-Combining (WC) for framebuffer. Bit 7 = PAT in leaf PTEs.
+    // PAT index 1 (bit7=1,PCD=0,PWT=0) = WC. UC would trap every pixel write to QEMU.
+    // We map without HUGE_PAGE first (set_frame asserts it), then add PAT bit via update_flags.
+    let base_flags = PageTableFlags::PRESENT
         | PageTableFlags::WRITABLE
-        | PageTableFlags::USER_ACCESSIBLE
-        | PageTableFlags::NO_CACHE;
+        | PageTableFlags::USER_ACCESSIBLE;
 
     let mut fa_guard = crate::memory::FRAME_ALLOCATOR.lock();
     let fa = match fa_guard.as_mut() {
@@ -614,13 +615,23 @@ fn handle_fmap(ctx: &mut SyscallContext) -> Result<u64, AbiError> {
     for i in 0..page_count {
         let page = Page::<Size4KiB>::containing_address(user_start + (i * 4096) as u64);
         let frame = PhysFrame::containing_address(x86_64::PhysAddr::new(fb_phys + (i * 4096) as u64));
-        let result = unsafe { mapper.map_to(page, frame, flags, fa) };
+        let result = unsafe { mapper.map_to(page, frame, base_flags, fa) };
         match result {
             Ok(mapping) => mapping.flush(),
             Err(e) => {
                 println!("[SYS_FMAP] ERROR mapping page {}: {:?}", i, e);
                 return Ok(neg_errno(ERR_ENOMEM));
             }
+        }
+    }
+
+    // Set WC (PAT bit 7 = HUGE_PAGE flag) on all pages after mapping.
+    // In leaf PTEs, bit 7 is PAT[0], not the huge-page indicator.
+    let wc_flags = base_flags | PageTableFlags::HUGE_PAGE;
+    for i in 0..page_count {
+        let page = Page::<Size4KiB>::containing_address(user_start + (i * 4096) as u64);
+        if let Err(e) = unsafe { mapper.update_flags(page, wc_flags) } {
+            println!("[SYS_FMAP] WARNING: WC flag update failed for page {}: {:?}", i, e);
         }
     }
 

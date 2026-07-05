@@ -25,17 +25,13 @@ export fn zig_fill_rect(
     h: u32,
     color: u32,
 ) void {
-    const color_bytes: [4]u8 = @bitCast(color);
+    if (w == 0 or h == 0) return;
     var row: u32 = 0;
     while (row < h) : (row += 1) {
-        const row_start = pixelPtr(fb, pitch, x, y + row);
+        const row_start: [*]u32 = @alignCast(@ptrCast(pixelPtr(fb, pitch, x, y + row)));
         var col: u32 = 0;
         while (col < w) : (col += 1) {
-            const px: [*]u8 = row_start + @as(usize, col) * 4;
-            px[0] = color_bytes[0];
-            px[1] = color_bytes[1];
-            px[2] = color_bytes[2];
-            px[3] = color_bytes[3];
+            row_start[col] = color;
         }
     }
 }
@@ -47,8 +43,9 @@ export fn zig_fill_rect(
 /// from (sx, sy) in src to (dx, dy) in dst.
 export fn zig_blit_bitmap(
     dst: [*]u8,
-    pitch: u32,
+    dst_pitch: u32,
     src: [*]const u8,
+    src_pitch: u32,
     sx: u32,
     sy: u32,
     sw: u32,
@@ -56,19 +53,16 @@ export fn zig_blit_bitmap(
     dx: u32,
     dy: u32,
 ) void {
+    if (sw == 0 or sh == 0) return;
     var row: u32 = 0;
     while (row < sh) : (row += 1) {
-        const src_offset: usize = @as(usize, sy + row) * @as(usize, pitch) + @as(usize, sx) * 4;
-        const dst_offset: usize = @as(usize, dy + row) * @as(usize, pitch) + @as(usize, dx) * 4;
-        const byte_count: usize = @as(usize, sw) * 4;
-
-        const src_row: [*]const u8 = src + src_offset;
-        const dst_row: [*]u8 = dst + dst_offset;
-
-        // Manual copy — no libc available
-        var i: usize = 0;
-        while (i < byte_count) : (i += 1) {
-            dst_row[i] = src_row[i];
+        const src_row: [*]const u32 = @alignCast(@ptrCast(
+            src + @as(usize, sy + row) * src_pitch + @as(usize, sx) * 4));
+        const dst_row: [*]u32 = @alignCast(@ptrCast(
+            dst + @as(usize, dy + row) * dst_pitch + @as(usize, dx) * 4));
+        var col: u32 = 0;
+        while (col < sw) : (col += 1) {
+            dst_row[col] = src_row[col];
         }
     }
 }
@@ -86,40 +80,34 @@ export fn zig_scroll_up(
     fill_color: u32,
 ) void {
     if (lines >= h) {
-        // Just clear the whole thing
         zig_clear(fb, @as(usize, pitch) * @as(usize, h), fill_color);
         return;
     }
-
-    // Move rows up
-    const clamped_lines = if (lines > h) h else lines;
+    // Move rows up — word-level copy
     var dst_y: u32 = 0;
-    var src_y: u32 = clamped_lines;
+    var src_y: u32 = lines;
     while (src_y < h) : ({
         dst_y += 1;
         src_y += 1;
     }) {
-        const src_row: [*]const u8 = fb + @as(usize, src_y) * @as(usize, pitch);
-        const dst_row: [*]u8 = fb + @as(usize, dst_y) * @as(usize, pitch);
-        const row_bytes: usize = @as(usize, w) * 4;
-        var i: usize = 0;
-        while (i < row_bytes) : (i += 1) {
+        const src_row: [*]const u32 = @alignCast(@ptrCast(
+            fb + @as(usize, src_y) * pitch));
+        const dst_row: [*]u32 = @alignCast(@ptrCast(
+            fb + @as(usize, dst_y) * pitch));
+        var i: u32 = 0;
+        while (i < w) : (i += 1) {
             dst_row[i] = src_row[i];
         }
     }
-
-    // Fill bottom rows
-    const fill_bytes: [4]u8 = @bitCast(fill_color);
-    var fy: u32 = h - clamped_lines;
+    // Fill bottom rows — word-level fill
+    const fill_rows_start = h - lines;
+    var fy: u32 = fill_rows_start;
     while (fy < h) : (fy += 1) {
-        const row_ptr = fb + @as(usize, fy) * @as(usize, pitch);
+        const row: [*]u32 = @alignCast(@ptrCast(
+            fb + @as(usize, fy) * pitch));
         var fx: u32 = 0;
         while (fx < w) : (fx += 1) {
-            const px: [*]u8 = row_ptr + @as(usize, fx) * 4;
-            px[0] = fill_bytes[0];
-            px[1] = fill_bytes[1];
-            px[2] = fill_bytes[2];
-            px[3] = fill_bytes[3];
+            row[fx] = fill_color;
         }
     }
 }
@@ -129,15 +117,11 @@ export fn zig_scroll_up(
 /// Clear `size` bytes of framebuffer with a repeating 32-bit color value.
 /// `size` should be the total framebuffer size in bytes (pitch * height).
 export fn zig_clear(fb: [*]u8, size: usize, color: u32) void {
-    const color_bytes: [4]u8 = @bitCast(color);
     const pixel_count = size / 4;
+    const words: [*]u32 = @alignCast(@ptrCast(fb));
     var i: usize = 0;
     while (i < pixel_count) : (i += 1) {
-        const px: [*]u8 = fb + i * 4;
-        px[0] = color_bytes[0];
-        px[1] = color_bytes[1];
-        px[2] = color_bytes[2];
-        px[3] = color_bytes[3];
+        words[i] = color;
     }
 }
 
@@ -155,9 +139,21 @@ export fn zig_memset32(dst: [*]u32, val: u32, count: usize) void {
 
 /// Copy `len` bytes from `src` to `dst`. No overlap handling.
 export fn zig_memcpy(dst: [*]u8, src: [*]const u8, len: usize) void {
+    const word_count = len / 4;
+    const dst_w: [*]u32 = @alignCast(@ptrCast(dst));
+    const src_w: [*]const u32 = @alignCast(@ptrCast(src));
     var i: usize = 0;
-    while (i < len) : (i += 1) {
-        dst[i] = src[i];
+    while (i < word_count) : (i += 1) {
+        dst_w[i] = src_w[i];
+    }
+    // Handle trailing bytes (len not multiple of 4)
+    const rem = len % 4;
+    if (rem > 0) {
+        const off = word_count * 4;
+        var j: usize = 0;
+        while (j < rem) : (j += 1) {
+            dst[off + j] = src[off + j];
+        }
     }
 }
 
@@ -182,24 +178,17 @@ export fn zig_gradient_fill(
     const br: u32 = (color_bottom >> 16) & 0xFF;
     const bg: u32 = (color_bottom >> 8) & 0xFF;
     const bb: u32 = color_bottom & 0xFF;
-
     var row: u32 = 0;
     while (row < h) : (row += 1) {
         const t = row * 255 / (h - 1);
-        const r: u8 = @truncate(tr + (br - tr) * t / 255);
-        const g: u8 = @truncate(tg + (bg - tg) * t / 255);
-        const b: u8 = @truncate(tb + (bb - tb) * t / 255);
-        const color: u32 = (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
-
-        const color_bytes: [4]u8 = @bitCast(color);
-        const row_start = pixelPtr(fb, pitch, x, y + row);
+        const r: u32 = tr + (br - tr) * t / 255;
+        const g: u32 = tg + (bg - tg) * t / 255;
+        const b: u32 = tb + (bb - tb) * t / 255;
+        const color: u32 = (r << 16) | (g << 8) | b;
+        const row_start: [*]u32 = @alignCast(@ptrCast(pixelPtr(fb, pitch, x, y + row)));
         var col: u32 = 0;
         while (col < w) : (col += 1) {
-            const px: [*]u8 = row_start + @as(usize, col) * 4;
-            px[0] = color_bytes[0];
-            px[1] = color_bytes[1];
-            px[2] = color_bytes[2];
-            px[3] = color_bytes[3];
+            row_start[col] = color;
         }
     }
 }
@@ -685,12 +674,8 @@ inline fn hash32(v: u32) u32 {
 }
 
 inline fn writePixel32(fb: [*]u8, pitch: u32, x: u32, y: u32, color: u32) void {
-    const color_bytes: [4]u8 = @bitCast(color);
-    const px = pixelPtr(fb, pitch, x, y);
-    px[0] = color_bytes[0];
-    px[1] = color_bytes[1];
-    px[2] = color_bytes[2];
-    px[3] = color_bytes[3];
+    const px: [*]u32 = @alignCast(@ptrCast(pixelPtr(fb, pitch, x, y)));
+    px[0] = color;
 }
 
 /// One step of the classic DOOM fire propagation algorithm.

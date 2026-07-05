@@ -102,16 +102,21 @@ pub fn set_screen_area(area: u64) {
     PROF.with(|p| p.borrow_mut().screen_area = area);
 }
 
-/// Calibrate TSC→microseconds using a 100 ms sleep (sleep pacing is accurate on
-/// this kernel). Call once before the main loop. Returns cycles/us.
+/// Calibrate TSC→microseconds using a 500 ms sleep (sleep rounds up to APIC timer
+/// tick, so a longer baseline gives better accuracy). Returns cycles/us.
 pub fn calibrate() -> u64 {
     let t0 = tsc();
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(500));
     let t1 = tsc();
-    // 100 ms = 100_000 us; guard against a zero delta.
-    let cpu = (t1.saturating_sub(t0)) / 100_000;
+    // 500 ms = 500_000 us; guard against a zero delta.
+    let cpu = (t1.saturating_sub(t0)) / 500_000;
     PROF.with(|p| p.borrow_mut().cycles_per_us = cpu.max(1));
     cpu
+}
+
+/// Return the calibrated cycles-per-microsecond factor (always ≥ 1).
+pub fn cycles_per_us() -> u64 {
+    PROF.with(|p| p.borrow().cycles_per_us.max(1))
 }
 
 pub fn add_pre(cyc: u64) {

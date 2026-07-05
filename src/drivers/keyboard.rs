@@ -5,7 +5,7 @@ use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, Keyboard, Scancod
 /// The keyboard ISR pushes raw scancodes here.
 /// sys_read(stdin) drains decoded characters from this buffer.
 use spin::Mutex;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 const BUF_CAP: usize = 256;
 
@@ -57,10 +57,19 @@ static ECHO_ENABLED: Mutex<bool> = Mutex::new(true);
 /// Set when 0x03 is received, cleared by the consumer.
 pub static CTRL_C_PRESSED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Last decoded key available for compositor polling.
-/// 0 = no pending event; bit 8 set = Unicode; bits 0-7 = key data.
-/// Written from the keyboard ISR, read+cleared by compositor thread.
-pub static COMPOSITOR_LAST_KEY: AtomicU16 = AtomicU16::new(0);
+/// Packed key event for compositor polling.
+/// Bits 0-7:   KeyCode variant as u8 (0 = no pending event)
+/// Bits 8-15:  Modifier state (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER)
+/// Bits 16-31: Decoded payload (Unicode char | 0x100, or raw key code; 0 = none)
+pub static COMPOSITOR_KEY_EVENT: AtomicU32 = AtomicU32::new(0);
+
+pub const MOD_SHIFT: u8 = 1;
+pub const MOD_CTRL:  u8 = 2;
+pub const MOD_ALT:   u8 = 4;
+pub const MOD_SUPER: u8 = 8;
+
+/// Current modifier state — updated by ISR, peeked (not consumed) by compositor.
+pub static COMPOSITOR_MODS: AtomicU8 = AtomicU8::new(0);
 
 lazy_static! {
     static ref KB: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> = Mutex::new(Keyboard::new(
@@ -199,20 +208,47 @@ fn push_to_buffers(b: u8) {
     EDITOR_BUF.lock().push(b);
 }
 
+fn store_compositor_key(keycode: u8, payload: u16) {
+    let mods = COMPOSITOR_MODS.load(Ordering::Relaxed);
+    let packed = (keycode as u32) | ((mods as u32) << 8) | ((payload as u32) << 16);
+    COMPOSITOR_KEY_EVENT.store(packed, Ordering::Release);
+}
+
 /// Called from the keyboard ISR with the raw scancode.
 pub fn push_scancode(scancode: u8) {
     let mut kb = KB.lock();
     if let Ok(Some(key_event)) = kb.add_byte(scancode) {
         let pressed = key_event.state == pc_keyboard::KeyState::Down;
+        let key_code = key_event.code;
+        // Update modifier state
+        {
+            let bit = match key_code {
+                pc_keyboard::KeyCode::LShift | pc_keyboard::KeyCode::RShift => Some(MOD_SHIFT),
+                pc_keyboard::KeyCode::LControl | pc_keyboard::KeyCode::RControl => Some(MOD_CTRL),
+                pc_keyboard::KeyCode::LAlt | pc_keyboard::KeyCode::RAltGr => Some(MOD_ALT),
+                pc_keyboard::KeyCode::LWin | pc_keyboard::KeyCode::RWin => Some(MOD_SUPER),
+                _ => None,
+            };
+            if let Some(bit) = bit {
+                let mods = COMPOSITOR_MODS.load(Ordering::Relaxed);
+                let new = if pressed { mods | bit } else { mods & !bit };
+                COMPOSITOR_MODS.store(new, Ordering::Release);
+            }
+        }
+
         // For orbclient format, scancode is always the make scancode (bit 7 = release flag)
         let make_scancode = scancode & 0x7F;
         if let Some(key) = kb.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(c) => {
-                    if route_ps2_to_kernel_shell() && c.is_ascii() {
-                        let b = c as u8;
-                        push_to_buffers(b);
-                        COMPOSITOR_LAST_KEY.store(b as u16 | 0x100, Ordering::Release);
+                    if route_ps2_to_kernel_shell() {
+                        if c.is_ascii() {
+                            push_to_buffers(c as u8);
+                            store_compositor_key(key_code as u8, c as u8 as u16 | 0x100);
+                        } else {
+                            // Non-ASCII: still store keycode for keybinding resolution, no payload
+                            store_compositor_key(key_code as u8, 0);
+                        }
                     }
                     crate::scheme::input_bridge::push_key_event(make_scancode, c, pressed);
                 }
@@ -227,14 +263,21 @@ pub fn push_scancode(scancode: u8) {
                         KeyCode::PageUp => 0x86,
                         KeyCode::PageDown => 0x87,
                         KeyCode::Delete => 0x88,
-                        _ => return,
+                        _ => {
+                            // Non-arrow RawKey: store keycode for keybinding resolution, no payload
+                            if route_ps2_to_kernel_shell() {
+                                store_compositor_key(key_code as u8, 0);
+                            }
+                            crate::scheme::input_bridge::push_key_event(make_scancode, '\0', pressed);
+                            return;
+                        }
                     };
                     if route_ps2_to_kernel_shell() {
                         if code >= 0x80 && code <= 0x83 || code == 0x86 || code == 0x87 {
                             INPUT_BUF.lock().push(code);
                         }
                         EDITOR_BUF.lock().push(code);
-                        COMPOSITOR_LAST_KEY.store(code as u16, Ordering::Release);
+                        store_compositor_key(key_code as u8, code as u16);
                     }
                     crate::scheme::input_bridge::push_key_event(make_scancode, '\0', pressed);
                 }
@@ -368,11 +411,13 @@ pub fn push_raw_byte(b: u8) {
     EDITOR_BUF.lock().push(b);
 }
 
-/// Read and clear the last compositor-relevant key event.
-/// Returns 0 if no event pending, or a packed key value:
-/// - bit 8 set  = Unicode character (bits 0-7 = ASCII)
-/// - bit 8 clear = Raw key code (0x80-0x88)
-/// Safe to call from any context (uses atomic swap).
-pub fn poll_compositor_key() -> u16 {
-    COMPOSITOR_LAST_KEY.swap(0, Ordering::Acquire)
+/// Atomically read and clear the pending key event.
+/// Returns 0 if no event pending.
+pub fn poll_compositor_key() -> u32 {
+    COMPOSITOR_KEY_EVENT.swap(0, Ordering::AcqRel)
+}
+
+/// Peek current modifier state (does not clear).
+pub fn get_compositor_mods() -> u8 {
+    COMPOSITOR_MODS.load(Ordering::Acquire)
 }

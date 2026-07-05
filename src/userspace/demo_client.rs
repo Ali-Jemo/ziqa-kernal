@@ -123,6 +123,9 @@ pub fn demo_client_main(_arg: *const ()) {
     send_msg(OpCode::SetPosition as u8, unsafe { any_as_bytes(&pos) });
 
     let shm_ptr = shm_addr as *mut u32;
+    let shm_slice = unsafe {
+        core::slice::from_raw_parts_mut(shm_ptr, (width * height) as usize)
+    };
     let mut tick: u32 = 0;
 
     // 6. Render loop
@@ -130,16 +133,12 @@ pub fn demo_client_main(_arg: *const ()) {
         tick = tick.wrapping_add(1);
 
         for y in 0..height {
+            let row_offset = (y as usize) * (width as usize);
+            let g = (y.wrapping_add(tick)) & 0xFF;
             for x in 0..width {
                 let r = (x.wrapping_add(tick)) & 0xFF;
-                let g = (y.wrapping_add(tick)) & 0xFF;
                 let b = (x.wrapping_add(y).wrapping_add(tick)) & 0xFF;
-                unsafe {
-                    let idx = (y as usize) * (width as usize) + (x as usize);
-                    shm_ptr
-                        .add(idx)
-                        .write_volatile((r << 16) | (g << 8) | b | 0xFF000000);
-                }
+                shm_slice[row_offset + x as usize] = (r << 16) | (g << 8) | b | 0xFF000000;
             }
         }
 
@@ -157,7 +156,7 @@ pub fn demo_client_main(_arg: *const ()) {
         }
         crate::process::scheduler::yield_now();
     }
-}
+ }
 
 const _: () = {
     let bga = demo_surface_geometry(1024, 768);

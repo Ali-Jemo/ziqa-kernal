@@ -166,19 +166,16 @@ impl Orbital {
             let mut events = [orbclient::Event::new(); 16];
             let mut coalesced = [orbclient::Event::new(); 512];
 
-            // ponytail: software frame pacing. BGA exposes no vsync/pageflip IRQ, so hold a
-            // steady 60 Hz while input or damage is active and coalesce extra mouse packets.
-            // Trying to paint mouse input at 120 Hz just doubles framebuffer work on QEMU.
-            // Idle (no input, no damage) drops to ~10Hz to save CPU.
-            let input_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz while input is flowing
-            let active_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz dirty redraw without input
+            // ponytail: TSC-based frame pacing. BGA signals no vsync/pageflip IRQ,
+            // so we target a steady 60 Hz for active frames, ~10 Hz idle.
+            // Instant::now() has ~1s granularity on ZiqaKernel -> useless for sub-second
+            // pacing, so we use the TSC (RDTSC) calibrated against a 100 ms sleep.
+            let input_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz
+            let active_frame = std::time::Duration::from_nanos(16_666_667); // ~60 Hz
             let idle_frame = std::time::Duration::from_millis(100); // ~10 Hz idle
-            // PROF-TEMP: record full-screen area for dirty/screen ratio reporting
             crate::prof::set_screen_area(me.handler.screen_area());
-            // PROF-TEMP: calibrate TSC->us using a 100ms sleep (Instant is ~1s-granular here)
-            crate::prof::calibrate();
+            let _cpu = crate::prof::calibrate(); // cycles-per-us
             loop {
-                let frame_start = std::time::Instant::now();
                 let _ft0 = crate::prof::tsc(); // PROF-TEMP: frame work-interval TSC origin
                 // Drain the whole kernel input ring once per frame. Reading only
                 // 16 events per 16 ms lets high-rate mouse input build a permanent
@@ -246,9 +243,23 @@ impl Orbital {
                 } else {
                     idle_frame
                 };
-                let elapsed = frame_start.elapsed();
-                if elapsed < target {
-                    std::thread::sleep(target - elapsed);
+                let target_cycles = (target.as_micros() as u64) * _cpu;
+                let elapsed_cycles = crate::prof::since(_ft0);
+                if elapsed_cycles < target_cycles {
+                    // ponytail: for active frames, TSC-based busy-spin to exactly hit 60 Hz.
+                    // std::thread::sleep() rounds up to the APIC timer tick (~1-10ms), so any
+                    // sleep under budget overshoots and loses frames. Busy-spin wastes CPU on
+                    // QEMU but guarantees precise timing. For real hardware, raise the APIC
+                    // timer rate in the kernel for finer sleep granularity.
+                    while crate::prof::since(_ft0) < target_cycles {
+                        if had_input || dirty {
+                            core::hint::spin_loop();
+                        } else {
+                            // Idle: just sleep the whole target, precision doesn't matter
+                            std::thread::sleep(idle_frame);
+                            break;
+                        }
+                    }
                 }
             }
         }

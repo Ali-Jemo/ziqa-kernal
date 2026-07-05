@@ -625,11 +625,13 @@ unsafe fn map_or_replace(
             Ok(())
         }
         Err(x86_64::structures::paging::mapper::MapToError::PageAlreadyMapped(_)) => {
-            // ponytail: fail on collision to prevent overwriting/unmapping pages in the shared KERNEL_MAPPER.
-            // A full fix requires per-process page tables (moving kernel to higher half).
+            crate::println!("[MAP_ELF] page already mapped at {:#x}", page.start_address().as_u64());
             Err("Page already mapped")
         }
-        Err(_) => Err("map failed"),
+        Err(e) => {
+            crate::println!("[MAP_ELF] map_to failed at {:#x}: {:?}", page.start_address().as_u64(), e);
+            Err("map failed")
+        }
     }
 }}
 
