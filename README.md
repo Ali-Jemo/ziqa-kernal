@@ -2,15 +2,15 @@
 
 An experimental bare-metal operating-system kernel for `x86_64` written in Rust and Zig.
 
+> [!WARNING]
+> **Experimental Sandbox:** Not production-ready. Active architecture lab for exploring OS design.
+
 ## Quickstart
 
 ```bash
 # Requires: Rust nightly, Zig, QEMU
 make boot && make run
 ```
-
-> [!WARNING]
-> **Experimental Sandbox:** Not production-ready. Active architecture lab for exploring OS design.
 
 ## Project Status
 
@@ -125,6 +125,19 @@ Detailed documentation is available in the `conductor/` directory:
 2. **Build:** Run `make build` and `make test` to ensure environment readiness.
 3. **Verify:** Use `make zig-check` for Zig hot paths and run GitNexus impact analysis before any changes.
 4. **Submit:** Open a pull request for review.
+
+## Reporting Issues
+
+If you encounter bugs, please open a GitHub issue with the following information:
+- A brief description of the issue.
+- Steps to reproduce the problem.
+- Serial logs or error messages (if applicable).
+
+## Acknowledgments
+
+ZiqaKernel incorporates designs and inspiration from the following projects:
+- [Redox OS](https://www.redox-os.org/)
+- [Philipp Oppermann's Blog OS](https://os.phil-opp.com/)
 
 ## License
 
