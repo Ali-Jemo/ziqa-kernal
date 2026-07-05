@@ -2,6 +2,9 @@
 
 An experimental bare-metal operating-system kernel for `x86_64` written in Rust and Zig.
 
+> [!WARNING]
+> **Experimental Sandbox:** Not production-ready. Active architecture lab for exploring OS design.
+
 ## Features
 
 - Pluggable ABI (Linux/WASM)
@@ -9,17 +12,14 @@ An experimental bare-metal operating-system kernel for `x86_64` written in Rust 
 - Hybrid Rust/Zig components
 - VFS with scheme resource system
 
-## Project Structure
+## Getting Started
 
-- `src/`: Kernel source (Rust)
-- `gui/`: Orbital compositor (Zig)
-- `userspace/`: Test binaries
-- `conductor/`: Documentation & Specs
+### Prerequisites
+- Rust nightly toolchain
+- Zig compiler
+- QEMU
 
-## Build & Run
-
-Requires Rust nightly and Zig.
-
+### Build & Run
 ```bash
 # Core
 make build     # Debug build
@@ -31,6 +31,13 @@ make run-gui   # QEMU with GTK display
 make test      # Cargo tests
 make clean     # Remove build artifacts
 ```
+
+## Project Structure
+
+- `src/`: Kernel source (Rust)
+- `gui/`: Orbital compositor (Zig)
+- `userspace/`: Test binaries
+- `conductor/`: Documentation & Specs
 
 ## Documentation
 
