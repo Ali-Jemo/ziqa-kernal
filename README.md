@@ -2,6 +2,13 @@
 
 An experimental bare-metal operating-system kernel for `x86_64` written in Rust and Zig.
 
+## Quickstart
+
+```bash
+# Requires: Rust nightly, Zig, QEMU
+make boot && make run
+```
+
 > [!WARNING]
 > **Experimental Sandbox:** Not production-ready. Active architecture lab for exploring OS design.
 
