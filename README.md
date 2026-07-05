@@ -40,6 +40,18 @@ The repository includes a `Dockerfile` for a consistent build environment:
 docker compose run dev
 ```
 
+## Code Intelligence
+
+This project uses **GitNexus** and **Graphify** for codebase navigation and impact analysis. If index files appear stale, rebuild them:
+
+```bash
+# Update GitNexus index
+node .gitnexus/run.cjs analyze
+
+# Update Graphify graph
+graphify update .
+```
+
 ## Cargo Features
 
 The kernel provides several features for customization. The `default` feature set is `full`.
