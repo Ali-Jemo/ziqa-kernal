@@ -1,5 +1,4 @@
 [build]
 target = "x86_64-unknown-redox"
-
 [target.x86_64-unknown-redox]
 rustflags = ["-C", "link-arg=-Wl,-Ttext=0x10000000"]
