@@ -97,9 +97,10 @@ Detailed documentation is available in the `conductor/` directory:
 
 ## Contributing
 
-1. Check existing documentation in `conductor/`.
-2. Follow established project conventions in `src/`.
-3. Submit a pull request for review.
+1. **Explore:** Review architecture and design in `conductor/`.
+2. **Build:** Run `make build` and `make test` to ensure environment readiness.
+3. **Verify:** Use `make zig-check` for Zig hot paths and run GitNexus impact analysis before any changes.
+4. **Submit:** Open a pull request for review.
 
 ## License
 
