@@ -57,6 +57,18 @@ make test      # Run project-wide cargo tests
 make clean     # Clean build artifacts
 ```
 
+## Testing & Benchmarking
+
+The kernel includes a robust test suite and benchmarking support.
+
+```bash
+# Run all unit and integration tests
+make test
+
+# Build with performance benchmarks enabled
+cargo build --features perf-benchmarks
+```
+
 ## Development Environment
 
 The repository includes a `Dockerfile` for a consistent build environment:
