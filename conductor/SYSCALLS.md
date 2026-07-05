@@ -23,7 +23,7 @@ ZiqaKernel uses a subset of the x86_64 System V ABI for syscalls via `int 0x80`.
 
 ## 4. Supported Syscall Families
 
-**Linux x86_64 ABI (100+ syscalls implemented):**
+**Linux x86_64 ABI (112 syscalls implemented):**
 *   Core I/O: `read`, `write`, `open`, `close`, `lseek`, `pread64`, `readv`, `writev`
 *   Process control: `getpid`, `gettid`, `getppid`, `exit`, `exit_group`, `clone`, `waitpid`, `kill`, `tgkill`
 *   Memory management: `brk`, `mmap`, `mprotect`, `munmap`, `madvise`
