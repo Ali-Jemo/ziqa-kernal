@@ -55,6 +55,11 @@ The kernel provides several features for customization. The `default` feature se
 | `userspace/` | Test binaries and utilities |
 | `conductor/` | Architecture specs and roadmaps |
 
+## Troubleshooting
+
+- **QEMU locks:** If `make run` fails with write-lock errors, run `make kill-qemu` to clear zombie processes.
+- **Disk images:** If disk operations fail, run `make clean` and `make fat-disk` to rebuild the FAT32 disk image.
+
 ## Documentation
 
 Detailed documentation is available in the `conductor/` directory:
