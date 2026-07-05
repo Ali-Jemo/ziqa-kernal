@@ -145,6 +145,10 @@ If you encounter bugs, please open a GitHub issue with the following information
 - Steps to reproduce the problem.
 - Serial logs or error messages (if applicable).
 
+## Security
+
+This is an experimental OS. We do not have a formal security disclosure policy yet. If you find critical vulnerabilities, please open an issue or contact the maintainer directly.
+
 ## Acknowledgments
 
 ZiqaKernel incorporates designs and inspiration from the following projects:
